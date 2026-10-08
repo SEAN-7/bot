@@ -1,0 +1,7 @@
+{
+  "id": "local-time",
+  "name": "Local time example",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "entry": "index.mjs"
+}

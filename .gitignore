@@ -1,0 +1,12 @@
+node_modules/
+.tui/
+.tui-tools/
+.tui-python/
+.tui-rustup/
+.tui-cargo/
+.python/
+.bot/
+.bot-demo/
+coverage/
+*.log
+.DS_Store
