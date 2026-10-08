@@ -207,12 +207,19 @@ test('guardian kills a tracked shell group when the runtime exits during a tool'
   const command = `${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('shell-pid',String(process.pid));setInterval(()=>{},1000)"`;
   const bot = await fixture(t, `
     import execution from ${JSON.stringify(executionURL)};
+    import { existsSync } from 'node:fs';
+    import { join } from 'node:path';
     export default api => {
       execution({ ...api, registerTool(tool) {
         if (tool.name === 'shell') {
           const execute = tool.execute;
           tool.execute = (args, context) => {
-            setTimeout(() => process.exit(64), 1000);
+            // Crash after the external process starts, even on a busy test host.
+            const crash = setInterval(() => {
+              if (existsSync(join(api.paths.workspace, 'shell-pid'))) {
+                clearInterval(crash); process.exit(64);
+              }
+            }, 50);
             return execute(args, context);
           };
         }
@@ -380,8 +387,20 @@ test('protected runtime can edit drafts but cannot write core, journal control, 
   await bot.send('probe protection');
   const reply = await bot.reply('protection:');
   const result = JSON.parse(reply.content.slice('protection:'.length));
-  for (const key of ['core', 'control', 'revision', 'controlRead']) {
-    assert.ok(['EPERM', 'EACCES'].includes(result[key]), `${key} was not blocked: ${result[key]}`);
+  for (const key of ['core', 'revision']) {
+    const blocked=process.platform==='linux'?['EROFS']:['EPERM','EACCES'];
+    assert.ok(blocked.includes(result[key]), `${key} was not blocked: ${result[key]}`);
+  }
+  if(process.platform==='linux') {
+    // Bubblewrap covers control with a private tmpfs. Writes there must never
+    // affect the guardian's host files, even if the private mask is writable.
+    assert.ok(['allowed','EACCES'].includes(result.control), `unexpected masked control write: ${result.control}`);
+    assert.equal(await readFile(join(bot.home,'control','review-secret'),'utf8'),'parent-only');
+    assert.equal(await exists(join(bot.home,'control','forbidden-write')),false);
+    assert.equal(result.controlRead,'ENOENT');
+  } else {
+    assert.ok(['EPERM','EACCES'].includes(result.control), `control was not blocked: ${result.control}`);
+    assert.ok(['EPERM','EACCES'].includes(result.controlRead), `controlRead was not blocked: ${result.controlRead}`);
   }
   if (process.platform === 'darwin') {
     assert.ok(['EPERM', 'EACCES'].includes(result.guardianSignal), `guardian signal permission was not blocked: ${result.guardianSignal}`);

@@ -4,7 +4,27 @@ A small bot with one durable conversation and a terminal messaging interface pow
 
 This is a local prototype. The bundled demo is deterministic: it echoes messages, uses no AI, performs no tool actions, and makes no paid calls.
 
-## Start with the demo
+## Install on a Linux VM
+
+Download the self-contained Linux bundle, then run:
+
+```sh
+sudo sh ./bot-linux-x64 install
+bot chat
+```
+
+Use `bot-linux-arm64` on ARM64. The installer provides Node, Python and Toad,
+creates an isolated `bot` account, asks for your model and optional features,
+and starts a systemd service. The agent runs without sudo. Closing chat leaves
+the service running.
+
+`bot update` updates the application; `bot uninstall` removes it while retaining
+the conversation and credentials. Updates from this private repository require
+administrator GitHub access, or you can run a downloaded bundle with `update`.
+See [Linux installation](docs/linux-install.md) for supported systems, retained
+data, and bundle builds.
+
+## Run from source
 
 Use Node.js 24 or newer, then run these commands from this directory:
 
@@ -138,4 +158,6 @@ npm test
 
 The test suite uses deterministic fixtures and does not require provider credentials or paid model calls. No launch agent, daemon, cloud resource, or startup service is installed automatically.
 
-Protected macOS sandboxing, recovery, and actual Toad terminal messaging were tested. The Linux Bubblewrap path is provided but was not validated in this environment. Real provider integration was checked offline with mocked responses and an unknown-model error; no paid provider request was used for verification.
+The tests use deterministic providers; real model integration can be exercised
+after setup with your chosen provider. Installer health checks do not send a
+synthetic prompt or promote a runtime without a successful conversation turn.

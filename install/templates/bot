@@ -1,0 +1,9 @@
+#!/bin/sh
+# Managed by self-building-bot installer; do not replace independently.
+set -eu
+manager='@APP_ROOT@/current/install/manage.mjs'
+node='@APP_ROOT@/current/runtime/node/bin/node'
+if [ "$(id -u)" -eq 0 ]; then
+  exec "$node" "$manager" "$@"
+fi
+exec sudo --preserve-env=GH_TOKEN "$node" "$manager" "$@"

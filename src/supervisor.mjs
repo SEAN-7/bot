@@ -4,7 +4,7 @@ import { join, resolve } from 'node:path';
 import { randomBytes, timingSafeEqual, randomUUID } from 'node:crypto';
 import { Store } from './store.mjs';
 import { readCurrent, readJSON, atomicJSON, metadataPath, stageDrafts, beginTrial, promote, rollback, stageCore } from './releases.mjs';
-import { launchRuntime, stopRuntime, processTree } from './sandbox.mjs';
+import { launchRuntime, stopRuntime, runtimeProcessGroup } from './sandbox.mjs';
 
 const defaults={port:4317,startupTimeoutMs:10_000,heartbeatTimeoutMs:10_000,operationTimeoutMs:120_000,trialMs:3000,maxRestarts:2,retryMs:3000};
 function limits(config) {
@@ -43,7 +43,7 @@ export async function startSupervisor({home,port,unsafe=false}) {
   const token=randomBytes(32).toString('hex'),uiToken=randomBytes(32).toString('hex');
   let worker=null,ready=false,busy=false,stopped=false,transitioning=false,restarts=0;
   let state='starting',error=null,lastHeartbeat=0,phaseStarted=0,workerStarted=0;
-  let groups=new Set(),activeEvent=null,completedTrialTurn=false,tickAt=0;
+  let groups=new Map(),activeEvent=null,completedTrialTurn=false,tickAt=0;
   let updateRequested=false,protectedMode=!unsafe,queue=Promise.resolve();
   const retryCounts=new Map();
   const serialize=fn=>{const result=queue.then(fn);queue=result.catch(()=>{});return result;};
@@ -88,10 +88,8 @@ export async function startSupervisor({home,port,unsafe=false}) {
       else if(method==='tool.finish')result=store.finishAction(args.id,args.result,args.isError);
       else if(method==='update.request') {updateRequested=true;result={queued:true,message:'Drafts will be validated after this turn finishes.'};}
       else if(method==='process.track') {
-        if(!Number.isInteger(args.pid)||args.pid<2)throw new Error('Invalid process ID');
-        const tree=await processTree(child.pid);
-        if(!tree.some(([pid,,pgid])=>pid===args.pid&&pgid===args.pid))throw new Error('Process group is not a runtime descendant');
-        groups.add(args.pid);result=true;
+        const hostPid=await runtimeProcessGroup(child,args.pid);
+        groups.set(args.pid,hostPid);result=true;
       } else if(method==='process.release')groups.delete(args.pid);
       else throw new Error(`Unknown runtime operation: ${method}`);
       reply(child,id,result);
@@ -100,8 +98,8 @@ export async function startSupervisor({home,port,unsafe=false}) {
 
   async function killWorker() {
     const previous=worker;worker=null;ready=false;busy=false;activeEvent=null;
-    if(previous)await stopRuntime(previous,groups);
-    groups=new Set();
+    if(previous)await stopRuntime(previous,new Set(groups.values()));
+    groups=new Map();
   }
   async function preflight(revision) {
     const config=await readJSON(join(home,'revisions',revision,'config.json'));

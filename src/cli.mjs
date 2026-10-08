@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { access, readFile, readdir } from 'node:fs/promises';
+import { access, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createInterface } from 'node:readline/promises';
@@ -248,6 +248,6 @@ export async function main(argv = process.argv.slice(2)) {
   throw new Error(`Unknown command: ${positional.join(' ')}. Run bot --help.`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (process.argv[1] && (await realpath(process.argv[1]).catch(() => null)) === fileURLToPath(import.meta.url)) {
   main().catch(error => { console.error(`bot: ${error.message}`); process.exitCode = 1; });
 }
