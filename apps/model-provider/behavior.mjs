@@ -6,6 +6,7 @@ const DEFAULT_PROMPT = 'You operate in one durable conversation. Your only model
 export function toPiMessages(messages, model) {
   return messages.map(message => {
     const timestamp = typeof message.timestamp === 'number' ? message.timestamp : Date.parse(message.timestamp) || 0;
+    if (message.role === 'system') return { role: 'system', content: message.content, timestamp };
     if (message.role === 'assistant') {
       // Includes thinking signatures, provider tool IDs, and provider response IDs.
       if (message.metadata?.nativeAssistant) return structuredClone(message.metadata.nativeAssistant);
