@@ -16,15 +16,9 @@ export function usageNotice(messages, prepared, description) {
   const usage = last?.usage;
   const input = usage && ['input', 'cacheRead', 'cacheWrite'].every(key => count(usage[key]))
     ? usage.input + usage.cacheRead + usage.cacheWrite : null;
-  const previous = input === null ? 'Previous provider input: unavailable.'
-    : `Previous recorded provider input: ${format(input)} tokens (including cached input)`
-      + (last.metadata?.nativeAssistant?.model ? `, model ${last.metadata.nativeAssistant.model}` : '') + '.';
-  const capacity = count(window) && window > 0
-    ? `Model context window: ${format(window)} tokens. Estimated history usage: ${(estimate / window * 100).toFixed(1)}%.`
-    : 'Model context window: unavailable.';
   return {
-    id: 'context-usage', role: 'system', timestamp: 0,
-    content: `Context usage snapshot: prepared history ~${estimate} tokens (JSON characters / 4; approximate, excludes system prompt and tool schemas). ${capacity} ${previous}`,
+    role: 'context',
+    content: `History ~${estimate}/${count(window) && window > 0 ? format(window) : '?'} tokens; prior input ${input === null ? '?' : format(input)}.`,
     metadata: { contextUsage: true },
   };
 }
@@ -39,6 +33,8 @@ export async function prepareContext(api, input) {
     } : undefined,
   };
   const result = await createContext(api)({ ...input, model });
-  // Transient tail data keeps the history/cache prefix stable and never enters the journal.
-  return { ...result, messages: [...result.messages, usageNotice(input.messages, result.messages, description)] };
+  // The controller journals the observation before requesting a model response.
+  // A provider retry with no new activity reuses the already recorded snapshot.
+  return { ...result, append: input.messages.at(-1)?.metadata?.contextUsage
+    ? [] : [usageNotice(input.messages, result.messages, description)] };
 }
