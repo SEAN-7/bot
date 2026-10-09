@@ -34,7 +34,9 @@ export function createContext(api) {
     const explicitChars = api.config.maxInputChars;
     const threshold = explicitChars !== undefined ? Math.max(1000, explicitChars)
       : api.config.maxInputTokens !== undefined ? Math.max(1, api.config.maxInputTokens) * 4
-      : window > 0 ? Math.min(hardChars, Math.max(1, Math.floor(window * 0.65 - reserve)) * 4) : 60000;
+      // Compact before large windows become expensive to resend. Smaller models
+      // still use their model-derived budget; explicit settings override this cap.
+      : window > 0 ? Math.min(75000 * 4, hardChars, Math.max(1, Math.floor(window * 0.65 - reserve)) * 4) : 60000;
     const checked = prepared => {
       if (inputSize(prepared) > hardChars) throw Object.assign(new Error('Current conversation turn exceeds the estimated model input budget. Reduce the request or tool output, or select a larger context model; the current user turn was retained.'), { blocked: true });
       return { messages: prepared };

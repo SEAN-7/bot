@@ -410,6 +410,45 @@ test('context derives compaction budget from a small selected model', async () =
   await assert.rejects(h.api.context({ messages: [{ id: 4, role: 'user', content: 'z'.repeat(12000) }], model }), error => error.blocked && /current user turn was retained/.test(error.message));
 });
 
+test('large models compact above the default cost budget while explicit budgets override it', async () => {
+  const messages = [
+    { id: 1, role: 'user', content: '' },
+    { id: 2, role: 'assistant', content: 'Earlier answer' },
+    { id: 3, role: 'user', content: 'Current request' },
+    { id: 4, role: 'assistant', content: '', toolCalls: [{ id: 'active', name: 'shell', arguments: {} }] },
+    { id: 5, role: 'tool', toolCallId: 'active', toolName: 'shell', content: 'Current result' },
+  ];
+  const size = () => messages.reduce((sum, message) => sum + JSON.stringify(message).length, 0);
+  messages[0].content = 'x'.repeat(300000 - size());
+  const h = harness();
+  context(h.api);
+  let calls = 0;
+  const model = {
+    describe: () => ({ contextWindow: 1000000, maxOutputTokens: 128000 }),
+    complete: async request => {
+      calls++;
+      assert.deepEqual(request.messages.slice(0, -1), messages.slice(0, 2));
+      return { text: 'Earlier request completed.', toolCalls: [] };
+    },
+  };
+  assert.equal(size(), 300000);
+  assert.deepEqual((await h.api.context({ messages, model })).messages, messages);
+  assert.equal(calls, 0);
+  messages[0].content += 'x';
+  const original = structuredClone(messages);
+  const result = await h.api.context({ messages, model });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.messages.slice(1), messages.slice(2));
+  assert.equal(h.state.get('summary').throughId, 2);
+  assert.deepEqual(messages, original);
+  for (const config of [{ maxInputTokens: 200000 }, { maxInputChars: 800000 }]) {
+    const override = harness(config);
+    context(override.api);
+    assert.deepEqual((await override.api.context({ messages, model })).messages, messages);
+  }
+  assert.equal(calls, 1);
+});
+
 test('Pi describes the selected model without making a provider call', () => {
   const h = harness({ provider: 'provider', model: 'small' });
   piModel(h.api, {
