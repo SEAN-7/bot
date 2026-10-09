@@ -1,4 +1,4 @@
-import { access, mkdir, realpath } from 'node:fs/promises';
+import { access, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
@@ -146,6 +146,17 @@ export async function launchChat({ home, endpoint, unsafe = false }) {
   if (unsafe) command.push('--unsafe-development');
   const state = join(home, 'control', 'toad');
   for (const folder of ['config', 'data', 'cache', 'state']) await mkdir(join(state, folder), { recursive: true, mode: 0o700 });
+  // Start with a conversation and input; retain any user customizations thereafter.
+  const configDir = join(state, 'config', 'toad');
+  await mkdir(configDir, { recursive: true, mode: 0o700 });
+  try {
+    await writeFile(join(configDir, 'toad.json'), JSON.stringify({
+      ui: { 'compact-input': true, 'sessions-bar': 'never', footer: false,
+        'info-bar': false, 'status-line': false, 'agent-title': false,
+        column: false, scrollbar: 'thin', throbber: 'pulse', prompt_message: 'Message…' },
+      sidebar: { hide: true }, agent: { thoughts: false },
+    }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
+  } catch (error) { if (error.code !== 'EEXIST') throw error; }
   const env = { ...process.env, XDG_CONFIG_HOME: join(state, 'config'), XDG_DATA_HOME: join(state, 'data'), XDG_CACHE_HOME: join(state, 'cache'), XDG_STATE_HOME: join(state, 'state') };
   delete env.BOT_CONTROL_TOKEN;
   try {

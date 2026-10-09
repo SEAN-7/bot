@@ -31,6 +31,8 @@ account. This does not give the agent sudo access. Closing chat leaves the
 service running. The local chat API stays on loopback; no inbound network port
 is required. SSH to the VM before running `bot`. `bot chat` is an alias.
 Subsequent launches attach to your configured agent without repeating setup.
+Chat defaults to a conversation and compact input, with sidebar, session tabs,
+shortcut footer and status bars hidden. Toad settings remain customizable.
 On Ubuntu with restricted user namespaces, installation adds an AppArmor
 exception for `/usr/bin/bwrap`; the global restriction remains enabled.
 
