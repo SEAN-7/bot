@@ -19,7 +19,7 @@ async function telegram(t) {const store=new TelegramStore(await folder(t));store
 const message=(id,text='human message',user=42,type='private')=>({update_id:id,message:{message_id:id,date:1,chat:{id:user,type},from:{id:user,is_bot:false},text}});
 async function until(check) {const end=Date.now()+20000;while(Date.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,25));}assert.fail('Channel check timed out');}
 
-test('communication reads and chat replies use the resumed input after a newer message', async t => {
+test('communication reads include new arrivals while chat replies retain their input association', async t => {
   const workspace = await folder(t);
   const chat = new ChatStore(workspace);t.after(() => chat.close());
   chat.accept('chat:first', 'first');chat.accept('chat:second', 'second');
@@ -29,7 +29,7 @@ test('communication reads and chat replies use the resumed input after a newer m
     {role:'context',content:'Resuming first',metadata:{eventId:'chat:first',source:'chat',resumedInput:true,input:true}},
   ];
   const commands = chatCommands({paths:{workspace},history:async()=>history});
-  assert.deepEqual((await commands.read.execute({})).messages.map(m=>m.text), ['first']);
+  assert.deepEqual((await commands.read.execute({})).messages.map(m=>m.text), ['first','second']);
   await commands.send.execute({text:'reply to first'},{callId:'resumed-reply'});
   assert.equal(chat.db.prepare("SELECT event_id FROM messages WHERE sender='bot'").get().event_id, 'chat:first');
 
@@ -42,7 +42,7 @@ test('communication reads and chat replies use the resumed input after a newer m
     {role:'context',metadata:{source:'telegram',messageId:1,resumedInput:true,input:true}},
   ];
   const reads = telegramCommands({paths:{workspace},history:async()=>telegramHistory});
-  assert.deepEqual((await reads.read.execute({})).messages.map(m=>m.text), ['first']);
+  assert.deepEqual((await reads.read.execute({})).messages.map(m=>m.text), ['first','second']);
 });
 
 test('Telegram pairing authorizes one private human and enqueues references without copying conversation text',async t=>{
@@ -99,32 +99,39 @@ test('terminal app owns durable history, scopes active input and recovers notifi
   await chatWatch({paths:{workspace},history:async()=>[],enqueue:async event=>{events.push(event);if(events.length===2)controller.abort();}},{signal:controller.signal});
   assert.deepEqual(events.map(e=>e.text),[notification('chat:first'),notification('chat:second')]);assert.equal(store.pending().length,0);
 });
-test('a background app queues Telegram reference notifications while the bot is working; channel state survives supervisor restart', {timeout:30000},async t=>{
+test('background Telegram notifications steer the next model call during active work and survive restart', {timeout:30000},async t=>{
   const home=await folder(t);await initialize(home,createConfig({disable:'chat,memory,context,scheduler,skills,web-search'}));
   const draft=join(home,'drafts','apps','telegram');
   await writeFile(join(draft,'main.mjs'),`import {runCLI} from '../_lib/cli.mjs';import {commands} from './commands.mjs';import {receive,project} from './behavior.mjs';import {TelegramStore} from './database.mjs';import {readFile} from 'node:fs/promises';import {join} from 'node:path';
-await runCLI({commands,operations:{project:(_api,input)=>project(input.messages),watch:async api=>{const store=new TelegramStore(join(api.paths.workspace,'telegram'));while(true){const updates=JSON.parse(await readFile(join(api.paths.workspace,'updates.json')));await receive(store,async()=>updates.filter(u=>u.update_id>=store.get('offset',0)),event=>api.enqueue(event));await new Promise(r=>setTimeout(r,50));}}}});`);
+await runCLI({commands,operations:{project:async(_api,input)=>{if(input.messages.some(m=>m.role==='tool')){await import('node:fs/promises').then(fs=>fs.writeFile(join(process.env.BOT_WORKSPACE,'preparing-context'),''));while(true){try{await readFile(join(process.env.BOT_WORKSPACE,'continue-context'));break;}catch{await new Promise(r=>setTimeout(r,20));}}}return project(input.messages);},watch:async api=>{const store=new TelegramStore(join(api.paths.workspace,'telegram'));while(true){const updates=JSON.parse(await readFile(join(api.paths.workspace,'updates.json')));await receive(store,async()=>updates.filter(u=>u.update_id>=store.get('offset',0)),event=>api.enqueue(event));await new Promise(r=>setTimeout(r,50));}}}});`);
   const configPath=join(home,'drafts','config.json'),config=JSON.parse(await readFile(configPath));
   config.apps.telegram={enabled:true};config.apps.agent.services=['telegram'];config.apps.agent.projections=['telegram'];await writeFile(configPath,JSON.stringify(config));
   await writeFile(join(home,'workspace','updates.json'),'[]');
   const store=new TelegramStore(join(home,'workspace','telegram'));store.set('identity',{id:123});store.set('binding',{chatId:42,userId:42});store.close();
-  await writeFile(join(home,'drafts','apps','demo-model','behavior.mjs'),`import {access} from 'node:fs/promises';import {join} from 'node:path';export const createModel=()=>({async complete({messages}){const input=messages.findLast(m=>m.metadata?.input||m.role==='user');const current=messages.slice(messages.indexOf(input)+1);if(current.some(m=>m.role==='tool'))return {text:'done',toolCalls:[]};while(true){try{await access(join(process.env.BOT_WORKSPACE,'continue-model'));break;}catch{await new Promise(r=>setTimeout(r,20));}}return {text:'',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:"bot-app telegram read '{}'"}}]};}});`);
+  await writeFile(join(home,'drafts','apps','demo-model','behavior.mjs'),`export const createModel=()=>({async complete({messages}){if(messages.some(m=>m.role==='tool')){const inputs=messages.filter(m=>m.metadata?.input);if(inputs.length!==3)throw new Error('Follow-up notification missing from next model call');return {text:'',toolCalls:[]};}return {text:'',toolCalls:[{id:'read-after-followup',name:'shell',arguments:{command:"touch tool-running; while [ ! -f continue-tool ]; do sleep 0.02; done; bot-app telegram read '{}'",yieldTimeMs:30000}}]};}});`);
   await stageDrafts(home);let server=await startSupervisor({home,port:0,unsafe:true});t.after(()=>server.stop());
   const api=async path=>fetch(server.url+path,{headers:{authorization:'Bearer '+server.token}}).then(r=>r.json());
   await until(async()=>(await api('/api/status')).state==='idle');
   const updates=async entries=>{const target=join(home,'workspace','updates.json');await writeFile(target+'.tmp',JSON.stringify(entries));await rename(target+'.tmp',target);};
   await updates([message(1,'first telegram text')]);
-  await until(async()=>(await api('/api/status')).state==='working');
+  await until(async()=>(await api('/api/events')).events.some(e=>e.kind==='tool.started'));
   await updates([message(1,'first telegram text'),message(2,'second telegram text')]);
   await until(async()=>(await api('/api/status')).pending===2);
-  await writeFile(join(home,'workspace','continue-model'),'');
+  await writeFile(join(home,'workspace','continue-tool'),'');
+  await until(async()=>{try{await readFile(join(home,'workspace','preparing-context'));return true;}catch{return false;}});
+  await updates([message(1,'first telegram text'),message(2,'second telegram text'),message(3,'latest direction')]);
+  await until(async()=>(await api('/api/status')).pending===3);
+  await writeFile(join(home,'workspace','continue-context'),'');
   await until(async()=>(await api('/api/status')).pending===0);
   let history=(await api('/api/messages')).messages;
-  assert.deepEqual(history.filter(m=>m.role==='user').map(m=>m.metadata.source),['telegram','telegram']);
+  assert.deepEqual(history.filter(m=>m.role==='user').map(m=>m.metadata.source),['telegram','telegram','telegram']);
   assert.ok(history.filter(m=>m.role==='user').every(m=>!m.content.includes('telegram text')));
-  const firstRead=JSON.parse(history.find(m=>m.role==='tool').content);assert.ok(firstRead.stdout.includes('first telegram text'));assert.ok(!firstRead.stdout.includes('second telegram text'));
+  const firstRead=JSON.parse(history.find(m=>m.role==='tool').content);assert.ok(firstRead.stdout.includes('first telegram text'));assert.ok(firstRead.stdout.includes('second telegram text'));
+  assert.equal(history.filter(m=>m.role==='tool').length,1);
+  assert.equal(history.filter(m=>m.role==='assistant'&&!m.toolCalls?.length).length,0);
+  assert.ok(history.every(m=>m.content!=='steered by all messages'));
   assert.deepEqual((await api('/api/status')).tools.map(tool=>tool.name),['shell']);
   await server.stop();server=await startSupervisor({home,port:0,unsafe:true});await until(async()=>(await api('/api/status')).state==='idle');
-  history=(await api('/api/messages')).messages;assert.equal(history.filter(m=>m.role==='user').length,2);
-  const persisted=new TelegramStore(join(home,'workspace','telegram'));assert.equal(persisted.read().messages.length,2);assert.equal(persisted.get('offset'),3);persisted.close();
+  history=(await api('/api/messages')).messages;assert.equal(history.filter(m=>m.role==='user').length,3);
+  const persisted=new TelegramStore(join(home,'workspace','telegram'));assert.equal(persisted.read().messages.length,3);assert.equal(persisted.get('offset'),4);persisted.close();
 });

@@ -37,9 +37,9 @@ async function request(message) {
     else if(method==='contribute') {
       if(!config.apps[args.module]?.enabled||typeof args.key!=='string'||typeof args.content!=='string'||args.content.length>100000)throw new Error('Invalid app contribution');
       result=await rpc(method,args);
-    } else if(method==='append'||method==='turn.commit') {
+    } else if(method==='append'||method==='turn.commit'||method==='input.acknowledge') {
       if(!activeEvent||committed||actionBusy)throw new Error('No writable active event');
-      result=await rpc(method,args);if(method==='turn.commit')committed=true;
+      result=await rpc(method,args);if(method!=='append')committed=true;
     } else if(method==='action.run') {
       if(!activeEvent||args.eventId!==activeEvent||committed||actionBusy)throw new Error('Action belongs to inactive or busy event');
       const call=args.call;

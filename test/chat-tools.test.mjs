@@ -110,7 +110,7 @@ test('isolated chat accepts another message while working, sends only through to
   await until(async () => (await fetch(server.url+'/api/status', { headers: { authorization: 'Bearer '+server.token } }).then(r=>r.json())).state==='working');
   await chat.submit('second human'); // Acknowledged before the first response.
   assert.equal(chat.busy, false);
-  await until(() => chat.entries.filter(message => message.text === 'explicit reply').length === 2);
+  await until(() => chat.entries.filter(message => message.text === 'explicit reply').length === 1);
   assert.ok(!chat.entries.some(message => message.text.includes('PRIVATE')));
   await until(async () => (await fetch(server.url+'/api/status', { headers: { authorization: 'Bearer '+server.token } }).then(r=>r.json())).pending===0);
   const response = await fetch(server.url+'/api/chat-snapshot', { headers: { authorization: 'Bearer '+server.uiToken } }).then(r=>r.json());
@@ -118,10 +118,10 @@ test('isolated chat accepts another message while working, sends only through to
   assert.equal(response.messages.filter(message => message.content === 'explicit reply').length, 0);
   assert.ok(response.messages.filter(m=>m.role==='user').every(m=>isNotification(m.content)));
   const appStore=new ChatStore(join(home,'workspace'));
-  assert.equal(appStore.read().messages.filter(m=>m.text==='explicit reply').length,2);appStore.close();
+  assert.equal(appStore.read().messages.filter(m=>m.text==='explicit reply').length,1);appStore.close();
   await server.stop();
   server=await startSupervisor({ home, port: Number(port), unsafe: true });
   await chat.submit('third human');
-  await until(() => chat.entries.filter(message => message.text === 'explicit reply').length === 3);
+  await until(() => chat.entries.filter(message => message.text === 'explicit reply').length === 2);
   assert.equal(child.exitCode, null);
 });

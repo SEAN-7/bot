@@ -3,7 +3,7 @@ export function createModel(api) {
   return { async complete({messages,signal}) {
     signal?.throwIfAborted();
     const input=messages.findLast(message=>message.metadata?.input);
-    if(!input) return {text:'Demo mode · no AI connected',toolCalls:[]};
+    if(!input) return {text:'',toolCalls:[]};
     const current=messages.slice(messages.indexOf(input)+1);
     const calls=current.filter(message=>message.role==='assistant').flatMap(message=>message.toolCalls||[]);
     const results=current.filter(message=>message.role==='tool'&&message.toolName==='shell'&&!message.isError);

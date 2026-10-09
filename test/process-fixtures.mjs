@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { readdir, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // Only tests translate historical fixture factories. The shipped runtime cannot load them.
@@ -19,5 +19,16 @@ await runCLI({operations:{complete:async(api,input)=>{let model,context;const ho
     const main=await readFile(join(folder,'main.mjs'),'utf8');
     await writeFile(join(folder,'main.mjs'),main.replace("await runCLI({operations:","await runCLI({preflight:async(api)=>factory({...api,registerModel:()=>{},registerContext:()=>{},on:()=>{}}),operations:"));
   }
+  // Historical kernel/recovery fixtures intentionally exercise the compatible
+  // final-response protocol. The shipped agent is tool-only; keep the legacy
+  // response adapter confined to these isolated fixtures.
+  const agent=join(directory,'agent');await mkdir(agent,{recursive:true});
+  await writeFile(join(agent,'app.json'),JSON.stringify({id:'agent',version:'fixture',command:['node','main.mjs'],preflight:['--preflight']}));
+  await writeFile(join(agent,'SKILL.md'),'---\nname: agent\ndescription: Legacy response protocol for isolated kernel fixtures.\n---\n');
+  const source=(await readFile(new URL('../apps/agent/main.mjs',import.meta.url),'utf8'))
+    .replace('if(!calls.length&&response.text.trim())','if(false)')
+    .replace("content:'',toolCalls:calls","content:response.text,toolCalls:calls")
+    .replace(/if\(!calls.length\)\{[\s\S]*?\n        \}\n        else await rpc\('append'/,"if(!calls.length){await rpc('turn.commit',{eventId:event.id,message:assistant});committed=true;}\n        else await rpc('append'");
+  await writeFile(join(agent,'main.mjs'),source);
   return directory;
 }

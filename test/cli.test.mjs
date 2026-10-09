@@ -75,13 +75,13 @@ test('interactive chat commands reject nonterminals before creating a home', asy
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test('demo explicitly identifies itself, never requests tool execution, and honors cancellation', async () => {
+test('demo remains idle without an input notification and honors cancellation', async () => {
   let model;
   demoModel({ registerModel(value) { model = value; } });
   const request = { messages: [{ role: 'user', content: 'Please run a command' }], signal: new AbortController().signal };
   const first = await model.complete(request);
   assert.deepEqual(first, await model.complete(request));
-  assert.match(first.text, /Demo mode · no AI connected/);
+  assert.equal(first.text, '');
   assert.deepEqual(first.toolCalls, []);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(model.complete({ ...request, signal: controller.signal }), { name: 'AbortError' });

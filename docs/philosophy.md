@@ -64,6 +64,11 @@ The service lives independently of the chat window. User messages and configured
 stimuli can wake the same conversation; idle time alone does not require a model
 call. Scheduling and decisions about continued work remain replaceable behavior.
 
+The agent is tool-only. Notifications and tool results enter its next model
+context as soon as they are available. Human replies use communication tools;
+plain assistant text does not finish an objective. The core does not classify
+tasks as complete. With no new stimulus, it stays idle without a wait tool.
+
 ## How to judge a change
 
 Ask: does this change protect continuity, execution, or recovery, or is it behavior

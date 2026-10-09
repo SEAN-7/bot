@@ -157,7 +157,7 @@ test('Pi chat client replays history, submits once, displays tool progress and r
   assert.equal(tool.title, 'shell');
   assert.equal(tool.status, 'completed');
   assert.equal(tool.text, '/workspace');
-  assert.ok(f.chat.entries.some(entry => entry.text === 'completed answer'));
+  await until(() => f.chat.entries.some(entry => entry.text === 'completed answer'));
   f.append('message', { role: 'assistant', content: 'autonomous idle reply' });
   await until(() => f.chat.entries.some(entry => entry.text === 'autonomous idle reply'));
   f.append('message', { role: 'context', content: 'Recovery report', metadata: { recovery: true } });

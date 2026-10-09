@@ -28,4 +28,6 @@ Use `bot-app telegram status '{}'` to inspect receiver and delivery health.
 The controller runs `watch` continuously via its `services` setting. Notifications
 arrive while the bot is busy as well as idle and are processed by its existing
 serialized queue. Receiving messages does not itself call a model when idle.
+Notifications join ongoing work before its next model call, and `read` includes
+the latest received messages rather than stopping at the original input.
 Credentials must be configured by the operator; never print the credential file.

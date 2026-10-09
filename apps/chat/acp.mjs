@@ -90,7 +90,7 @@ function message(message, replay = false) {
 function event(entry) {
   if (entry.kind === 'message') message({...entry.payload,id:entry.seq});
   else if (entry.kind === 'tool.started'&&workIsChat) update({ sessionUpdate: 'tool_call_update', toolCallId: entry.payload.id, status: 'in_progress', rawInput: entry.payload.arguments });
-  else if (['input.completed', 'input.cancelled'].includes(entry.kind)) accepted.delete(entry.payload?.id);
+  else if (['input.completed', 'input.delivered', 'input.cancelled'].includes(entry.kind)) accepted.delete(entry.payload?.id);
 }
 async function poll() {
   if (polling) return;

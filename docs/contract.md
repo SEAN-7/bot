@@ -29,7 +29,7 @@ Within supervised execution, `botctl APP OPERATION '[JSON]'` (or `--stdin`) requ
 | Operation | Arguments | Result |
 | --- | --- | --- |
 | `config` | `{}` | Enabled app settings |
-| `history` | `{}` | Durable history for the current active event |
+| `history` | `{}` | Durable conversation history |
 | `state.get` | `{key,fallback?}` | Stored value or fallback |
 | `state.set` | `{key,value}` | Stores a JSON value |
 | `state.delete` | `{key}` | Removes the value |
@@ -51,17 +51,20 @@ A controller requests `{type:"request",id,method,args}`; the core replies `{type
 
 | Method | Arguments | Guarantee |
 | --- | --- | --- |
-| `history` | `{}` | Returns journal history, scoped to the active event |
+| `history` | `{}` | Admits pending input into the active conversation and returns durable history |
 | `contribute` | `{module:APP,key,content}` | Journals bounded, idempotent reference data from an enabled app |
 | `append` | `{message}` | Allows assistant/context records during an active event; rejects forged user/tool records |
 | `action.run` | `{eventId,call:{id,name,arguments}}` | Journals action start and result; executes only validated `shell` requests, one at a time |
-| `turn.commit` | `{eventId,message}` | Atomically records the final response and completes the active event |
+| `input.acknowledge` | `{eventId}` | Records delivery receipts for admitted inputs; makes no claim about objective completion |
+| `turn.commit` | `{eventId,message}` | Atomically records the final response and completes the active event and inputs admitted through controller history |
 
-The controller sends `{type:"progress",phase}` as work changes, `{type:"turnDone",eventId}` after a successful commit, `{type:"turnError",eventId,error,retryable?,blocked?}` before commit on a recoverable provider error, `{type:"tickDone"}` after idle work, or `{type:"fatal",error}` on failure. The core validates event identity, serialization and commit ordering. It never automatically re-executes a started action after interruption.
+The bundled controller uses `input.acknowledge` when no tool results or notifications remain to drive another model call. It never writes a final assistant reply. `turn.commit` remains available to independent controllers using the older response protocol.
 
-Temporary retries retain input order. Blocked inputs remain durable but allow later inputs to proceed until their retry deadline or an operator restart. Resuming an older input after newer work adds a context reference identifying that input, without duplicating the human message; communication apps use this reference to scope reads and replies.
+The controller sends `{type:"progress",phase}` as work changes, `{type:"turnDone",eventId}` after acknowledging delivery or a compatible commit, `{type:"turnError",eventId,error,retryable?,blocked?}` before commit on a recoverable provider error, `{type:"tickDone"}` after idle work, or `{type:"fatal",error}` on failure. The core validates event identity, serialization and commit ordering. It never automatically re-executes a started action after interruption.
 
-The bundled `agent` app owns the agent loop and strategy. Its settings select `modelApp`, `contextApp`, `contributors`, `projections`, `tickApps`, `services` and `maxSteps`. It calls ordinary apps for model completion/description, context preparation, memory/skill contributions, chat projection and scheduling. Context preparation returns `messages` and may return `append` records; the controller journals those records and adds their saved copies to the prepared messages before model completion. `services` lists background apps whose `watch` command the controller supervises, including while a turn is active. These command names are conventions of that controller, not core interfaces. Replace the controller to change that policy.
+Temporary retries retain input order. Blocked inputs remain durable but allow later inputs to proceed until their retry deadline or an operator restart. Resuming an older input after newer work adds a context reference identifying that input, without duplicating the human message; communication apps retain reply association while reads include new arrivals.
+
+The bundled `agent` app owns the agent loop and strategy. Its settings select `modelApp`, `contextApp`, `contributors`, `projections`, `tickApps` and `services`. It calls ordinary apps for model completion/description, context preparation, memory/skill contributions, chat projection and scheduling. The loop is driven by notifications and tool results, without a task-completion test or a tool-step limit. Plain model text accompanying tools is discarded; a text-only response is rejected and retried, rather than accepted as task completion. Assistant protocol records contain tool requests and reasoning only. Human replies go through communication tools. With no new notifications or tool results, the loop stays idle and makes no model call. Context preparation returns `messages` and may return `append` records; the controller journals those records and adds their saved copies to the prepared messages before model completion. `services` lists background apps whose `watch` command the controller supervises, including while a turn is active. These command names are conventions of that controller, not core interfaces. Replace the controller to change that policy.
 
 Communication apps own their message storage and delivery state in workspace.
 Terminal chat and Telegram are independent conversations. Their incoming messages

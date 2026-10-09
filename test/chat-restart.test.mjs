@@ -33,6 +33,15 @@ test('an independently running chat survives supervisor replacement and a prompt
   await chat.start(join(home, 'workspace'));
   await chat.submit('before restart');
   for (let i=0;i<100&&!chat.entries.some(m=>m.role==='assistant');i++)await new Promise(resolve=>setTimeout(resolve,50));
+  const settled=async()=>{
+    for(let i=0;i<200;i++){
+      const status=await fetch(new URL('/api/status',server.url),{headers:{authorization:`Bearer ${server.token}`}}).then(r=>r.json());
+      if(status.pending===0)return;
+      await new Promise(resolve=>setTimeout(resolve,50));
+    }
+    assert.fail('Chat delivery did not settle');
+  };
+  await settled();
   await server.stop();
   server = null;
   const during = chat.submit('during restart');
@@ -47,7 +56,7 @@ test('an independently running chat survives supervisor replacement and a prompt
   assert.equal(chat.status, 'Ready');
   assert.equal(server.uiToken, initial.uiToken);
   assert.notEqual(server.token, initial.token);
-  for (let i=0;i<100&&chat.entries.filter(m=>m.role==='assistant').length<3;i++)await new Promise(resolve=>setTimeout(resolve,50));
+  await settled();
   const response = await fetch(new URL('/api/messages', server.url), { headers: { authorization: `Bearer ${initial.uiToken}` } });
   const { messages } = await response.json();
   const appStore=new ChatStore(join(home,'workspace'));

@@ -6,8 +6,9 @@ description: Read and reply in the terminal chat app, which owns its conversatio
 Use `bot-app chat read '{}'` to read recent human and bot messages. Use `{"after":0,"limit":20}` to read from the beginning, then continue with nextAfter; hasMore indicates another page. Use `bot-app chat send '{"text":"your reply"}'` for progress, questions and final replies. Ordinary model output stays private. Send only messages warranted by the human's work.
 
 The app owns its messages and delivery state in `workspace/chat/chat.sqlite`.
-Incoming messages generate reference notifications in the bot's working journal;
-read this app to obtain the actual human text. Terminal chat and Telegram are
+Incoming messages generate reference notifications in the bot's working journal
+and join ongoing work before its next model call. Read this app to obtain the
+actual human text, including new arrivals. Terminal chat and Telegram are
 separate conversations: answer Telegram notifications through the Telegram app.
 Chat replies are stored in this app and streamed to connected frontends independently
 of the core journal. Reconnecting or restarting preserves app history.

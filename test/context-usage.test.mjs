@@ -102,7 +102,7 @@ test('isolated controller journals snapshots before model calls and preserves th
       if (JSON.stringify(saved) !== JSON.stringify(visible)) throw new Error('Journal observations differ from model context');
       const previous = messages.some(m => m.role === 'tool');
       if (previous && !notice.content.includes('prior input 35')) throw new Error('Previous usage did not refresh');
-      return { text: previous ? 'Usage visibility verified' : '',
+      return { text: '',
         toolCalls: previous ? [] : [{ id: 'usage-fixture-tool', name: 'shell', arguments: { command: 'printf result' } }],
         usage: { input: 10, cacheRead: 20, cacheWrite: 5, output: 2, totalTokens: 37 } };
     }
@@ -113,8 +113,10 @@ test('isolated controller journals snapshots before model calls and preserves th
   const until = async check => { for (let i = 0; i < 500; i++) { const result = await check(); if (result) return result; await new Promise(r => setTimeout(r, 20)); } assert.fail('Isolated usage check timed out'); };
   await until(async () => (await api('/api/status')).state === 'idle');
   await api('/api/messages', { text: 'Isolated usage fixture' });
-  const history = await until(async () => { const messages = (await api('/api/messages')).messages; return messages.some(m => m.content === 'Usage visibility verified') && messages; });
-  assert.equal(history.filter(m => m.role === 'assistant').length, 2);
+  await until(async () => (await api('/api/status')).pending===0);
+  const history=(await api('/api/messages')).messages;
+  assert.equal(history.filter(m => m.role === 'assistant').length, 1);
+  assert.ok(history.every(m=>m.content!=='Usage visibility verified'));
   const snapshots = history.filter(m => m.metadata?.contextUsage);
   assert.equal(snapshots.length, 2);
   assert.ok(history.indexOf(snapshots[0]) < history.findIndex(m => m.role === 'assistant'));
@@ -125,7 +127,9 @@ test('isolated controller journals snapshots before model calls and preserves th
   await until(async () => (await api('/api/status')).state === 'idle');
   assert.deepEqual((await api('/api/messages')).messages.filter(m => m.metadata?.contextUsage), snapshots);
   await api('/api/messages', { text: 'Another isolated input' });
-  const continued = await until(async () => { const messages = (await api('/api/messages')).messages; return messages.filter(m => m.role === 'assistant').length === 3 && messages; });
+  await until(async () => (await api('/api/status')).pending===0);
+  const continued=(await api('/api/messages')).messages;
+  assert.equal(continued.filter(m=>m.role==='assistant').length,1);
   assert.deepEqual(continued.filter(m => m.metadata?.contextUsage).slice(0, 2), snapshots);
   assert.equal(continued.filter(m => m.metadata?.contextUsage).length, 3);
 });

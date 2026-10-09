@@ -6,7 +6,7 @@ export function summarizeUsage(messages) {
   const totals = {}, reported = {}, cost = {}, costReported = {};
   let responses = 0, withUsage = 0, latest = null;
   for (const message of messages) {
-    if (message.role !== 'assistant') continue;
+    if (message.role !== 'assistant' && !message.metadata?.modelObservation) continue;
     responses++;
     const usage = message.usage;
     if (!usage || typeof usage !== 'object') continue;
@@ -25,7 +25,7 @@ export function summarizeUsage(messages) {
     }
     latest = { id: message.id, timestamp: message.timestamp, usage: { ...selected, cost: latestCost } };
   }
-  return { scope: 'saved assistant responses only; excludes unsaved requests and context-summary calls', responses, withUsage,
+  return { scope: 'saved model responses only; excludes unsaved requests and context-summary calls', responses, withUsage,
     withoutUsage: responses - withUsage, totals, reported, estimatedCost: cost, costReported, latest };
 }
 

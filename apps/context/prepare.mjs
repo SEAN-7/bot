@@ -12,7 +12,7 @@ export function usageNotice(messages, prepared, description) {
   });
   const estimate = Math.ceil(JSON.stringify(contents).length / 4);
   const window = description?.contextWindow;
-  const last = messages.findLast(message => message.role === 'assistant' && message.usage);
+  const last = messages.findLast(message => message.usage);
   const usage = last?.usage;
   const input = usage && ['input', 'cacheRead', 'cacheWrite'].every(key => count(usage[key]))
     ? usage.input + usage.cacheRead + usage.cacheWrite : null;

@@ -63,28 +63,55 @@ export class Store {
       // retain their order; blocked work rejoins the queue when its retry is due.
       const row = this.db.prepare("SELECT * FROM inbox WHERE status='pending' OR (status='blocked' AND retry_at<=?) ORDER BY timestamp,rowid LIMIT 1").get(Date.now());
       if (!row || row.retry_at > Date.now()) return null;
-      this.db.prepare("UPDATE inbox SET status='processing' WHERE id=?").run(row.id);
-      const metadata = JSON.parse(row.metadata);
-      const seen = this.db.prepare("SELECT 1 FROM journal WHERE kind='input.started' AND json_extract(payload,'$.id')=?").get(row.id);
-      if (!seen) {
-        this.append({ role: 'user', content: row.text, metadata: { ...metadata, eventId: row.id } });
-        this.record('input.started', { id: row.id });
-      } else if (this.history().findLast(m => m.role === 'user' || m.metadata?.resumedInput)?.metadata?.eventId !== row.id) {
-        // Keep the original human input unique while identifying resumed work
-        // after a newer input has been processed.
-        this.append({ role: 'context', content: `Resuming unfinished input ${row.id}:\n${row.text}`, metadata: { ...metadata, eventId: row.id, input: true, resumedInput: true } });
-      }
-      return { id: row.id, text: row.text, metadata };
+      return this.startInput(row);
     });
   }
+  // Called at model-context boundaries, after outstanding tool results are saved.
+  // One serialized conversation can incorporate new input without ending its work.
+  admitPending() {
+    return this.transaction(() => this.db.prepare("SELECT * FROM inbox WHERE status='pending' AND retry_at<=? ORDER BY timestamp,rowid").all(Date.now()).map(row => this.startInput(row)));
+  }
+  startInput(row) {
+    this.db.prepare("UPDATE inbox SET status='processing' WHERE id=?").run(row.id);
+    const metadata = JSON.parse(row.metadata);
+    const seen = this.db.prepare("SELECT 1 FROM journal WHERE kind='input.started' AND json_extract(payload,'$.id')=?").get(row.id);
+    if (!seen) {
+      this.append({ role: 'user', content: row.text, metadata: { ...metadata, eventId: row.id } });
+      this.record('input.started', { id: row.id });
+    } else if (this.history().findLast(m => m.role === 'user' || m.metadata?.resumedInput)?.metadata?.eventId !== row.id) {
+      // Keep the original human input unique while identifying resumed work
+      // after a newer input has been processed.
+      this.append({ role: 'context', content: `Resuming unfinished input ${row.id}:\n${row.text}`, metadata: { ...metadata, eventId: row.id, input: true, resumedInput: true } });
+    }
+    return { id: row.id, text: row.text, metadata };
+  }
   complete(id) { this.transaction(() => { this.db.prepare("UPDATE inbox SET status='done' WHERE id=?").run(id); this.record('input.completed', { id }); }); }
-  commitReply(id,message) {
+  acknowledge(inputIds) {
     return this.transaction(()=>{
-      const row=this.db.prepare('SELECT status FROM inbox WHERE id=?').get(id);
-      if(!row||row.status!=='processing')throw new Error('Input is not active');
+      for(const id of inputIds) {
+        const row=this.db.prepare('SELECT status FROM inbox WHERE id=?').get(id);
+        if(!row||row.status!=='processing')throw new Error('Input is not active');
+      }
+      for(const id of inputIds) {
+        this.db.prepare("UPDATE inbox SET status='done' WHERE id=?").run(id);
+        // Delivery is a receipt, not a claim that the human's objective is done.
+        this.record('input.delivered',{id});
+      }
+    });
+  }
+  commitReply(id,message,inputIds=[id]) {
+    return this.transaction(()=>{
+      const ids=[...new Set([id,...inputIds])];
+      for(const inputId of ids) {
+        const row=this.db.prepare('SELECT status FROM inbox WHERE id=?').get(inputId);
+        if(!row||row.status!=='processing')throw new Error('Input is not active');
+      }
       const saved=this.append(message);
-      this.db.prepare("UPDATE inbox SET status='done' WHERE id=?").run(id);
-      this.record('input.completed',{id});return saved;
+      for(const inputId of ids) {
+        this.db.prepare("UPDATE inbox SET status='done' WHERE id=?").run(inputId);
+        this.record('input.completed',{id:inputId});
+      }
+      return saved;
     });
   }
   retry(id, delayMs, blocked = false) { this.db.prepare('UPDATE inbox SET status=?,retry_at=? WHERE id=?').run(blocked ? 'blocked' : 'pending', Date.now() + delayMs, id); }

@@ -62,7 +62,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   const chatTokens=[uiToken,...chatAuth.legacyTokens];
   let worker=null,ready=false,busy=false,stopped=false,transitioning=false,restarts=0;
   let state='starting',error=null,lastHeartbeat=0,phaseStarted=0,workerStarted=0;
-  let tools=[],groups=new Map(),activeEvent=null,completedTrialTurn=false,tickAt=0;
+  let tools=[],groups=new Map(),activeEvent=null,activeInputs=new Set(),completedTrialTurn=false,tickAt=0;
   let updateRequested=false,protectedMode=!unsafe,queue=Promise.resolve();
   const retryCounts=new Map();
   const serialize=fn=>{const result=queue.then(fn);queue=result.catch(()=>{});return result;};
@@ -101,7 +101,10 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
         else if(operation==='update.request'){updateRequested=true;result={queued:true,message:'Controller replacement will be checked after this turn. Ordinary app edits already take effect on their next invocation.'};}
         else throw new Error('Unsupported app operation');
         if(!preflight&&operation!=='config'&&operation!=='state.get'&&operation!=='history')diagnose('app.operation',{app,operation,callId});
-      } else if(method==='history')result=preflight?[]:store.history();
+      } else if(method==='history') {
+        if(!preflight&&activeEvent)for(const input of store.admitPending())activeInputs.add(input.id);
+        result=preflight?[]:store.history();
+      }
       else if(preflight)throw new Error(`External action prohibited during preflight: ${method}`);
       else if(method==='contribute')result=store.contribute(args.key,args.content,module);
       else if(method==='append') {
@@ -110,7 +113,11 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
       }
       else if(method==='turn.commit') {
         if(args.eventId!==activeEvent||!['assistant','context'].includes(args.message?.role))throw new Error('Invalid final response');
-        result=store.commitReply(args.eventId,args.message);
+        result=store.commitReply(args.eventId,args.message,[...activeInputs]);
+      }
+      else if(method==='input.acknowledge') {
+        if(args.eventId!==activeEvent)throw new Error('Invalid input acknowledgement');
+        result=store.acknowledge([...activeInputs]);
       }
       else if(method==='tool.start') {if(args.eventId!==activeEvent)throw new Error('Tool belongs to inactive event');store.startAction(args.id,args.eventId,args.name,args.args);}
       else if(method==='tool.finish')result=store.finishAction(args.id,args.result,args.isError);
@@ -125,7 +132,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   }
 
   async function killWorker() {
-    const previous=worker;worker=null;ready=false;busy=false;activeEvent=null;
+    const previous=worker;worker=null;ready=false;busy=false;activeEvent=null;activeInputs.clear();
     if(previous)await stopRuntime(previous,new Set(groups.values()));
     groups=new Map();
   }
@@ -221,14 +228,14 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
         } else if(message.type==='tickDone'){busy=false;if(state==='working')state='idle';}
         else if(message.type==='turnDone') {
           if(message.eventId!==activeEvent)throw new Error('Mismatched completed event');
-          activeEvent=null;busy=false;state='idle';error=null;restarts=0;
-          retryCounts.delete(message.eventId);
+          for(const id of activeInputs)retryCounts.delete(id);
+          activeEvent=null;activeInputs.clear();busy=false;state='idle';error=null;restarts=0;
           completedTrialTurn=true;
         } else if(message.type==='turnError') {
           const attempts=retryCounts.get(message.eventId)||0;
           retryCounts.set(message.eventId,attempts+1);
-          store.retry(message.eventId,message.blocked?86_400_000:Math.min(60_000,settings.retryMs*2**Math.min(attempts,5)),!!message.blocked);
-          busy=false;activeEvent=null;state=message.blocked?'blocked':'retrying';error=message.error;
+          for(const id of activeInputs)store.retry(id,message.blocked?86_400_000:Math.min(60_000,settings.retryMs*2**Math.min(attempts,5)),!!message.blocked);
+          busy=false;activeEvent=null;activeInputs.clear();state=message.blocked?'blocked':'retrying';error=message.error;
           diagnose('model.unavailable',{error,retryable:message.retryable,blocked:message.blocked});
         } else if(message.type==='fatal') await fail(message.error);
       }).catch(e=>serialize(()=>fail(e.message)));
@@ -255,7 +262,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
     if((await readJSON(metadataPath(home))).pending){await activatePending();return;}
     if(!ready)return;
     const event=store.next();
-    if(event) {busy=true;activeEvent=event.id;state='working';phaseStarted=now;worker.send({type:'turn',event});}
+    if(event) {busy=true;activeEvent=event.id;activeInputs=new Set([event.id]);state='working';phaseStarted=now;worker.send({type:'turn',event});}
     else if(now-tickAt>=1000){busy=true;tickAt=phaseStarted=now;worker.send({type:'tick'});}
   }
 
@@ -293,7 +300,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
             const cancelled=store.cancel(body.id);
             if(!cancelled.cancelled)return cancelled;
             retryCounts.delete(body.id);
-            if(activeEvent===body.id) {
+            if(activeInputs.has(body.id)) {
               transitioning=true;
               try {
                 await killWorker();

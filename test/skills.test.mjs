@@ -93,6 +93,12 @@ test('usage counts only recorded assistant responses and distinguishes missing m
   assert.equal(report.latest.id, 3);
   assert.ok(!JSON.stringify(report).includes('secret'));
   assert.deepEqual(summarizeUsage([]).totals, {});
+  const observed=summarizeUsage([
+    {role:'context',metadata:{modelObservation:true},usage:{input:5,output:2}},
+    {role:'context',usage:{input:1000}},
+  ]);
+  assert.equal(observed.responses,1);
+  assert.deepEqual(observed.totals,{input:5,output:2});
 });
 
 test('usage reader leaves journal unchanged and cannot create a missing database', async t => {

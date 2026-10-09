@@ -260,7 +260,7 @@ test('idle does not call the model, and temporary model failures retain the even
   assert.equal(messages.filter(m => m.role === 'user' && m.content === 'keep this event').length, 1);
 });
 
-test('a delayed retry cannot be overtaken by a later input in the same conversation', { timeout: 20_000 }, async t => {
+test('a delayed retry incorporates later input in the same conversation', { timeout: 20_000 }, async t => {
   const bot = await fixture(t, `
     export default api => {
       api.registerModel({ async complete({ messages }) {
@@ -275,7 +275,7 @@ test('a delayed retry cannot be overtaken by a later input in the same conversat
   await bot.send('second');
   await bot.reply('answered:second');
   const replies = messagesOf(await bot.api('/api/messages')).filter(message => message.role === 'assistant').map(message => message.content);
-  assert.deepEqual(replies, ['answered:first', 'answered:second']);
+  assert.deepEqual(replies, ['answered:second']);
 });
 
 test('blocked work is retained without preventing a later question from being answered', { timeout: 20_000 }, async t => {

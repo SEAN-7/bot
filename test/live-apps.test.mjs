@@ -33,7 +33,7 @@ test('ordinary apps can be installed and edited within a turn without checks, ac
   await writeFile(join(home,'drafts/apps/demo-model/behavior.mjs'),`export const createModel=()=>({async complete({messages}){
     const input=messages.findLast(m=>m.metadata?.input),recent=messages.slice(messages.indexOf(input)+1),results=recent.filter(m=>m.role==='tool');
     const commands=["bot-app ordinary", "printf 'if [ \\\"$1\\\" = --preflight ]; then exit 99; fi\\nprintf new' > \\\"$BOT_APPS/ordinary/main.sh\\\"; bot-app ordinary", "bot-app --help", "bot-app broken", "botctl ordinary state.set '{\\\"key\\\":\\\"live\\\",\\\"value\\\":\\\"bridge works\\\"}'; botctl ordinary state.get '{\\\"key\\\":\\\"live\\\"}'"];
-    return results.length<commands.length?{text:'',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:commands[results.length]}}]}:{text:'done',toolCalls:[]};
+    return results.length<commands.length?{text:'',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:commands[results.length]}}]}:{text:'',toolCalls:[]};
   }});`);
   server=await startSupervisor({home,port:0,unsafe:true});
   const api=async(path,body)=>fetch(server.url+path,{method:body?'POST':'GET',headers:{authorization:'Bearer '+server.token,'content-type':'application/json'},body:body?JSON.stringify(body):undefined}).then(r=>r.json());

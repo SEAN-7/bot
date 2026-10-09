@@ -17,7 +17,7 @@ else {
     const id=++sequence;pending.set(id,{resolve,reject});send({type:'request',id,method,args});
   });
   const progress = phase => send({type:'progress',phase});
-  async function prepare() {
+  async function prepareSnapshot() {
     const settings=config.model||{};
     let messages=await rpc('history');
     for(const app of options.contributors||[]) {
@@ -37,25 +37,44 @@ else {
     }
     if(!Array.isArray(messages)||messages.some(m=>typeof m.content!=='string'))throw new Error('Invalid prepared context');
     if(latest&&!messages.some(m=>m.id===latest.id))throw new Error('Context removed the current input');
-    return {messages,tools,settings};
+    return {messages,tools,settings,latestInputId:latest?.id};
+  }
+  async function prepare() {
+    while(true) {
+      const {latestInputId,...request}=await prepareSnapshot();
+      // Contributions, projections and compaction can take time. Incorporate
+      // notifications received during that work before starting a model call.
+      const history=await rpc('history');
+      if(history.findLast(m=>m.role==='user'||m.metadata?.resumedInput)?.id===latestInputId)return request;
+    }
   }
   async function run(event) {
     if(active||closing)throw new Error('Concurrent turns are prohibited');active=true;let committed=false;
     try {
-      for(let step=0;step<(options.maxSteps||100);step++) {
+      while(!closing) {
         progress('context');const request=await prepare();progress('model');
         const response=await invoke(options.modelApp,'complete',request);
         if(!response||typeof response.text!=='string'||!Array.isArray(response.toolCalls||[]))throw new Error('Invalid model result');
         const calls=response.toolCalls||[], ids=new Set();
+        if(!calls.length&&response.usage)await rpc('append',{message:{role:'context',content:'',metadata:{modelObservation:true},usage:response.usage}});
+        if(!calls.length&&response.text.trim()) {
+          await rpc('append',{message:{role:'context',content:'The previous model response contained plain assistant text without tool calls and was rejected. Use communication tools for human replies; return no text when there is no action to take.',metadata:{modelValidation:true}}});
+          throw Object.assign(new Error('Tool-only model returned a plain assistant response'),{retryable:true});
+        }
         for(const call of calls){call.id||=randomUUID();if(ids.has(call.id)||typeof call.name!=='string'||!call.arguments||typeof call.arguments!=='object')throw new Error('Invalid model tool request');ids.add(call.id);}
-        const assistant={role:'assistant',content:response.text,toolCalls:calls,metadata:{...response.metadata,modelOutput:true},usage:response.usage};
-        if(!calls.length){await rpc('turn.commit',{eventId:event.id,message:assistant});committed=true;}
+        // Assistant protocol records hold tool requests and reasoning only.
+        // Human replies are sent through communication apps; plain model text
+        // is never a final reply or a declaration that the objective is done.
+        const metadata={...response.metadata,modelOutput:true};
+        if(metadata.nativeAssistant)metadata.nativeAssistant={...metadata.nativeAssistant,content:metadata.nativeAssistant.content.filter(block=>block.type!=='text')};
+        const assistant={role:'assistant',content:'',toolCalls:calls,metadata,usage:response.usage};
+        if(!calls.length){
+          await rpc('input.acknowledge',{eventId:event.id});committed=true;
+        }
         else await rpc('append',{message:assistant});
         for(const call of calls){progress('tool');await rpc('action.run',{eventId:event.id,call});}
         if(!calls.length){send({type:'turnDone',eventId:event.id});return;}
       }
-      await rpc('turn.commit',{eventId:event.id,message:{role:'context',content:'Turn reached the configured tool-step limit. Work is paused until the next input.',metadata:{recovery:true}}});committed=true;
-      send({type:'turnDone',eventId:event.id});
     } catch(error) {
       if(!committed&&(error.retryable||error.blocked))send({type:'turnError',eventId:event.id,error:error.message,retryable:!!error.retryable,blocked:!!error.blocked});
       else throw error;
