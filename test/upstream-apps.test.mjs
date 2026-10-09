@@ -9,7 +9,7 @@ import { initialize, readCurrent } from '../src/releases.mjs';
 import { createConfig } from '../src/cli.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
-const exec=promisify(execFile), launcher=new URL('../src/app-cli.mjs',import.meta.url).pathname;
+const exec=promisify(execFile), launcher=await realpath(new URL('../src/app-cli.mjs',import.meta.url));
 async function folder(t){const root=await realpath(await mkdtemp(join(tmpdir(),'bot-upstream-')));t.after(()=>rm(root,{recursive:true,force:true}));return root;}
 async function until(check){for(let i=0;i<400;i++){if(await check())return;await new Promise(r=>setTimeout(r,25));}assert.fail('Upstream inspection timed out');}
 
