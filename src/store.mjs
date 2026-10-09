@@ -59,7 +59,9 @@ export class Store {
   }
   next() {
     return this.transaction(() => {
-      const row = this.db.prepare("SELECT * FROM inbox WHERE status='pending' ORDER BY timestamp,rowid LIMIT 1").get();
+      // Deferred blocked work must not hold up new input. Temporary retries
+      // retain their order; blocked work rejoins the queue when its retry is due.
+      const row = this.db.prepare("SELECT * FROM inbox WHERE status='pending' OR (status='blocked' AND retry_at<=?) ORDER BY timestamp,rowid LIMIT 1").get(Date.now());
       if (!row || row.retry_at > Date.now()) return null;
       this.db.prepare("UPDATE inbox SET status='processing' WHERE id=?").run(row.id);
       const metadata = JSON.parse(row.metadata);
@@ -67,6 +69,10 @@ export class Store {
       if (!seen) {
         this.append({ role: 'user', content: row.text, metadata: { ...metadata, eventId: row.id } });
         this.record('input.started', { id: row.id });
+      } else if (this.history().findLast(m => m.role === 'user' || m.metadata?.resumedInput)?.metadata?.eventId !== row.id) {
+        // Keep the original human input unique while identifying resumed work
+        // after a newer input has been processed.
+        this.append({ role: 'context', content: `Resuming unfinished input ${row.id}:\n${row.text}`, metadata: { ...metadata, eventId: row.id, input: true, resumedInput: true } });
       }
       return { id: row.id, text: row.text, metadata };
     });
@@ -81,9 +87,9 @@ export class Store {
       this.record('input.completed',{id});return saved;
     });
   }
-  retry(id, delayMs) { this.db.prepare("UPDATE inbox SET status='pending',retry_at=? WHERE id=?").run(Date.now() + delayMs, id); }
+  retry(id, delayMs, blocked = false) { this.db.prepare('UPDATE inbox SET status=?,retry_at=? WHERE id=?').run(blocked ? 'blocked' : 'pending', Date.now() + delayMs, id); }
   pending() { return this.db.prepare("SELECT COUNT(*) AS n FROM inbox WHERE status!='done'").get().n; }
-  resume() { this.db.prepare("UPDATE inbox SET retry_at=0 WHERE status='pending'").run(); }
+  resume() { this.db.prepare("UPDATE inbox SET status='pending',retry_at=0 WHERE status IN ('pending','blocked')").run(); }
   contribute(key, content, module) {
     return this.transaction(() => {
       const scoped = key ? `${module}:${key}` : randomUUID();

@@ -28,13 +28,35 @@ test('resume makes blocked pending input available after an operator restart', a
   t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }); });
   store.enqueue({ id: 'blocked', text: 'retry after credentials change' });
   assert.equal(store.next().id, 'blocked');
-  store.retry('blocked', 86400000);
+  store.retry('blocked', 86400000, true);
   assert.equal(store.next(), null);
   store.close();
   store = new Store(home);
   store.resume();
   assert.equal(store.next().id, 'blocked');
   assert.equal(store.history().filter(message => message.role === 'user').length, 1);
+});
+
+test('blocked input survives restart, allows later input, and retries when due', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'bot-store-blocked-'));
+  let store = new Store(home);
+  t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }); });
+  store.enqueue({ id: 'first', text: 'unfinished work' });
+  assert.equal(store.next().id, 'first');
+  store.retry('first', 86400000, true);
+  store.close();
+  store = new Store(home);
+  store.enqueue({ id: 'second', text: 'follow-up question' });
+  assert.equal(store.next().id, 'second');
+  store.commitReply('second', { role: 'assistant', content: 'answer to question' });
+  assert.equal(store.pending(), 1);
+  assert.equal(store.next(), null);
+  // Move the persisted deadline into the past without sleeping for a day.
+  store.db.prepare('UPDATE inbox SET retry_at=0 WHERE id=?').run('first');
+  assert.equal(store.next().id, 'first');
+  assert.equal(store.history().filter(m => m.role === 'user' && m.metadata?.eventId === 'first').length, 1);
+  assert.equal(store.history().at(-1).metadata.resumedInput, true);
+  assert.match(store.history().at(-1).content, /unfinished work/);
 });
 
 test('clean restart still reports unfinished tool outcomes without repeating recovery', async t => {

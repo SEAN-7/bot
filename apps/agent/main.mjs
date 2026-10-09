@@ -28,7 +28,7 @@ else {
       for(const item of result)await rpc('contribute',{module:app,...item});
     }
     messages=await rpc('history');
-    const latest=messages.findLast(m=>m.role==='user');
+    const latest=messages.findLast(m=>m.role==='user'||m.metadata?.resumedInput);
     for(const app of options.projections||[])messages=await invoke(app,'project',{messages});
     if(options.contextApp)messages=(await invoke(options.contextApp,'prepare',{messages,tools,settings,modelApp:options.modelApp})).messages;
     if(!Array.isArray(messages)||messages.some(m=>typeof m.content!=='string'))throw new Error('Invalid prepared context');

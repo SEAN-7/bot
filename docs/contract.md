@@ -59,6 +59,8 @@ A controller requests `{type:"request",id,method,args}`; the core replies `{type
 
 The controller sends `{type:"progress",phase}` as work changes, `{type:"turnDone",eventId}` after a successful commit, `{type:"turnError",eventId,error,retryable?,blocked?}` before commit on a recoverable provider error, `{type:"tickDone"}` after idle work, or `{type:"fatal",error}` on failure. The core validates event identity, serialization and commit ordering. It never automatically re-executes a started action after interruption.
 
+Temporary retries retain input order. Blocked inputs remain durable but allow later inputs to proceed until their retry deadline or an operator restart. Resuming an older input after newer work adds a context reference identifying that input, without duplicating the human message; communication apps use this reference to scope reads and replies.
+
 The bundled `agent` app owns the agent loop and strategy. Its settings select `modelApp`, `contextApp`, `contributors`, `projections`, `tickApps`, `services` and `maxSteps`. It calls ordinary apps for model completion/description, context preparation, memory/skill contributions, chat projection and scheduling. `services` lists background apps whose `watch` command the controller supervises, including while a turn is active. These command names are conventions of that controller, not core interfaces. Replace the controller to change that policy.
 
 Communication apps own their message storage and delivery state in workspace.

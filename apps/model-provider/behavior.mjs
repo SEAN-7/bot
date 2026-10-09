@@ -69,7 +69,7 @@ export function createModel(config, collection = builtinModels()) {
           throw error;
         }
         if (answer.stopReason === 'length') {
-          throw Object.assign(new Error('Model output limit reached; no partial tool calls were executed. Increase maxTokens or reduce the requested output.'), { blocked: true });
+          throw Object.assign(new Error(`Model output limit reached (requested maxTokens=${options.maxTokens ?? selected.maxTokens ?? 'provider default'}${answer.usage?.output !== undefined ? `, outputTokens=${answer.usage.output}` : ''}); no partial tool calls were executed. Increase maxTokens or reduce the requested output.`), { blocked: true });
         }
         if (!['stop', 'toolUse'].includes(answer.stopReason)) throw Object.assign(new Error(`Incomplete model response: ${answer.stopReason}`), { retryable: true });
         return {

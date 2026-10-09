@@ -7,6 +7,8 @@ import { TelegramStore } from '../apps/telegram/database.mjs';
 import { receive, send, project } from '../apps/telegram/behavior.mjs';
 import { telegramAPI } from '../apps/telegram/api.mjs';
 import { ChatStore, notification } from '../apps/chat/database.mjs';
+import { commands as chatCommands } from '../apps/chat/commands.mjs';
+import { commands as telegramCommands } from '../apps/telegram/commands.mjs';
 import { watch as chatWatch } from '../apps/chat/behavior.mjs';
 import { initialize, stageDrafts } from '../src/releases.mjs';
 import { createConfig } from '../src/cli.mjs';
@@ -16,6 +18,32 @@ async function folder(t) {const dir=await mkdtemp(join(tmpdir(),'bot-channel-sta
 async function telegram(t) {const store=new TelegramStore(await folder(t));store.set('identity',{id:123});t.after(()=>store.close());return store;}
 const message=(id,text='human message',user=42,type='private')=>({update_id:id,message:{message_id:id,date:1,chat:{id:user,type},from:{id:user,is_bot:false},text}});
 async function until(check) {const end=Date.now()+20000;while(Date.now()<end){if(await check())return;await new Promise(resolve=>setTimeout(resolve,25));}assert.fail('Channel check timed out');}
+
+test('communication reads and chat replies use the resumed input after a newer message', async t => {
+  const workspace = await folder(t);
+  const chat = new ChatStore(workspace);t.after(() => chat.close());
+  chat.accept('chat:first', 'first');chat.accept('chat:second', 'second');
+  const history = [
+    {role:'user',content:notification('chat:first'),metadata:{eventId:'chat:first',source:'chat'}},
+    {role:'user',content:notification('chat:second'),metadata:{eventId:'chat:second',source:'chat'}},
+    {role:'context',content:'Resuming first',metadata:{eventId:'chat:first',source:'chat',resumedInput:true,input:true}},
+  ];
+  const commands = chatCommands({paths:{workspace},history:async()=>history});
+  assert.deepEqual((await commands.read.execute({})).messages.map(m=>m.text), ['first']);
+  await commands.send.execute({text:'reply to first'},{callId:'resumed-reply'});
+  assert.equal(chat.db.prepare("SELECT event_id FROM messages WHERE sender='bot'").get().event_id, 'chat:first');
+
+  const telegram = new TelegramStore(join(workspace,'telegram'));t.after(() => telegram.close());
+  telegram.set('binding',{chatId:42});
+  telegram.message(message(1,'first').message,'human');
+  telegram.message(message(2,'second').message,'human');
+  const telegramHistory = [
+    {role:'user',metadata:{source:'telegram',messageId:2}},
+    {role:'context',metadata:{source:'telegram',messageId:1,resumedInput:true,input:true}},
+  ];
+  const reads = telegramCommands({paths:{workspace},history:async()=>telegramHistory});
+  assert.deepEqual((await reads.read.execute({})).messages.map(m=>m.text), ['first']);
+});
 
 test('Telegram pairing authorizes one private human and enqueues references without copying conversation text',async t=>{
   const store=await telegram(t),events=[];store.set('pairing',{code:'private-code',expires:Date.now()+10000});

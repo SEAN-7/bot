@@ -153,12 +153,28 @@ test('context compacts whole tool groups and reuses an identical summary prefix'
 test('summary failure preserves state and open tool blocks remain together', async () => {
   const h = harness({ maxInputChars: 1000, keepRecentGroups: 1 });
   context(h.api);
-  await assert.rejects(h.api.context({ messages: conversation(), model: { complete: async () => { throw new Error('provider unavailable'); } } }), /provider unavailable/);
+  await assert.rejects(h.api.context({ messages: conversation(), model: { complete: async () => { throw Object.assign(new Error('provider unavailable'), { blocked: true }); } } }), error => error.blocked && /Context summary failed: provider unavailable/.test(error.message));
   assert.equal(h.state.has('summary'), false);
   const open = conversation().slice(0, 4);
   assert.equal(messageGroups(open).length, 1);
   const result = await h.api.context({ messages: open, model: { complete: async () => { assert.fail('Cannot summarize an open tool block'); } } });
   assert.deepEqual(result.messages, open);
+});
+
+test('default summary allowance leaves room for reasoning and respects smaller models', async () => {
+  const h = harness({ maxInputChars: 1000, keepRecentGroups: 1 });
+  context(h.api);
+  const caps = [];
+  const model = {
+    describe: async () => ({ contextWindow: 1000000, maxOutputTokens: 128000 }),
+    complete: async request => { caps.push(request.settings.maxTokens); return { text: 'summary', toolCalls: [] }; },
+  };
+  await h.api.context({ messages: conversation(), model });
+  assert.deepEqual(caps, [8192]);
+  h.state.delete('summary');
+  model.describe = async () => ({ contextWindow: 20000, maxOutputTokens: 1000 });
+  await h.api.context({ messages: conversation(), model });
+  assert.deepEqual(caps, [8192, 1000]);
 });
 
 test('context retains the current user request across a long tool loop', async () => {
@@ -305,10 +321,10 @@ test('Pi registry loads without calling providers, and provider failures are cla
 test('Pi refuses incomplete tool calls after output truncation', async () => {
   const h = harness({ provider: 'provider', model: 'model' });
   piModel(h.api, {
-    getModel: () => ({ provider: 'provider', id: 'model', api: 'openai-responses' }),
-    completeSimple: async () => ({ stopReason: 'length', content: [{ type: 'toolCall', id: 'partial', name: 'shell', arguments: { command: 'touch' } }] }),
+    getModel: () => ({ provider: 'provider', id: 'model', api: 'openai-responses', maxTokens: 10000 }),
+    completeSimple: async () => ({ stopReason: 'length', usage: { output: 2048 }, content: [{ type: 'toolCall', id: 'partial', name: 'shell', arguments: { command: 'touch' } }] }),
   });
-  await assert.rejects(h.api.model.complete({ messages: [], tools: [] }), error => error.blocked && /output limit/.test(error.message));
+  await assert.rejects(h.api.model.complete({ messages: [], tools: [], settings: { maxTokens: 2048 } }), error => error.blocked && /requested maxTokens=2048, outputTokens=2048/.test(error.message));
 });
 
 test('shell runs from workspace, bounds bytes, reports failure, and releases tracked groups', async t => {

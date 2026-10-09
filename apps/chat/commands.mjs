@@ -5,7 +5,7 @@ export function commands(api) {
     const store=new ChatStore(api.paths.workspace);
     try {
       const history=await api.history();store.import(history);
-      const latest=history.findLast(message=>message.role==='user');
+      const latest=history.findLast(message=>message.role==='user'||message.metadata?.resumedInput);
       return await fn(store,latest?.metadata?.eventId);
     } finally {store.close();}
   }

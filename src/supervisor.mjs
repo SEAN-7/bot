@@ -227,7 +227,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
         } else if(message.type==='turnError') {
           const attempts=retryCounts.get(message.eventId)||0;
           retryCounts.set(message.eventId,attempts+1);
-          store.retry(message.eventId,message.blocked?86_400_000:Math.min(60_000,settings.retryMs*2**Math.min(attempts,5)));
+          store.retry(message.eventId,message.blocked?86_400_000:Math.min(60_000,settings.retryMs*2**Math.min(attempts,5)),!!message.blocked);
           busy=false;activeEvent=null;state=message.blocked?'blocked':'retrying';error=message.error;
           diagnose('model.unavailable',{error,retryable:message.retryable,blocked:message.blocked});
         } else if(message.type==='fatal') await fail(message.error);

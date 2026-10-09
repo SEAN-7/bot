@@ -278,6 +278,29 @@ test('a delayed retry cannot be overtaken by a later input in the same conversat
   assert.deepEqual(replies, ['answered:first', 'answered:second']);
 });
 
+test('blocked work is retained without preventing a later question from being answered', { timeout: 20_000 }, async t => {
+  const bot = await fixture(t, `
+    export default api => {
+      api.registerModel({ async complete({ messages }) {
+        const input = messages.findLast(m => m.role === 'user');
+        if (input.content === 'first') throw Object.assign(new Error('Model output limit reached'), { blocked: true });
+        return { text: 'answered:' + input.content, toolCalls: [] };
+      }});
+    };
+  `);
+  const before = await bot.api('/api/status');
+  await bot.send('first');
+  await until(async () => (await bot.api('/api/status')).state === 'blocked', 'blocked first input');
+  await bot.send('second');
+  await bot.reply('answered:second');
+  const status = await bot.api('/api/status');
+  assert.equal(status.pending, 1);
+  assert.equal(status.revision, before.revision);
+  const events = (await bot.api('/api/events')).events;
+  assert.equal(events.filter(e => e.kind === 'model.unavailable').length, 1);
+  assert.equal(events.filter(e => e.kind === 'runtime.ready').length, 1);
+});
+
 test('temporary model failure during context preparation retries without restarting the runtime', { timeout: 20_000 }, async t => {
   const bot = await fixture(t, `
     export default api => {
