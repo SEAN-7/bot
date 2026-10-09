@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline/promises';
 import { tmpdir } from 'node:os';
 
-export const DEFAULT_PATHS = { app: '/opt/bot', data: '/var/lib/bot', config: '/etc/bot', service: '/etc/systemd/system/bot.service', launcher: '/usr/local/bin/bot', osRelease: '/etc/os-release' };
+export const DEFAULT_PATHS = { app: '/opt/bot', data: '/var/lib/bot', config: '/etc/bot', service: '/etc/systemd/system/bot.service', launcher: '/usr/local/bin/bot', osRelease: '/etc/os-release', apparmor: '/etc/apparmor.d/bot-bwrap', usernsRestriction: '/proc/sys/kernel/apparmor_restrict_unprivileged_userns' };
 const MANAGED = 'Managed by self-building-bot installer';
 const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'execution'];
 const KEYS = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', google: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', mistral: 'MISTRAL_API_KEY', deepseek: 'DEEPSEEK_API_KEY', xai: 'XAI_API_KEY', cerebras: 'CEREBRAS_API_KEY' };
@@ -23,7 +23,7 @@ async function atomic(path, text, mode = 0o600) {
 }
 const atomicJSON = (path, value) => atomic(path, JSON.stringify(value, null, 2) + '\n');
 export function parseArgs(args) {
-  const [command = 'help', ...rest] = args;
+  const [command = 'chat', ...rest] = args;
   const options = {}, positional = [];
   const values = new Set(['bundle', 'provider', 'model', 'disable', 'credential-env', 'repository']);
   for (let index = 0; index < rest.length; index++) {
@@ -152,7 +152,7 @@ function substitute(template, paths) {
   }
   return template;
 }
-export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platform = process.platform, arch = process.arch, uid = process.getuid?.(), env = process.env, print = console.log, choices = setupChoices, health, stage, ownerUid = uid } = {}) {
+export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platform = process.platform, arch = process.arch, uid = process.getuid?.(), env = process.env, print = console.log, choices = setupChoices, health, stage, ownerUid = uid, interactive = process.stdin.isTTY } = {}) {
   const recordPath = join(paths.config, 'installation.json');
   const appMarker = join(paths.app, '.managed-by-bot.json');
   const environmentPath = join(paths.config, 'environment');
@@ -263,16 +263,6 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     const { known } = await ownership({ fresh: true });
     if (!options.bundle) throw new Error('Install requires a verified local bundle');
     const bundle = await validateBundle(options.bundle, arch);
-    let catalogue = [];
-    if (choices === setupChoices && !(options.yes && !options.provider)) {
-      const registry = pathToFileURL(join(bundle.root, 'app/node_modules/@earendil-works/pi-ai/dist/providers/all.js')).href;
-      const result = await run(nodeAt(bundle.root), ['--input-type=module', '-e', `import {builtinModels} from ${JSON.stringify(registry)}; console.log(JSON.stringify(builtinModels().getModels().map(({provider,id,name})=>({provider,id,name}))));`], { env: safeEnv({}) });
-      catalogue = JSON.parse(result.stdout);
-    }
-    const initialized = known && await exists(join(state, 'control', 'releases.json'));
-    const selections = initialized ? null : known?.setup && !options.provider
-      ? { ...known.setup, credentials: await readCredentials() }
-      : await choices(options, { env, print, catalogue });
     if (known && await exists(paths.service)) await systemctl('stop', 'bot.service');
     if (options.repository && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repository)) throw new Error('Repository must be OWNER/REPO');
     print('Installing host prerequisites (bubblewrap, procps and sudo)...');
@@ -285,31 +275,83 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     const fields = account.stdout.trim().split(':');
     const accountUid = Number(fields[2]);
     if (!Number.isInteger(accountUid) || accountUid <= 0) throw new Error('Dedicated bot account was not created');
-    const installation = { manager: MANAGED, uid: accountUid, repository: options.repository || bundle.manifest.repository || known?.repository || null, version: bundle.manifest.version, installed: false, setup: selections ? { provider: selections.provider, model: selections.model, disabled: selections.disabled } : known?.setup || null };
+    const installation = { manager: MANAGED, uid: accountUid, repository: options.repository || bundle.manifest.repository || known?.repository || null, version: bundle.manifest.version, installed: false, configured: known?.configured ?? !!known?.installed, setupPending: known?.setupPending || false, setup: known?.setup || null };
     await atomicJSON(recordPath, installation);
     await mkdir(paths.app, { recursive: true, mode: 0o755 });
     await atomicJSON(appMarker, { manager: MANAGED });
     await run('chown', ['bot:bot', paths.data]);
     await mkdir(state, { recursive: true, mode: 0o700 });
     await run('chown', ['bot:bot', state]);
-    if (selections) await atomic(environmentPath, environmentText(selections.credentials));
-    else if (!await exists(environmentPath)) await atomic(environmentPath, '');
+    if (!await exists(environmentPath)) await atomic(environmentPath, '');
     await chmod(environmentPath, 0o600);
     const release = await copyRelease(bundle);
     await point(release);
     await configFiles(release);
-    if (selections) {
+    await installSandboxProfile();
+    await systemctl('daemon-reload');
+    await systemctl('unmask', '--runtime', 'bot.service');
+    await systemctl('disable', '--now', 'bot.service');
+    await atomicJSON(recordPath, { ...installation, installed: true, release });
+    print(`Installed bot ${installation.version}. The service is stopped. Run bot to configure and open chat.`);
+    return { release };
+  }
+  async function installSandboxProfile() {
+    if (!paths.apparmor || !paths.usernsRestriction || !await exists(paths.usernsRestriction) || (await readFile(paths.usernsRestriction, 'utf8')).trim() !== '1') return;
+    // Ubuntu restricts unprivileged namespaces. Allow only this executable;
+    // do not weaken the global kernel setting or bypass the worker sandbox.
+    if (await exists(paths.apparmor)) {
+      await rootOwned(paths.apparmor);
+      if (!(await readFile(paths.apparmor, 'utf8')).includes(MANAGED)) throw new Error('Refusing unrelated Bubblewrap AppArmor profile');
+    }
+    await atomic(paths.apparmor, `# ${MANAGED}
+abi <abi/4.0>,
+include <tunables/global>
+profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}
+`, 0o644);
+    await run('apparmor_parser', ['-r', paths.apparmor]);
+  }
+  async function configure(known, release, options) {
+    if (!interactive && !options.yes) throw new Error('First launch needs an interactive terminal. SSH in and run bot.');
+    let catalogue = [];
+    if (choices === setupChoices) {
+      const registry = pathToFileURL(join(release, 'app/node_modules/@earendil-works/pi-ai/dist/providers/all.js')).href;
+      const result = await run(nodeAt(release), ['--input-type=module', '-e', `import {builtinModels} from ${JSON.stringify(registry)}; console.log(JSON.stringify(builtinModels().getModels().map(({provider,id,name})=>({provider,id,name}))));`], { env: safeEnv({}) });
+      catalogue = JSON.parse(result.stdout);
+    }
+    print('Welcome to bot. Choose your model and features.');
+    const selections = known.setupPending
+      ? { ...known.setup, credentials: await readCredentials() }
+      : await choices(options, { env, print, catalogue, interactive });
+    const setup = { provider: selections.provider, model: selections.model, disabled: selections.disabled };
+    if (!known.setupPending && !await exists(join(state, 'control/releases.json')) && (await readdir(state)).length) throw new Error('Refusing unrelated incomplete state; preserve it before retrying setup');
+    await atomic(environmentPath, environmentText(selections.credentials));
+    await atomicJSON(recordPath, { ...known, setupPending: true, setup });
+    if (await exists(join(state, 'control/releases.json'))) {
+      // Also recovers interrupted setup and the old installer's unstarted demo.
+      const configPath = join(state, 'drafts/config.json');
+      const config = await json(configPath);
+      for (const feature of FEATURES) config.modules[feature] = { ...config.modules[feature], enabled: !selections.disabled.includes(feature) };
+      config.modules['pi-model'] = { enabled: selections.provider !== 'demo', provider: selections.provider, model: selections.model };
+      config.modules['demo-model'] = { enabled: selections.provider === 'demo' };
+      config.model = { provider: selections.provider, model: selections.model };
+      await atomicJSON(configPath, config);
+      await run('chown', ['bot:bot', configPath]);
+      const metadata = await json(join(state, 'control/releases.json'));
+      if (!metadata.pending) await asBot(nodeAt(release), [cliAt(release), 'apply', '--home', state], selections.credentials);
+    } else {
+      if (known.setupPending) {
+        await rm(state, { recursive: true });
+        await mkdir(state, { mode: 0o700 });
+        await run('chown', ['bot:bot', state]);
+      }
       const args = [cliAt(release), 'setup', '--home', state, '--yes', '--provider', selections.provider, '--model', selections.model];
       if (selections.disabled.length) args.push('--disable', selections.disabled.join(','));
       await asBot(nodeAt(release), args, selections.credentials);
     }
     await asBot(nodeAt(release), [join(release, 'install/materialize-state.mjs'), state]);
-    await systemctl('daemon-reload');
-    await systemctl('enable', '--now', 'bot.service');
-    const status = await checkHealth();
-    await atomicJSON(recordPath, { ...installation, installed: true, release });
-    print(`Installed bot ${installation.version}. Service health: ${status.state}. Run bot chat. Health checks make no model calls.`);
-    return { release, status };
+    await atomicJSON(recordPath, { ...known, configured: true, setupPending: false, setup });
   }
   async function update(options) {
     await platformCheck();
@@ -324,6 +366,16 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
       return { delegated: true };
     }
     const bundle = await validateBundle(options.bundle, arch);
+    if (known.configured === false) {
+      const release = await copyRelease(bundle);
+      await point(release);
+      await configFiles(release);
+      await installSandboxProfile();
+      await systemctl('daemon-reload');
+      await atomicJSON(recordPath, { ...known, version: bundle.manifest.version, release });
+      print('Updated bot. Run bot to complete first-launch setup.');
+      return { release };
+    }
     const metadata = await json(join(state, 'control/releases.json'));
     if (metadata.pending || metadata.trial) throw new Error('An agent update is pending or on trial; settle it before updating the installed runtime');
     const previous = await realpath(current);
@@ -424,17 +476,25 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     print(`Removed bot executables and service. Retained ${paths.data}, ${environmentPath}, and the unprivileged bot account.`);
   }
   async function dispatch(command, options = {}, positional = []) {
-    if (command === 'help' || command === '--help') { print('Usage: bot install|update [--bundle DIR] [--yes] [--repository OWNER/REPO]\n       bot chat|status|logs|uninstall\nInstall setup: --provider ID --model ID --disable FEATURES --credential-env NAME\nUninstall retains conversation data and provider credentials.'); return; }
+    if (command === 'help' || command === '--help') { print('Usage: bot install|update [--bundle DIR] [--yes] [--repository OWNER/REPO]\n       bot [chat|status|logs|uninstall]\nFirst-launch setup: --provider ID --model ID --disable FEATURES --credential-env NAME\nUninstall retains conversation data and provider credentials.'); return; }
     if (command === 'install') return install(options);
     if (command === 'update') {
       if (positional[0]) options.bundle = positional[0];
       return update(options);
     }
     if (command === 'uninstall') return uninstall();
-    await platformCheck(); await ownership();
+    await platformCheck(); const { known } = await ownership();
     if (command === 'logs') return run('journalctl', ['-u', 'bot.service', '-f', '--no-pager'], { inherit: true });
     if (!['chat', 'status'].includes(command)) throw new Error('Unknown installed bot command');
     const release = await realpath(current);
+    if (command === 'chat') {
+      if (!(known.configured ?? known.installed)) await configure(known, release, options);
+      await systemctl('enable', '--now', 'bot.service');
+      try { await checkHealth(); } catch (error) {
+        await systemctl('disable', '--now', 'bot.service');
+        throw error;
+      }
+    }
     return asBot(nodeAt(release), [cliAt(release), command, '--home', state], {}, true);
   }
   return { dispatch, install, update, uninstall };

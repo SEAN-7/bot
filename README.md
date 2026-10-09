@@ -10,12 +10,13 @@ Download the self-contained Linux bundle, then run:
 
 ```sh
 sudo sh ./bot-linux-x64 install
-bot chat
+bot
 ```
 
 Use `bot-linux-arm64` on ARM64. The installer provides Node, Python and Toad,
-creates an isolated `bot` account, asks for your model and optional features,
-and starts a systemd service. The agent runs without sudo. Closing chat leaves
+creates an isolated `bot` account, and leaves the service stopped. The first
+`bot` launch asks for your model, credentials and optional features, then starts
+the service and opens chat. The agent runs without sudo. Closing chat leaves
 the service running.
 
 `bot update` updates the application; `bot uninstall` removes it while retaining

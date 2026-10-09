@@ -13,21 +13,26 @@ These are self-extracting executables, not source archives. On the VM:
 sudo sh ./bot-linux-x64 install
 ```
 
-Setup asks for your model provider, model ID, credentials, and optional features.
+Installation creates the isolated account and service, but does not configure
+or start the agent. On first launch, `bot` asks for your model provider, model ID,
+credentials, and optional features.
 The default demo uses no paid model calls. API keys are entered without echoing
-and stored in a root-owned environment file. The installer creates the `bot`
-service account and starts the background service.
+and stored in a root-owned environment file. Completing the wizard starts the background service and enables it after reboot.
+Cancelling the wizard leaves the service stopped; the next launch asks again.
 
 Then open a terminal chat:
 
 ```sh
-bot chat
+bot
 ```
 
 The operator may be asked for their sudo password to attach as the dedicated
 account. This does not give the agent sudo access. Closing chat leaves the
 service running. The local chat API stays on loopback; no inbound network port
-is required. SSH to the VM before running `bot chat`.
+is required. SSH to the VM before running `bot`. `bot chat` is an alias.
+Subsequent launches attach to your configured agent without repeating setup.
+On Ubuntu with restricted user namespaces, installation adds an AppArmor
+exception for `/usr/bin/bwrap`; the global restriction remains enabled.
 
 ## Updates and removal
 
