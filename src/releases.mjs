@@ -26,6 +26,9 @@ async function coreSnapshot(home,source,{copyDependencies=false}={}) {
   try {
     await cp(join(source,'src'),join(dest,'src'),{recursive:true});
     await cp(join(source,'package.json'),join(dest,'package.json'));
+    // Keep bundled app sources available for the bot to inspect and merge itself.
+    // A core-only source is still valid; it simply has no bundled app catalog.
+    try{await cp(join(source,'apps'),join(dest,'apps'),{recursive:true,dereference:true});}catch(error){if(error.code!=='ENOENT')throw error;}
     if(copyDependencies)await cp(join(source,'node_modules'),join(dest,'node_modules'),{recursive:true,dereference:true});
     else await symlink(await realpath(join(source,'node_modules')),join(dest,'node_modules'),'dir');
     return dest;

@@ -147,6 +147,12 @@ The replaceable controller, model, context, memory, scheduler, skills and chat a
 
 ## Recovery and updates
 
+Core releases include upstream app sources separately from the bot's editable
+copies. In the supervised shell, `bot-app --upstream [APP]` reports their paths
+and versions; `BOT_UPSTREAM_ROOT` identifies the bundled source tree. The bot
+decides whether and when to adopt changes and performs its own merges. Core
+updates do not automatically replace its app copies.
+
 The parent owns the journal and single event queue. It saves incoming work notifications before processing them and records tool starts before execution. Communication apps own their message history and delivery state. A started tool whose outcome is unknown after interruption is not automatically executed again. Recovery keeps the conversation; controller rollback can restore app state from a controller change boundary while preserving independently edited ordinary app files. It cannot undo external side effects such as a file already written or a request already sent.
 
 Use `bot-app updates apply '{}'` only for replacing the running controller or its startup configuration. After the current turn finishes, controller replacement runs its declared preflight with scratch state. Unrelated apps are not validated. A passing controller starts in probation. It becomes the working revision only after a real conversation turn completes successfully and `runtime.trialMs` has elapsed (3 seconds by default). Startup errors or crashes during probation restore the previous working revision. If attention is needed, the supervisor reports the error. The operator can also use:

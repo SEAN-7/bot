@@ -10,6 +10,16 @@ restart is required. Choose tests appropriate to the change. Existing processes 
 their loaded code until restarted. Preserve their data and credentials, and inspect
 unknown external outcomes before retrying.
 
+Core releases update the bundled sources, leaving your editable copies alone.
+Run `bot-app --upstream` to list the bundled apps, or `bot-app --upstream telegram`
+to obtain one app's source path, working-copy path and app/core versions.
+`BOT_UPSTREAM_ROOT` points to the running core's bundled source tree.
+Inspect it with ordinary shell tools, for example
+`diff -ru "$BOT_UPSTREAM_ROOT/apps/telegram" "$BOT_APPS/telegram"`.
+Decide whether and when to update your copy. Keep any baseline or Git history you
+need, merge changes yourself, and preserve app data and credentials. This command
+only reads metadata; it does not fetch, merge, copy or activate anything.
+
 Use `bot-app updates apply '{}'` only to replace the running conversation controller
 or its startup configuration. Inspect workspace/BOT-API.md first. This command
 queues controller checks and replacement after the current turn; it does not

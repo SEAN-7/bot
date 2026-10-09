@@ -1,6 +1,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import execution from './execution.mjs';
 import { startAppServer } from './app-server.mjs';
@@ -21,7 +22,7 @@ const fatal=error=>{send({type:'fatal',error:error.stack||String(error)});setTim
 process.on('uncaughtException',fatal);process.on('unhandledRejection',fatal);
 let phase='loading';const heartbeat=setInterval(()=>send({type:'heartbeat',phase}),500);heartbeat.unref();
 const bridge=mode==='preflight'?null:await startAppServer({rpc});
-const env={...process.env,...bridge?.env,BOT_NODE:process.execPath,BOT_APP_LAUNCHER:new URL('./app-cli.mjs',import.meta.url).pathname,BOT_CORE_CLI:new URL('./botctl.mjs',import.meta.url).pathname,BOT_APPS:join(home,'drafts','apps'),BOT_CONTROLLER_APPS:join(revisionDir,'apps'),BOT_WORKSPACE:join(home,'workspace'),BOT_DRAFTS:join(home,'drafts'),PATH:new URL('./bin',import.meta.url).pathname+':'+process.env.PATH};
+const env={...process.env,...bridge?.env,BOT_NODE:process.execPath,BOT_APP_LAUNCHER:new URL('./app-cli.mjs',import.meta.url).pathname,BOT_CORE_CLI:new URL('./botctl.mjs',import.meta.url).pathname,BOT_UPSTREAM_ROOT:fileURLToPath(new URL('../',import.meta.url)),BOT_APPS:join(home,'drafts','apps'),BOT_CONTROLLER_APPS:join(revisionDir,'apps'),BOT_WORKSPACE:join(home,'workspace'),BOT_DRAFTS:join(home,'drafts'),PATH:new URL('./bin',import.meta.url).pathname+':'+process.env.PATH};
 let stopShell;
 const shell=execution({config:config.shell||{},paths:{workspace:join(home,'workspace')},env,trackProcess:pid=>rpc('process.track',{pid}),releaseProcess:pid=>rpc('process.release',{pid}),on:(event,handler)=>{if(event==='stop')stopShell=handler;}});
 const ajv=new Ajv({allErrors:true,strict:false}),validate=ajv.compile(shell.inputSchema);

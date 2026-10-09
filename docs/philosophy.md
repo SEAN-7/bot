@@ -41,6 +41,10 @@ Capabilities are ordinary applications paired with skills and invoked through on
 The protected core remains outside the bot's editing authority. Operator-managed
 core updates are separate from bot-managed application changes.
 
+Bundled app sources remain available separately from the bot's editable copies.
+The bot decides whether and when to adopt upstream changes and merges them using
+its own tools. Core releases do not automatically update or merge those copies.
+
 ## Experimentation with recovery
 
 Ordinary applications behave like third-party CLI tools. Edits and upgrades take
