@@ -52,7 +52,7 @@ export function createModel(config, collection = builtinModels()) {
     async complete({ messages, tools, settings = {}, signal }) {
       const selected = select(settings);
       const options = { signal, maxRetries: 0, cacheRetention: 'short' };
-      for (const key of ['temperature', 'maxTokens', 'reasoning', 'cacheRetention', 'timeoutMs', 'sessionId']) {
+      for (const key of ['temperature', 'reasoning', 'cacheRetention', 'timeoutMs', 'sessionId']) {
         const value = settings[key] ?? config[key];
         if (value !== undefined) options[key] = value;
       }
@@ -70,7 +70,7 @@ export function createModel(config, collection = builtinModels()) {
           throw error;
         }
         if (answer.stopReason === 'length') {
-          throw Object.assign(new Error(`Model output limit reached (requested maxTokens=${options.maxTokens ?? selected.maxTokens ?? 'provider default'}${answer.usage?.output !== undefined ? `, outputTokens=${answer.usage.output}` : ''}); no partial tool calls were executed. Increase maxTokens or reduce the requested output.`), { blocked: true });
+          throw Object.assign(new Error(`Provider output limit reached (model maxOutputTokens=${selected.maxTokens ?? 'provider default'}${answer.usage?.output !== undefined ? `, outputTokens=${answer.usage.output}` : ''}); no partial tool calls were executed. Use a model with a larger output allowance or reduce the requested output.`), { blocked: true });
         }
         if (!['stop', 'toolUse'].includes(answer.stopReason)) throw Object.assign(new Error(`Incomplete model response: ${answer.stopReason}`), { retryable: true });
         return {

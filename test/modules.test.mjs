@@ -161,20 +161,36 @@ test('summary failure preserves state and open tool blocks remain together', asy
   assert.deepEqual(result.messages, open);
 });
 
-test('default summary allowance leaves room for reasoning and respects smaller models', async () => {
-  const h = harness({ maxInputChars: 1000, keepRecentGroups: 1 });
+test('summaries send no output cap even with legacy summary and model settings', async () => {
+  const h = harness({ maxInputChars: 1000, keepRecentGroups: 1, summaryTokens: 32 });
   context(h.api);
-  const caps = [];
+  const requests = [];
   const model = {
     describe: async () => ({ contextWindow: 1000000, maxOutputTokens: 128000 }),
-    complete: async request => { caps.push(request.settings.maxTokens); return { text: 'summary', toolCalls: [] }; },
+    complete: async request => { requests.push(request); return { text: 'summary', toolCalls: [] }; },
   };
-  await h.api.context({ messages: conversation(), model });
-  assert.deepEqual(caps, [8192]);
+  await h.api.context({ messages: conversation(), model, settings: { maxTokens: 64, reasoning: 'high' } });
+  assert.deepEqual(requests[0].settings, { reasoning: 'high' });
   h.state.delete('summary');
   model.describe = async () => ({ contextWindow: 20000, maxOutputTokens: 1000 });
   await h.api.context({ messages: conversation(), model });
-  assert.deepEqual(caps, [8192, 1000]);
+  assert.equal(Object.hasOwn(requests[1].settings, 'maxTokens'), false);
+});
+
+test('model adapter sends no output cap even with legacy request and app settings', async () => {
+  const h = harness({ provider: 'provider', model: 'model', maxTokens: 32 });
+  let options;
+  piModel(h.api, {
+    getModel: () => ({ provider: 'provider', id: 'model', maxTokens: 128000 }),
+    completeSimple: async (_model, _request, selectedOptions) => {
+      options = selectedOptions;
+      return { stopReason: 'stop', content: [{ type: 'text', text: 'reply' }] };
+    },
+  });
+  const response = await h.api.model.complete({ messages: [], tools: [], settings: { maxTokens: 64, reasoning: 'high' } });
+  assert.equal(response.text, 'reply');
+  assert.equal(Object.hasOwn(options, 'maxTokens'), false);
+  assert.equal(options.reasoning, 'high');
 });
 
 test('context retains the current user request across a long tool loop', async () => {
@@ -324,7 +340,7 @@ test('Pi refuses incomplete tool calls after output truncation', async () => {
     getModel: () => ({ provider: 'provider', id: 'model', api: 'openai-responses', maxTokens: 10000 }),
     completeSimple: async () => ({ stopReason: 'length', usage: { output: 2048 }, content: [{ type: 'toolCall', id: 'partial', name: 'shell', arguments: { command: 'touch' } }] }),
   });
-  await assert.rejects(h.api.model.complete({ messages: [], tools: [], settings: { maxTokens: 2048 } }), error => error.blocked && /requested maxTokens=2048, outputTokens=2048/.test(error.message));
+  await assert.rejects(h.api.model.complete({ messages: [], tools: [], settings: { maxTokens: 2048 } }), error => error.blocked && /model maxOutputTokens=10000, outputTokens=2048/.test(error.message));
 });
 
 test('shell runs from workspace, bounds bytes, reports failure, and releases tracked groups', async t => {
