@@ -23,6 +23,17 @@ const inputSize = messages => messages.reduce((sum, message) => sum + JSON.strin
 
 export default function context(api) {
   const keep = Math.max(1, api.config.keepRecentGroups ?? 8);
+  api.registerTool({
+    name: 'compact_conversation',
+    description: 'Request a summary of older conversation before the next model response, even below the automatic threshold. Preserves the current user request and its tool activity, plus recent groups. Full history remains on disk. Cannot shrink the current turn itself.',
+    inputSchema: { type: 'object', properties: {
+      keepRecentGroups: { type: 'integer', minimum: 1, maximum: 100, description: 'Recent complete message groups to retain (default 1). The entire current user turn is always retained.' },
+    }, additionalProperties: false },
+    execute: async ({ keepRecentGroups = 1 } = {}) => {
+      await api.state.set('compactionRequest', { keepRecentGroups });
+      return { status: 'requested', message: 'Compaction will be attempted before the next model response. If there are no eligible older messages, context stays unchanged.' };
+    },
+  });
   api.registerContext(async ({ messages, tools = [], settings = {}, model, signal }) => {
     // JSON characters / 4 is an estimate, not a provider tokenizer. Leave room
     // for tool schemas, system instructions, provider framing, and the reply.
@@ -38,23 +49,28 @@ export default function context(api) {
       if (inputSize(prepared) > hardChars) throw Object.assign(new Error('Current conversation turn exceeds the estimated model input budget. Reduce the request or tool output, or select a larger context model; the current user turn was retained.'), { blocked: true });
       return { messages: prepared };
     };
+    const requested = await api.state.get('compactionRequest', null);
     let snapshot = await api.state.get('summary', null);
     const through = snapshot ? messages.findIndex(message => message.id === snapshot.throughId) : -1;
     // A restored history can predate a module snapshot; never discard unmatched history.
     if (through < 0) snapshot = null;
     let recent = snapshot ? messages.slice(through + 1) : messages;
     const prefix = snapshot ? [summaryMessage(snapshot)] : [];
-    if (inputSize([...prefix, ...recent]) <= threshold) return checked([...prefix, ...recent]);
+    if (!requested && inputSize([...prefix, ...recent]) <= threshold) return checked([...prefix, ...recent]);
     const groups = messageGroups(recent);
     const latestUserId = [...messages].reverse().find(message => message.role === 'user')?.id;
     const userGroup = groups.findIndex(group => group.some(message => message.id === latestUserId));
     // Keep the original current request even during a long tool loop.
-    let cut = Math.max(0, Math.min(groups.length - keep, userGroup < 0 ? groups.length : userGroup));
+    let cut = Math.max(0, Math.min(groups.length - (requested?.keepRecentGroups ?? keep), userGroup < 0 ? groups.length : userGroup));
     // Prefer recent groups, but reduce that preference before dropping a current turn.
     if (explicitChars === undefined) {
       while (cut < userGroup && inputSize(groups.slice(cut).flat()) > threshold * 0.75) cut++;
     }
-    if (cut <= 0) return checked([...prefix, ...recent]);
+    if (cut <= 0) {
+      const prepared = checked([...prefix, ...recent]);
+      if (requested) await api.state.delete('compactionRequest');
+      return prepared;
+    }
     const older = groups.slice(0, cut).flat();
     const summaryRequest = {
       messages: [...prefix, ...older, {
@@ -70,6 +86,7 @@ export default function context(api) {
     recent = groups.slice(cut).flat();
     const prepared = checked([summaryMessage(snapshot), ...recent]);
     await api.state.set('summary', snapshot);
+    if (requested) await api.state.delete('compactionRequest');
     return prepared;
   });
 }

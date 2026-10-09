@@ -154,6 +154,98 @@ test('context retains the current user request across a long tool loop', async (
   assert.deepEqual(result.messages, messages);
 });
 
+test('agent requests compaction below the automatic threshold while retaining current tool groups', async () => {
+  const h = harness({ maxInputChars: 100_000, keepRecentGroups: 8 });
+  context(h.api);
+  const messages = conversation();
+  messages.push(
+    { id: 8, role: 'assistant', content: '', toolCalls: [{ id: 'compact', name: 'compact_conversation', arguments: {} }] },
+    { id: 9, role: 'tool', content: '{"status":"requested"}', toolCallId: 'compact', toolName: 'compact_conversation' },
+    { id: 10, role: 'assistant', content: '', toolCalls: [{ id: 'next', name: 'one', arguments: {} }] },
+  );
+  const original = structuredClone(messages);
+  const requests = [];
+  const model = { complete: async request => { requests.push(request); return { text: 'Earlier tools completed.', toolCalls: [] }; } };
+  assert.deepEqual((await h.api.context({ messages, model })).messages, messages);
+  assert.equal(requests.length, 0);
+  assert.equal((await h.call('compact_conversation')).status, 'requested');
+  assert.deepEqual(h.state.get('compactionRequest'), { keepRecentGroups: 1 });
+  const result = await h.api.context({ messages, model });
+  assert.deepEqual(requests[0].messages.slice(0, -1), messages.slice(0, 5));
+  assert.deepEqual(requests[0].tools, []);
+  assert.deepEqual(result.messages.slice(1), messages.slice(5));
+  assert.equal(h.state.get('summary').throughId, 5);
+  assert.equal(h.state.has('compactionRequest'), false);
+  assert.deepEqual(messages, original);
+  await h.api.context({ messages, model });
+  assert.equal(requests.length, 1);
+});
+
+test('compaction tool validates retention and honors the requested recent groups', async () => {
+  const h = harness({ maxInputChars: 100_000 });
+  context(h.api);
+  const validate = h.tools.get('compact_conversation').validate;
+  for (const args of [{ keepRecentGroups: 0 }, { keepRecentGroups: 101 }, { keepRecentGroups: 1.5 }, { unexpected: true }]) {
+    assert.equal(validate(args), false);
+  }
+  assert.equal(validate({ keepRecentGroups: 100 }), true);
+  const messages = [
+    { id: 1, role: 'user', content: 'First task' },
+    { id: 2, role: 'assistant', content: 'First answer' },
+    { id: 3, role: 'user', content: 'Second task' },
+    { id: 4, role: 'assistant', content: 'Second answer' },
+    { id: 5, role: 'user', content: 'Current task' },
+  ];
+  await h.call('compact_conversation', { keepRecentGroups: 2 });
+  assert.deepEqual(h.state.get('compactionRequest'), { keepRecentGroups: 2 });
+  const result = await h.api.context({ messages, model: { complete: async () => ({ text: 'First task completed.' }) } });
+  assert.deepEqual(result.messages.slice(1), messages.slice(2));
+  assert.equal(h.state.get('summary').throughId, 2);
+});
+
+test('requested compaction clears a no-op without summarizing the current user turn', async () => {
+  const h = harness({ maxInputChars: 100_000 });
+  context(h.api);
+  const messages = conversation().slice(0, 4);
+  const original = structuredClone(messages);
+  await h.call('compact_conversation');
+  const result = await h.api.context({ messages, model: { complete: async () => assert.fail('No safe older user turn exists') } });
+  assert.deepEqual(result.messages, original);
+  assert.deepEqual(messages, original);
+  assert.equal(h.state.has('summary'), false);
+  assert.equal(h.state.has('compactionRequest'), false);
+});
+
+test('requested compaction survives provider failure and retries on the next preparation', async () => {
+  const h = harness({ maxInputChars: 100_000 });
+  context(h.api);
+  const messages = conversation();
+  const original = structuredClone(messages);
+  await h.call('compact_conversation');
+  await assert.rejects(h.api.context({ messages, model: { complete: async () => { throw new Error('provider unavailable'); } } }), /provider unavailable/);
+  assert.deepEqual(h.state.get('compactionRequest'), { keepRecentGroups: 1 });
+  assert.equal(h.state.has('summary'), false);
+  assert.deepEqual(messages, original);
+  const result = await h.api.context({ messages, model: { complete: async () => ({ text: 'Earlier work completed.', toolCalls: [] }) } });
+  assert.deepEqual(result.messages.slice(1), messages.slice(5));
+  assert.equal(h.state.has('compactionRequest'), false);
+  assert.equal(h.state.get('summary').throughId, 5);
+});
+
+test('persisted compaction request is consumed by a fresh context plugin registration', async () => {
+  const h = harness({ maxInputChars: 100_000 });
+  context(h.api);
+  await h.call('compact_conversation');
+  const restarted = harness({ maxInputChars: 100_000 }, h.state);
+  context(restarted.api);
+  let calls = 0;
+  const result = await restarted.api.context({ messages: conversation(), model: { complete: async () => { calls++; return { text: 'Restored earlier work.' }; } } });
+  assert.equal(calls, 1);
+  assert.deepEqual(result.messages.slice(1).map(message => message.id), [6, 7]);
+  assert.equal(restarted.state.has('compactionRequest'), false);
+  assert.equal(restarted.state.get('summary').throughId, 5);
+});
+
 test('Pi adapter preserves native thinking and tool calls and replays actual tool results', async () => {
   const h = harness({ provider: 'provider', model: 'model' });
   const selected = { id: 'model', provider: 'provider', api: 'anthropic-messages' };
