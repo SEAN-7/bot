@@ -45,7 +45,7 @@
     "demo-model": {
       "enabled": true
     },
-    "pi-model": {
+    "model-provider": {
       "enabled": false
     }
   }

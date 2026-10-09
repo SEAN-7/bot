@@ -1,6 +1,6 @@
 # Linux installation
 
-The Linux bundle includes the application, Node, and the Pi TUI chat frontend.
+The Linux bundle includes the application, Node, and the terminal chat frontend.
 You do not install a separate frontend runtime. The initial
 target is Debian and Ubuntu with systemd, on x86-64 or ARM64. Installation needs
 administrator access and package-repository access for process utilities. The running agent does not have sudo access.
@@ -90,7 +90,7 @@ and run it directly:
 sudo sh ./bot-linux-x64 update
 ```
 
-Updates preserve the conversation, memory, schedules, and edited apps. The API 3 migration converts the API 2 behavior packages into executable apps, removes the plugin loader, preserves state namespaces and retains complete draft backups; edited legacy packages block automatic migration. Open terminal chats retain their scoped credential across service restarts and reconnect to the same durable conversation. Prompts sent during a brief update outage retry with the same event ID, preventing duplicate submission. The
+Updates preserve the conversation, memory, schedules, and edited apps. Older `pi-model` apps are renamed to `model-provider`, preserving provider settings, custom code and state namespaces; the exact working copies are backed up for rollback. The API 3 migration converts the API 2 behavior packages into executable apps, removes the plugin loader, preserves state namespaces and retains complete draft backups; edited legacy packages block automatic migration. Open terminal chats retain their scoped credential across service restarts and reconnect to the same durable conversation. Prompts sent during a brief update outage retry with the same event ID, preventing duplicate submission. The
 new runtime is tested before activation and must pass startup and heartbeat
 validation before the installer reports success. Core updates need no chat
 message or paid model call. Ordinary app edits are immediately available on the next invocation, without

@@ -26,7 +26,7 @@ test('setup defaults to a no-cost model and applies feature choices without secr
   const config = createConfig(options, { OPENAI_API_KEY: 'must-not-be-written' });
   assert.equal(config.model.provider, 'demo');
   assert.equal(config.apps['demo-model'].enabled, true);
-  assert.equal(config.apps['pi-model'].enabled, false);
+  assert.equal(config.apps['model-provider'].enabled, false);
   assert.equal(config.apps.memory.enabled, false);
   assert.equal(config.apps.scheduler.enabled, true);
   assert.equal(JSON.stringify(config).includes('must-not-be-written'), false);
@@ -36,10 +36,10 @@ test('real providers require explicit model IDs and known provider credentials',
   assert.throws(() => createConfig({ provider: 'openai' }, {}), /explicit model/);
   assert.throws(() => createConfig({ provider: 'openai', model: 'chosen' }, {}), /OPENAI_API_KEY/);
   const config = createConfig({ provider: 'openai', model: 'chosen' }, { OPENAI_API_KEY: 'test-only' });
-  assert.equal(config.apps['pi-model'].model, 'chosen');
+  assert.equal(config.apps['model-provider'].model, 'chosen');
   assert.equal(config.apps['demo-model'].enabled, false);
   assert.throws(() => createConfig({ provider: 'google', model: 'chosen' }, { GOOGLE_API_KEY: 'unsupported-alias' }), /GEMINI_API_KEY/);
-  assert.equal(createConfig({ provider: 'google', model: 'chosen' }, { GEMINI_API_KEY: 'test-only' }).apps['pi-model'].enabled, true);
+  assert.equal(createConfig({ provider: 'google', model: 'chosen' }, { GEMINI_API_KEY: 'test-only' }).apps['model-provider'].enabled, true);
   assert.throws(() => createConfig({ disable: 'made-up-feature' }, {}), /Unknown feature/);
   assert.throws(() => createConfig({ port: '70000' }, {}), /--port/);
   assert.throws(() => parseArgs(['start', '--home']), /needs a value/);

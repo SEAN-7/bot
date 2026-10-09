@@ -52,9 +52,9 @@ export function createConfig(options, env = process.env) {
     }
   }
   apps.updates={enabled:true};
-  apps['pi-model']={enabled:provider!=='demo',...(provider!=='demo'?{provider,model}:{})};
+  apps['model-provider']={enabled:provider!=='demo',...(provider!=='demo'?{provider,model}:{})};
   apps['demo-model']={enabled:provider==='demo'};
-  apps.agent={enabled:true,modelApp:provider==='demo'?'demo-model':'pi-model',contextApp:apps.context.enabled?'context':null,contributors:['memory','skills'].filter(id=>apps[id].enabled),projections:apps.chat.enabled?['chat']:[],tickApps:apps.scheduler.enabled?['scheduler']:[],services:apps.chat.enabled?['chat']:[]};
+  apps.agent={enabled:true,modelApp:provider==='demo'?'demo-model':'model-provider',contextApp:apps.context.enabled?'context':null,contributors:['memory','skills'].filter(id=>apps[id].enabled),projections:apps.chat.enabled?['chat']:[],tickApps:apps.scheduler.enabled?['scheduler']:[],services:apps.chat.enabled?['chat']:[]};
   const port = Number(options.port || 4317);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port must be an integer from 1 to 65535.');
   return {
@@ -72,7 +72,7 @@ async function setupOptions(options) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
     console.log('Set up one conversation. You can change the editable app configuration later.');
-    const provider = (await rl.question('Model provider [demo, openai, anthropic, google, or another pi provider] (demo): ')).trim() || 'demo';
+    const provider = (await rl.question('Model provider [demo, openai, anthropic, google, or another supported provider] (demo): ')).trim() || 'demo';
     const model = provider === 'demo' ? undefined : (await rl.question('Model ID: ')).trim();
     const disabled = new Set([...(options.disable || '').split(',').filter(Boolean)]);
     for (const id of (options.enable || '').split(',').filter(Boolean)) disabled.delete(id);
@@ -134,7 +134,7 @@ const HELP = `Usage: bot COMMAND [options]
   core install DIR      Trial an operator-supplied runtime core
 
   --home DIR            Installation directory (or BOT_HOME; default .bot)
-  --provider PROVIDER   demo (default), openai, anthropic, google, or a pi provider
+  --provider PROVIDER   demo (default), openai, anthropic, google, or another supported provider
   --model MODEL         Required for a real provider
   --disable IDS         Comma-separated chat,memory,context,scheduler,skills,web-search
   --enable IDS          Explicitly enable setup features

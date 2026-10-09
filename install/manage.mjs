@@ -356,9 +356,9 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       }
       if(config.modules)config.modules['pi-model'] = { enabled: selections.provider !== 'demo', provider: selections.provider, model: selections.model };
       if(config.modules)config.modules['demo-model'] = { enabled: selections.provider === 'demo' };
-      config.apps['pi-model']={enabled:selections.provider!=='demo',provider:selections.provider,model:selections.model};
+      config.apps['model-provider']={enabled:selections.provider!=='demo',provider:selections.provider,model:selections.model};
       config.apps['demo-model']={enabled:selections.provider==='demo'};
-      config.controller='agent';config.apps.agent={...config.apps.agent,enabled:true,modelApp:selections.provider==='demo'?'demo-model':'pi-model',contextApp:config.apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>config.apps[id]?.enabled),projections:config.apps.chat?.enabled?['chat']:[],tickApps:config.apps.scheduler?.enabled?['scheduler']:[],services:config.apps.chat?.enabled?['chat']:[]};
+      config.controller='agent';config.apps.agent={...config.apps.agent,enabled:true,modelApp:selections.provider==='demo'?'demo-model':'model-provider',contextApp:config.apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>config.apps[id]?.enabled),projections:config.apps.chat?.enabled?['chat']:[],tickApps:config.apps.scheduler?.enabled?['scheduler']:[],services:config.apps.chat?.enabled?['chat']:[]};
       config.model = { provider: selections.provider, model: selections.model };
       await atomicJSON(configPath, config);
       await run('chown', ['bot:bot', configPath]);

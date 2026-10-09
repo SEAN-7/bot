@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, readFile, rm, cp, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, readFile, rm, cp, access, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initialize, readCurrent, installApp, stageDrafts, beginTrial, rollback, CORE_ROOT } from '../src/releases.mjs';
@@ -87,4 +87,50 @@ test('controller rollback preserves independently installed app code and setting
   await rollback(home,store);
   const restored=JSON.parse(await readFile(path));assert.equal(restored.apps['new-app'].enabled,true);assert.equal(restored.apps.memory.maxChars,12345);
   assert.equal(await readFile(join(home,'drafts/apps/new-app/main.sh'),'utf8'),'printf independent');
+});
+
+async function oldModelApp(t) {
+  const home=await mkdtemp(join(tmpdir(),'bot-model-rename-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  await initialize(home,createConfig({}),{fixedCoreRoot:CORE_ROOT});
+  const previous=join(home,'workspace/old-core');await mkdir(previous);await cp(join(CORE_ROOT,'apps'),join(previous,'apps'),{recursive:true});
+  for(const apps of [join(previous,'apps'),join(home,'drafts/apps')]) {
+    await rename(join(apps,'model-provider'),join(apps,'pi-model'));
+    const manifestPath=join(apps,'pi-model/app.json'),manifest=JSON.parse(await readFile(manifestPath));
+    manifest.id='pi-model';manifest.description='pi-model behavior application';await writeFile(manifestPath,JSON.stringify(manifest));
+    await writeFile(join(apps,'pi-model/SKILL.md'),'---\nname: pi-model\ndescription: pi-model behavior application.\n---\nRun `bot-app pi-model --help`.\n');
+  }
+  const configPath=join(home,'drafts/config.json'),config=JSON.parse(await readFile(configPath));
+  config.coreRoot=previous;config.apps['pi-model']={enabled:true,provider:'anthropic',model:'retained-model',systemPrompt:'retained prompt'};
+  delete config.apps['model-provider'];config.apps.agent.modelApp='pi-model';await writeFile(configPath,JSON.stringify(config));
+  return home;
+}
+
+test('model app rename preserves custom code, settings and history and rolls back exactly',async t=>{
+  const home=await oldModelApp(t),configPath=join(home,'drafts/config.json'),before=await readFile(configPath);
+  const behavior='export const customModel=true;';await writeFile(join(home,'drafts/apps/pi-model/behavior.mjs'),behavior);
+  const store=new Store(home);store.append({role:'user',content:'existing real conversation'});store.setState('app:pi-model','retained',{value:7});
+  const history=store.history(),state=store.snapshot();store.close();
+  await writeFile(join(home,'control/credential-fixture'),'retained credential');
+  assert.equal(await migrateLiveApps(home,CORE_ROOT),true);await markLiveCandidate(home,'renamed-core');
+  const config=JSON.parse(await readFile(configPath));
+  assert.equal(config.apps.agent.modelApp,'model-provider');assert.equal(config.apps['pi-model'],undefined);
+  assert.deepEqual(config.apps['model-provider'],{enabled:true,provider:'anthropic',model:'retained-model',systemPrompt:'retained prompt',stateNamespace:'app:pi-model'});
+  assert.equal(await readFile(join(home,'drafts/apps/model-provider/behavior.mjs'),'utf8'),behavior);
+  assert.equal(JSON.parse(await readFile(join(home,'drafts/apps/model-provider/app.json'))).id,'model-provider');
+  assert.match(await readFile(join(home,'drafts/apps/model-provider/SKILL.md'),'utf8'),/internal model/);
+  await assert.rejects(access(join(home,'drafts/apps/pi-model')),{code:'ENOENT'});
+  const after=new Store(home);assert.deepEqual(after.history(),history);assert.deepEqual(after.snapshot(),state);after.close();
+  assert.equal(await readFile(join(home,'control/credential-fixture'),'utf8'),'retained credential');
+  assert.equal(await migrateLiveApps(home,CORE_ROOT),false);
+  await restoreLiveApps(home,'renamed-core');assert.deepEqual(await readFile(configPath),before);
+  assert.equal(await readFile(join(home,'drafts/apps/pi-model/behavior.mjs'),'utf8'),behavior);
+  await assert.rejects(access(join(home,'drafts/apps/model-provider')),{code:'ENOENT'});
+});
+
+test('model app rename rejects an existing replacement before changing drafts',async t=>{
+  const home=await oldModelApp(t),configPath=join(home,'drafts/config.json'),before=await readFile(configPath);
+  await cp(join(CORE_ROOT,'apps/model-provider'),join(home,'drafts/apps/model-provider'),{recursive:true});
+  await assert.rejects(migrateLiveApps(home,CORE_ROOT),/Both pi-model and model-provider exist/);
+  assert.deepEqual(await readFile(configPath),before);
+  await assert.rejects(access(join(home,'control/live-apps-migration.json')),{code:'ENOENT'});
 });

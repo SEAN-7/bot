@@ -1,7 +1,7 @@
 {
-  "id": "pi-model",
+  "id": "model-provider",
   "version": "1.0.0",
-  "description": "pi-model behavior application",
+  "description": "Model access for the conversation controller",
   "command": [
     "node",
     "main.mjs"

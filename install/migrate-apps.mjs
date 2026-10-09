@@ -32,14 +32,17 @@ export async function migrateApps(home,core) {
   try {
     const starter=await read(join(core,'apps','config.json'));
     const apps={...starter.apps};
-    for(const [id,settings]of Object.entries(config.modules||{}))apps[id]={...apps[id],...settings,stateNamespace:id};
+    for(const [id,settings]of Object.entries(config.modules||{})) {
+      const target=id==='pi-model'?'model-provider':id;
+      apps[target]={...apps[target],...settings,stateNamespace:id};
+    }
     for(const [id,settings]of Object.entries(config.apps||{})) {
-      const target=id==='modules'?'updates':id;
+      const target=id==='modules'?'updates':id==='pi-model'?'model-provider':id;
       apps[target]={...apps[target],...settings,stateNamespace:config.modules?.[id]?id:`app:${id}`};
     }
     const models=Object.entries(config.modules||{}).filter(([id,settings])=>['pi-model','demo-model'].includes(id)&&settings.enabled).map(([id])=>id);
     if(models.length!==1)throw new Error('Enable exactly one legacy model before migration');
-    apps.agent={enabled:true,modelApp:models[0],contextApp:apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>apps[id]?.enabled),projections:apps.chat?.enabled?['chat']:[],tickApps:apps.scheduler?.enabled?['scheduler']:[],services:apps.chat?.enabled?['chat']:[],maxSteps:config.runtime?.maxSteps||100};
+    apps.agent={enabled:true,modelApp:models[0]==='pi-model'?'model-provider':models[0],contextApp:apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>apps[id]?.enabled),projections:apps.chat?.enabled?['chat']:[],tickApps:apps.scheduler?.enabled?['scheduler']:[],services:apps.chat?.enabled?['chat']:[],maxSteps:config.runtime?.maxSteps||100};
     const next={...config,apiVersion:3,controller:'agent',apps};delete next.modules;
     await rm(join(home,'drafts','apps'),{recursive:true});
     for(const item of folders.filter(item=>item.isDirectory()&&item.name!=='apps'))await rm(join(home,'drafts',item.name),{recursive:true});

@@ -1,6 +1,6 @@
 {
   "name": "self-building-bot",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "botCoreApi": 3,
   "private": true,
   "type": "module",

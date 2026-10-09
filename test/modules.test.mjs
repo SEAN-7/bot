@@ -15,7 +15,7 @@ import { commands as moduleCommands } from '../apps/updates/commands.mjs';
 import { createContext, messageGroups } from '../apps/context/behavior.mjs';
 const contextModule=api=>api.registerContext(createContext(api));
 import { commands as contextCommands } from '../apps/context/commands.mjs';
-import { createModel, classifyModelError } from '../apps/pi-model/behavior.mjs';
+import { createModel, classifyModelError } from '../apps/model-provider/behavior.mjs';
 const piModel=(api,collection)=>api.registerModel(createModel(api.config,collection));
 
 // Exercise the migrated command bodies against the same durable-state fixtures.

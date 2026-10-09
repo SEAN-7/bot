@@ -89,7 +89,7 @@ node src/cli.mjs setup --provider openai --model YOUR_MODEL_ID --disable schedul
 node src/cli.mjs serve
 ```
 
-Setup creates a new installation and refuses to overwrite a nonempty home. It never calls a paid model. Once a real provider is running, user messages and scheduled work may incur provider charges. To switch an existing demo to a provider, edit `drafts/config.json`: set `apps.agent.modelApp` to `pi-model`, enable `apps.pi-model`, disable `apps.demo-model`, and set `provider`/`model` inside `apps.pi-model` and the top-level `model` object; then run `apply`.
+Setup creates a new installation and refuses to overwrite a nonempty home. It never calls a paid model. Once a real provider is running, user messages and scheduled work may incur provider charges. To switch an existing demo to a provider, edit `drafts/config.json`: set `apps.agent.modelApp` to `model-provider`, enable `apps.model-provider`, disable `apps.demo-model`, and set `provider`/`model` inside `apps.model-provider` and the top-level `model` object; then run `apply`.
 
 `--disable` and `--enable` accept comma-separated `chat,memory,context,scheduler,skills,web-search`. Skills and web search start enabled. The bot always has one supervised shell tool. Capabilities run as ordinary app commands paired with skills; there is no plugin loader or registration API. Disabling scheduler stops future wake-up delivery.
 

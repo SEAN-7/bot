@@ -34,3 +34,15 @@ test('edited behavior and app packages block migration before any drafts are rep
 test('custom legacy modules cannot accidentally survive as loadable plugins',async t=>{
   const home=await legacy(t);await mkdir(join(home,'drafts','custom'));await writeFile(join(home,'drafts','custom','index.mjs'),'custom behavior');await assert.rejects(migrateApps(home,CORE_ROOT),/custom\/index.mjs has edits/);
 });
+
+test('legacy real model migrates directly to the neutral app name with its settings and namespace',async t=>{
+  const home=await legacy(t),path=join(home,'drafts/config.json'),config=JSON.parse(await readFile(path));
+  config.modules['demo-model'].enabled=false;
+  config.modules['pi-model']={enabled:true,provider:'anthropic',model:'retained-model'};
+  await writeFile(path,JSON.stringify(config));
+  await migrateApps(home,CORE_ROOT);
+  const after=JSON.parse(await readFile(path));
+  assert.equal(after.apps.agent.modelApp,'model-provider');assert.equal(after.apps['pi-model'],undefined);
+  assert.deepEqual(after.apps['model-provider'],{enabled:true,provider:'anthropic',model:'retained-model',stateNamespace:'pi-model'});
+  assert.equal(JSON.parse(await readFile(join(home,'drafts/apps/model-provider/app.json'))).id,'model-provider');
+});
