@@ -98,3 +98,34 @@ test('cross-API recovery requires the retained operator executable and leaves th
   assert.equal((await fetch(server.url+'/api/status',{headers}).then(r=>r.json())).state,'idle');
   assert.equal((await readCurrent(home)).revision,current.revision);
 });
+
+test('operator core validation finishes while an isolated accepted turn is still working', { timeout: 10000 }, async t => {
+  const { startSupervisor } = await import('../src/supervisor.mjs');
+  const { Store } = await import('../src/store.mjs');
+  const directory = await mkdtemp(join(tmpdir(), 'bot-core-busy-validation-'));
+  const home = join(directory,'home'), defaultsDir = join(directory,'defaults'), model = join(defaultsDir,'slow-model');
+  let server;
+  t.after(async()=>{await server?.stop();await rm(directory,{recursive:true,force:true});});
+  await mkdir(model,{recursive:true});
+  await writeFile(join(model,'module.json'),JSON.stringify({id:'slow-model',version:'1',apiVersion:2,entry:'index.mjs'}));
+  await writeFile(join(model,'index.mjs'), 'export default api => api.registerModel({async complete(){await new Promise(r=>setTimeout(r,5000));return {text:"finished",toolCalls:[]};}});');
+  await initialize(home,fixtureSource({modules:{'slow-model':{enabled:true}},runtime:{port:0,sandbox:'off',trialMs:500}}),{appsDir:await fixtureApps(defaultsDir),fixedCoreRoot:CORE_ROOT});
+  const store = new Store(home);
+  store.enqueue({id:'isolated-input',text:'isolated work accepted before update'});store.close();
+  const source=join(directory,'candidate-core');await mkdir(source);
+  await cp(join(CORE_ROOT,'src'),join(source,'src'),{recursive:true});
+  await cp(join(CORE_ROOT,'package.json'),join(source,'package.json'));
+  await symlink(join(CORE_ROOT,'node_modules'),join(source,'node_modules'),'dir');
+  await stageCore(home,source,{fixed:true});
+  server=await startSupervisor({home,port:0,unsafe:true});
+  const headers={authorization:'Bearer '+server.token};let status;
+  for(let i=0;i<120;i++) {
+    status=await fetch(server.url+'/api/status',{headers}).then(r=>r.json());
+    if(status.state==='working'&&!status.trial)break;
+    await new Promise(r=>setTimeout(r,25));
+  }
+  assert.equal(status.state,'working');assert.equal(status.trial,null);assert.equal(status.pending,1);
+  const history=(await fetch(server.url+'/api/messages',{headers}).then(r=>r.json())).messages;
+  assert.equal(history.filter(m=>m.role==='user').length,1);
+  assert.equal(history.filter(m=>m.role==='assistant').length,0);
+});

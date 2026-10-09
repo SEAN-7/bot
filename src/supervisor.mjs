@@ -242,12 +242,12 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
       if(now-lastHeartbeat>settings.heartbeatTimeoutMs){await fail('Runtime stopped answering health checks');return;}
       if(busy&&now-phaseStarted>settings.operationTimeoutMs){await fail('Runtime operation exceeded its deadline');return;}
     }
-    if(busy)return;
-    if(current.trial&&(completedTrialTurn||(current.trial.kind==='core'&&ready&&!error&&lastHeartbeat>workerStarted))&&now-current.trial.startedAt>=settings.trialMs) {
+    if(current.trial&&((!busy&&completedTrialTurn)||(current.trial.kind==='core'&&ready&&!error&&lastHeartbeat>workerStarted))&&now-current.trial.startedAt>=settings.trialMs) {
       await promote(home,store);current=await readCurrent(home);
       // Keep the selected trusted core path in drafts after an operator core update.
       const draft=await readJSON(join(home,'drafts','config.json'));draft.coreRoot=current.coreRoot;await atomicJSON(join(home,'drafts','config.json'),draft);
     }
+    if(busy)return;
     if(updateRequested) {
       updateRequested=false;
       try{await stageDrafts(home,{fixedCoreRoot:installedCore});}catch(e){error=`Update rejected: ${e.message}`;store.append({role:'context',content:error,metadata:{recovery:true}});}
