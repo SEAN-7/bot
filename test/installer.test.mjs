@@ -28,13 +28,13 @@ async function fixture(t) {
     if (command === 'getent') return { code: account ? 0 : 2, stdout: account ? `bot:x:987:987::${paths.data}:/usr/sbin/nologin\n` : '' };
     if (command === 'useradd') account = true;
     if (command === 'runuser' && args.includes('setup')) {
-      const control = join(paths.data, 'state/control');
+      const control = join(paths.data, '.bot/control');
       await mkdir(control, { recursive: true });
       await writeFile(join(control, 'releases.json'), JSON.stringify({ active: 'old', previous: null, pending: null, trial: null }));
     }
     return { code: 0, stdout: '' };
   };
-  const make = (overrides = {}) => createManager({ paths, run, platform: 'linux', arch: 'x64', uid: 0, ownerUid: process.getuid(), interactive: true, env: { GH_TOKEN: 'admin-private-token', OPENAI_API_KEY: 'provider-secret' }, print: () => {}, choices: () => setupChoices({ yes: true, provider: 'openai', model: 'test-model' }, { env: { OPENAI_API_KEY: 'provider-secret' }, interactive: false }), stage: async () => ({ revision: 'candidate' }), health: async ({ candidate } = {}) => { checks++; return { state: 'idle', protected: true, revision: candidate || 'old', trial: candidate ? { to: candidate } : null }; }, ...overrides });
+  const make = (overrides = {}) => createManager({ paths, run, platform: 'linux', arch: 'x64', uid: 0, ownerUid: process.getuid(), interactive: true, env: { GH_TOKEN: 'admin-private-token', OPENAI_API_KEY: 'provider-secret' }, print: () => {}, choices: () => setupChoices({ yes: true, provider: 'openai', model: 'test-model' }, { env: { OPENAI_API_KEY: 'provider-secret' }, interactive: false }), stage: async () => ({ revision: 'candidate' }), health: async ({ candidate } = {}) => { checks++; return { state: 'idle', protected: false, revision: candidate || 'old', trial: candidate ? { to: candidate } : null }; }, ...overrides });
   return { root, paths, bundle, commands, make, run, checks: () => checks };
 }
 
@@ -60,7 +60,11 @@ test('install provisions a dedicated service and never places credentials in arg
   assert.match(service, /User=bot\nGroup=bot/);
   assert.match(service, /UMask=0077/);
   assert.match(service, /Restart=on-failure/);
-  assert.match(service, /serve --home .*\/state/);
+  assert.match(service, /serve --installed-core --home .*\/\.bot/);
+  assert.match(service, /--no-sandbox/);
+  const installation = JSON.parse(await readFile(join(f.paths.config, 'installation.json'), 'utf8'));
+  assert.equal(installation.sandbox, 'none');
+  assert.equal(f.commands.some(({ args }) => args.includes('bubblewrap')), false);
   assert.equal(JSON.stringify(f.commands.map(command => command.args)).includes('provider-secret'), false);
   const botCommands = f.commands.filter(command => command.command === 'runuser');
   assert.equal(botCommands.length, 0);
@@ -73,7 +77,7 @@ test('local update preserves state and reports unpromoted candidate probation', 
   const manager = f.make();
   const initial = await manager.install({ bundle: f.bundle, yes: true });
   await manager.dispatch('chat');
-  const marker = join(f.paths.data, 'state/conversation-preserved');
+  const marker = join(f.paths.data, '.bot/conversation-preserved');
   await writeFile(marker, 'durable history');
   const result = await manager.update({ bundle: f.bundle });
   assert.notEqual(result.release, initial.release);
@@ -101,7 +105,7 @@ test('uninstall removes only managed executables and retains state and credentia
   const manager = f.make();
   await manager.install({ bundle: f.bundle, yes: true });
   await manager.dispatch('chat');
-  const history = join(f.paths.data, 'state/history');
+  const history = join(f.paths.data, '.bot/history');
   await writeFile(history, 'conversation');
   await manager.uninstall();
   await assert.rejects(access(f.paths.app), { code: 'ENOENT' });
@@ -153,7 +157,7 @@ test('failed first-launch health retains configuration and retries without the w
   await failing.install({ bundle: f.bundle, yes: true });
   await assert.rejects(failing.dispatch('chat'), /sandbox unavailable/);
   const savedEnvironment = await readFile(join(f.paths.config, 'environment'), 'utf8');
-  const history = join(f.paths.data, 'state/preserve');
+  const history = join(f.paths.data, '.bot/preserve');
   await writeFile(history, 'already initialized');
   await f.make({ choices: async () => assert.fail('Initialized state must retain its configuration') }).dispatch('chat');
   assert.equal(await readFile(join(f.paths.config, 'environment'), 'utf8'), savedEnvironment);
@@ -173,6 +177,7 @@ test('first launch configures once then starts the service and attaches chat', a
   await manager.dispatch('chat');
   await manager.dispatch('chat');
   assert.equal(prompted, 1);
+  assert.ok(f.commands.filter(({ command, args }) => command === 'runuser' && args.includes('chat')).every(({ args }) => args.includes('--no-sandbox')));
   assert.equal(f.checks(), 2);
   assert.deepEqual(parseEnvironment(await readFile(join(f.paths.config, 'environment'), 'utf8')), { OPENAI_API_KEY: 'provider-secret' });
   assert.equal((await stat(join(f.paths.config, 'environment'))).mode & 0o777, 0o600);
@@ -192,7 +197,7 @@ test('cancelled first-launch wizard leaves installation unconfigured and service
   await assert.rejects(manager.dispatch('chat'), /Setup cancelled/);
   assert.equal((JSON.parse(await readFile(join(f.paths.config, 'installation.json'), 'utf8'))).configured, false);
   assert.deepEqual(parseEnvironment(await readFile(join(f.paths.config, 'environment'), 'utf8')), {});
-  await assert.rejects(access(join(f.paths.data, 'state/control/releases.json')), { code: 'ENOENT' });
+  await assert.rejects(access(join(f.paths.data, '.bot/control/releases.json')), { code: 'ENOENT' });
   assert.equal(f.checks(), 0);
   assert.equal(f.commands.some(({ command, args }) => command === 'systemctl' && args.includes('enable')), false);
 });
@@ -263,7 +268,7 @@ test('bare installed bot selects first-launch chat', () => {
 
 test('interrupted initialization retries only its marked partial state without another wizard', async t => {
   const f = await fixture(t);
-  const state = join(f.paths.data, 'state');
+  const state = join(f.paths.data, '.bot');
   let failOnce = true, prompts = 0;
   const run = async (command, args, options) => {
     if (command === 'runuser' && args.includes('setup') && failOnce) {
@@ -293,7 +298,7 @@ test('first launch preserves unmarked incomplete state', async t => {
   const f = await fixture(t);
   const manager = f.make();
   await manager.install({ bundle: f.bundle });
-  const marker = join(f.paths.data, 'state/operator-file');
+  const marker = join(f.paths.data, '.bot/operator-file');
   await writeFile(marker, 'retain me');
   await assert.rejects(manager.dispatch('chat'), /unrelated incomplete state/);
   assert.equal(await readFile(marker, 'utf8'), 'retain me');
@@ -305,7 +310,7 @@ test('unconfigured initialized demo migrates provider and features through apply
   const f = await fixture(t);
   const manager = f.make({ choices: async () => ({ provider: 'openai', model: 'test-model', disabled: ['execution'], credentials: { OPENAI_API_KEY: 'provider-secret' } }) });
   await manager.install({ bundle: f.bundle });
-  const state = join(f.paths.data, 'state');
+  const state = join(f.paths.data, '.bot');
   await mkdir(join(state, 'control'), { recursive: true });
   await mkdir(join(state, 'drafts'), { recursive: true });
   await writeFile(join(state, 'control/releases.json'), JSON.stringify({ active: 'demo', pending: null }));
@@ -328,7 +333,10 @@ test('restricted Ubuntu namespaces receive an exact Bubblewrap profile without g
   await mkdir(join(f.root, 'apparmor'));
   await writeFile(f.paths.osRelease, 'ID=ubuntu\n');
   await writeFile(f.paths.usernsRestriction, '1\n');
-  await f.make().install({ bundle: f.bundle });
+  await f.make().install({ bundle: f.bundle, sandbox: 'auto' });
+  assert.ok(f.commands.some(({ args }) => args.includes('bubblewrap')));
+  assert.equal(JSON.parse(await readFile(join(f.paths.config, 'installation.json'), 'utf8')).sandbox, 'auto');
+  assert.doesNotMatch(await readFile(f.paths.service, 'utf8'), /--no-sandbox/);
   const profile = await readFile(f.paths.apparmor, 'utf8');
   assert.match(profile, /profile bot-bwrap \/usr\/bin\/bwrap flags=\(unconfined\)/);
   assert.match(profile, /userns,/);
@@ -336,4 +344,42 @@ test('restricted Ubuntu namespaces receive an exact Bubblewrap profile without g
   assert.ok(f.commands.some(({ command, args }) => command === 'apparmor_parser' && args.join(' ') === `-r ${f.paths.apparmor}`));
   assert.equal(await readFile(f.paths.usernsRestriction, 'utf8'), '1\n');
   assert.equal(f.commands.some(({ command, args }) => command === 'sysctl' || args.some(arg => arg.includes('apparmor_restrict_unprivileged_userns'))), false);
+});
+
+
+test('default Ubuntu install needs no Bubblewrap profile despite restricted namespaces', async t => {
+  const f = await fixture(t);
+  f.paths.apparmor = join(f.root, 'apparmor/bot-bwrap');
+  f.paths.usernsRestriction = join(f.root, 'userns-restriction');
+  await mkdir(join(f.root, 'apparmor'));
+  await writeFile(f.paths.osRelease, 'ID=ubuntu\n');
+  await writeFile(f.paths.usernsRestriction, '1\n');
+  await f.make().install({ bundle: f.bundle });
+  await assert.rejects(access(f.paths.apparmor), { code: 'ENOENT' });
+  assert.equal(f.commands.some(({ command, args }) => command === 'apparmor_parser' || args.includes('bubblewrap')), false);
+});
+
+test('installer accepts explicit sandbox mode and rejects invalid modes before provisioning', async t => {
+  const f = await fixture(t);
+  assert.equal(parseArgs(['install', '--sandbox', 'auto']).options.sandbox, 'auto');
+  await assert.rejects(f.make().install({ bundle: f.bundle, sandbox: 'invalid' }), /sandbox/i);
+  assert.equal(f.commands.some(({ command, args }) => ['apt-get', 'useradd', 'groupadd'].includes(command) || (command === 'systemctl' && args.some(arg => ['start', 'stop', 'enable', 'disable'].includes(arg)))), false);
+});
+
+test('legacy installation without sandbox setting retains protected mode when reinstalled', async t => {
+  const f = await fixture(t);
+  const manager = f.make();
+  await manager.install({ bundle: f.bundle });
+  await manager.uninstall();
+  const recordPath = join(f.paths.config, 'installation.json');
+  const legacy = JSON.parse(await readFile(recordPath, 'utf8'));
+  delete legacy.sandbox;
+  await writeFile(recordPath, JSON.stringify(legacy), { mode: 0o600 });
+  f.commands.length = 0;
+  await manager.install({ bundle: f.bundle });
+  assert.equal(JSON.parse(await readFile(recordPath, 'utf8')).sandbox, 'auto');
+  assert.ok(f.commands.some(({ args }) => args.includes('bubblewrap')));
+  assert.doesNotMatch(await readFile(f.paths.service, 'utf8'), /--no-sandbox/);
+  await manager.dispatch('chat');
+  assert.ok(f.commands.filter(({ command, args }) => command === 'runuser' && args.includes('chat')).every(({ args }) => !args.includes('--no-sandbox')));
 });

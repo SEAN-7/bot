@@ -17,7 +17,10 @@ Use `bot-linux-arm64` on ARM64. The installer provides Node, Python and Toad,
 creates an isolated `bot` account, and leaves the service stopped. The first
 `bot` launch asks for your model, credentials and optional features, then starts
 the service and opens chat. The agent runs without sudo. Closing chat leaves
-the service running.
+the service running. Linux bundles use the dedicated account without Bubblewrap
+by default. The core is loaded from root-owned `/opt/bot`; editable data lives
+in the bot account's `~/.bot`. Plugins can access that account's files and processes. Use
+`install --sandbox auto` to opt into OS isolation.
 
 `bot update` updates the application; `bot uninstall` removes it while retaining
 the conversation and credentials. Updates from this private repository require

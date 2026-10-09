@@ -13,7 +13,7 @@ EnvironmentFile=@CONFIG_ROOT@/environment
 Environment=HOME=@DATA_ROOT@
 Environment=PATH=@APP_ROOT@/current/runtime/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 Environment=BOT_TOAD_BIN=@APP_ROOT@/current/bin/toad
-ExecStart=@APP_ROOT@/current/runtime/node/bin/node @APP_ROOT@/current/app/src/cli.mjs serve --home @DATA_ROOT@/state
+ExecStart=@APP_ROOT@/current/runtime/node/bin/node @APP_ROOT@/current/app/src/cli.mjs serve --installed-core --home @DATA_ROOT@/.bot @SANDBOX_ARGS@
 UMask=0077
 NoNewPrivileges=yes
 Restart=on-failure

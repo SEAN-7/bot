@@ -8,7 +8,7 @@ const releases = await import(pathToFileURL(join(core, 'src/releases.mjs')).href
 const meta = JSON.parse(await readFile(join(home, 'control/releases.json'), 'utf8'));
 if (operation === 'stage') {
   if (meta.pending || meta.trial) throw new Error('An agent update is pending or on trial; settle it before updating the installed runtime');
-  const revision = await releases.stageCore(home, core);
+  const revision = await releases.stageCore(home, core, { fixed: true });
   process.stdout.write(JSON.stringify({ revision }) + '\n');
 } else {
   if (!candidate) throw new Error('Candidate revision is required');

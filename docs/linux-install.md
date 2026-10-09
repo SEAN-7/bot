@@ -3,8 +3,7 @@
 The Linux bundle includes the application, Node, Python, and the existing Toad
 terminal frontend. You do not install those runtimes separately. The initial
 target is Debian and Ubuntu with systemd, on x86-64 or ARM64. Installation needs
-administrator access and package-repository access for Bubblewrap and process
-utilities. The running agent does not have sudo access.
+administrator access and package-repository access for process utilities. The running agent does not have sudo access.
 
 Download `bot-linux-x64` for an x86-64 VM or `bot-linux-arm64` for an ARM64 VM.
 These are self-extracting executables, not source archives. On the VM:
@@ -33,8 +32,19 @@ is required. SSH to the VM before running `bot`. `bot chat` is an alias.
 Subsequent launches attach to your configured agent without repeating setup.
 Chat defaults to a conversation and compact input, with sidebar, session tabs,
 shortcut footer and status bars hidden. Toad settings remain customizable.
-On Ubuntu with restricted user namespaces, installation adds an AppArmor
-exception for `/usr/bin/bwrap`; the global restriction remains enabled.
+Fresh installations run workers as the unprivileged `bot` account without
+Bubblewrap. Plugins can access the bot account's data and processes, while the
+installed core files remain root-owned and read-only to the bot. To enable the protected worker sandbox during installation, use:
+
+```sh
+sudo sh ./bot-linux-x64 install --sandbox auto
+```
+
+This mode installs Bubblewrap. On Ubuntu with restricted user namespaces it adds
+an AppArmor exception for `/usr/bin/bwrap`; the global restriction remains enabled.
+The selected mode is saved in root-owned `/etc/bot/installation.json` and used by
+both the service and terminal chat. Updates retain that mode. Older installations
+without a saved mode retain their protected sandbox.
 
 ## Updates and removal
 
@@ -71,14 +81,15 @@ your conversation.
 | `/opt/bot/releases/` | Root-owned application bundles |
 | `/opt/bot/current` | Selected application release |
 | `/usr/local/bin/bot` | Root-owned operator launcher |
-| `/var/lib/bot/state` | Private persistent bot data |
+| `~bot/.bot` (`/var/lib/bot/.bot`) | Private persistent bot data |
 | `/etc/bot/environment` | Root-readable model credentials |
+| `/etc/bot/installation.json` | Root-owned installation and sandbox settings |
 | `bot.service` | Systemd service running as the unprivileged `bot` user |
 
-The installer refuses unrelated pre-existing accounts or managed paths. The
-Linux worker uses Bubblewrap with a private PID namespace and writable mounts
-only for its workspace and plugin drafts. This keeps the supervisor outside the
-worker's process namespace while retaining durable recovery.
+The installer refuses unrelated pre-existing accounts or managed paths. With `--sandbox auto`, the Linux worker uses Bubblewrap with a private PID
+namespace and writable mounts only for its workspace and plugin drafts. This
+keeps the supervisor outside the worker's process namespace while retaining
+durable recovery.
 
 ## Building a bundle
 
@@ -97,3 +108,8 @@ The `Build Linux bundles` GitHub Actions workflow builds both architectures and
 uploads artifacts. Building does not automatically publish a GitHub release.
 For `bot update` to discover a version, a maintainer must publish the matching
 bundle and checksum as GitHub release assets.
+
+The installed runtime always loads its core from the root-owned application
+release. Writable configuration cannot select a different runtime core. Core
+updates go through the operator installer; plugins remain editable in `~bot/.bot`.
+Older state paths are retained as compatibility aliases when needed.

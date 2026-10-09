@@ -143,7 +143,7 @@ export async function launchChat({ home, endpoint, unsafe = false }) {
   const local = await access(localToad).then(() => true, () => false);
   const toad = process.env.BOT_TOAD_BIN || (local ? localToad : 'toad');
   const command = [process.execPath, join(ROOT, 'src', 'cli.mjs'), 'acp', '--home', home];
-  if (unsafe) command.push('--unsafe-development');
+  if (unsafe) command.push('--no-sandbox');
   const state = join(home, 'control', 'toad');
   for (const folder of ['config', 'data', 'cache', 'state']) await mkdir(join(state, folder), { recursive: true, mode: 0o700 });
   // Start with a conversation and input; retain any user customizations thereafter.

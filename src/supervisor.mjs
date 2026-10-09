@@ -35,8 +35,9 @@ async function claim(home) {
   throw new Error('Could not claim supervisor lock');
 }
 
-export async function startSupervisor({home,port,unsafe=false}) {
+export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   home=await realpath(resolve(home));
+  const installedCore=fixedCoreRoot ? await realpath(resolve(fixedCoreRoot)) : null;
   let current=await readCurrent(home),settings=limits(current.config);
   const unlock=await claim(home);
   const store=new Store(home);
@@ -47,7 +48,7 @@ export async function startSupervisor({home,port,unsafe=false}) {
   let updateRequested=false,protectedMode=!unsafe,queue=Promise.resolve();
   const retryCounts=new Map();
   const serialize=fn=>{const result=queue.then(fn);queue=result.catch(()=>{});return result;};
-  const status=()=>({state,revision:current.revision,pending:store.pending(),error,model:current.config.model,protected:protectedMode,canRecover:!!(current.previous||current.trial),trial:current.trial||null});
+  const status=()=>({state,revision:current.revision,coreRoot:installedCore||current.coreRoot,pending:store.pending(),error,model:current.config.model,protected:protectedMode,canRecover:!!(current.previous||current.trial),trial:current.trial||null});
   const diagnose=(kind,payload)=>store.record(kind,payload);
   function reply(child,id,result,failure) {if(child.connected)child.send({type:'rpc.result',id,result,error:failure});}
 
@@ -104,7 +105,7 @@ export async function startSupervisor({home,port,unsafe=false}) {
   async function preflight(revision) {
     const config=await readJSON(join(home,'revisions',revision,'config.json'));
     const scratch=new Map(store.snapshot().map(row=>[`${row.module}:${row.key}`,JSON.parse(row.value)]));
-    const launched=await launchRuntime({home,revision,coreRoot:config.coreRoot,unsafe,preflight:true});
+    const launched=await launchRuntime({home,revision,coreRoot:installedCore||config.coreRoot,unsafe,preflight:true});
     const child=launched.child;let stderr='';
     child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-8000);});child.stdout.resume();
     try {
@@ -170,7 +171,7 @@ export async function startSupervisor({home,port,unsafe=false}) {
     settings=limits(current.config);state='starting';ready=false;busy=false;
     store.resume();
     workerStarted=lastHeartbeat=phaseStarted=Date.now();
-    const launched=await launchRuntime({home,revision:current.revision,coreRoot:current.coreRoot,unsafe});
+    const launched=await launchRuntime({home,revision:current.revision,coreRoot:installedCore||current.coreRoot,unsafe});
     const child=launched.child;worker=child;protectedMode=launched.protected;
     let stderr='';child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-8000);});
     child.stdout.on('data',chunk=>{if(!stopped&&child===worker)diagnose('runtime.stdout',{text:chunk.toString().slice(0,8000)});});
@@ -278,6 +279,7 @@ export async function startSupervisor({home,port,unsafe=false}) {
         if(url.pathname==='/api/update') {
           const result=await serialize(async()=>{if(busy){updateRequested=true;return {queued:true};}return {revision:await stageDrafts(home),queued:true};});respond(202,result);
         } else if(url.pathname==='/api/core-update') {
+          if(installedCore){respond(403,{error:'Installed core is managed by the administrator; use bot update'});return;}
           const result=await serialize(async()=>({revision:await stageCore(home,body.source),queued:true}));respond(202,result);
         } else respond(404,{error:'Unknown endpoint'});
         return;

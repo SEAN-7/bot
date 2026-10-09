@@ -25,7 +25,7 @@ const atomicJSON = (path, value) => atomic(path, JSON.stringify(value, null, 2) 
 export function parseArgs(args) {
   const [command = 'chat', ...rest] = args;
   const options = {}, positional = [];
-  const values = new Set(['bundle', 'provider', 'model', 'disable', 'credential-env', 'repository']);
+  const values = new Set(['bundle', 'provider', 'model', 'disable', 'credential-env', 'repository', 'sandbox']);
   for (let index = 0; index < rest.length; index++) {
     const item = rest[index];
     if (!item.startsWith('--')) { positional.push(item); continue; }
@@ -156,7 +156,11 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
   const recordPath = join(paths.config, 'installation.json');
   const appMarker = join(paths.app, '.managed-by-bot.json');
   const environmentPath = join(paths.config, 'environment');
-  const state = join(paths.data, 'state');
+  const state = join(paths.data, '.bot');
+  async function ensureStatePath() {
+    // Existing installations keep working while adopting the conventional home.
+    if (!await exists(state) && await exists(join(paths.data, 'state'))) await symlink('state', state, 'dir');
+  }
   const current = join(paths.app, 'current');
   const nodeAt = release => join(release, 'runtime/node/bin/node');
   const cliAt = release => join(release, 'app/src/cli.mjs');
@@ -232,13 +236,15 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     await rename(temporary, current);
   }
   async function configFiles(release) {
-    const service = substitute(await readFile(join(release, 'install/templates/bot.service'), 'utf8'), paths);
+    const noSandbox = (await record())?.sandbox === 'none';
+    const service = substitute(await readFile(join(release, 'install/templates/bot.service'), 'utf8'), paths).replaceAll('@SANDBOX_ARGS@', noSandbox ? '--no-sandbox' : '');
     const launcher = substitute(await readFile(join(release, 'install/templates/bot'), 'utf8'), paths);
     await atomic(paths.service, service, 0o644);
     await atomic(paths.launcher, launcher, 0o755);
   }
   async function readCredentials() { return await exists(environmentPath) ? parseEnvironment(await readFile(environmentPath, 'utf8')) : {}; }
   async function defaultHealth({ candidate } = {}) {
+    const protectedRequired = (await record())?.sandbox !== 'none';
     const deadline = Date.now() + 30000;
     let explanation = 'Supervisor did not become ready';
     while (Date.now() < deadline) {
@@ -249,7 +255,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
         const response = await fetch(new URL('/api/status', url), { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(2000) });
         if (response.ok) {
           const value = await response.json();
-          if (value.protected && ['idle', 'working'].includes(value.state) && (!candidate || value.revision === candidate)) return value;
+          if (value.protected === protectedRequired && ['idle', 'working'].includes(value.state) && (!candidate || value.revision === candidate)) return value;
           explanation = value.error || value.state;
         }
       } catch {}
@@ -261,13 +267,17 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
   async function install(options) {
     await platformCheck();
     const { known } = await ownership({ fresh: true });
+    await ensureStatePath();
     if (!options.bundle) throw new Error('Install requires a verified local bundle');
+    const sandbox = options.sandbox || known?.sandbox || (known ? 'auto' : 'none');
+    if (!['auto', 'none'].includes(sandbox)) throw new Error('--sandbox must be auto or none');
     const bundle = await validateBundle(options.bundle, arch);
     if (known && await exists(paths.service)) await systemctl('stop', 'bot.service');
     if (options.repository && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(options.repository)) throw new Error('Repository must be OWNER/REPO');
-    print('Installing host prerequisites (bubblewrap, procps and sudo)...');
+    const prerequisites = [...(sandbox === 'auto' ? ['bubblewrap'] : []), 'procps', 'sudo'];
+    print(`Installing host prerequisites (${prerequisites.join(', ')})...`);
     await run('apt-get', ['update'], { inherit: true, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', DEBIAN_FRONTEND: 'noninteractive' } });
-    await run('apt-get', ['install', '-y', 'bubblewrap', 'procps', 'sudo'], { inherit: true, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', DEBIAN_FRONTEND: 'noninteractive' } });
+    await run('apt-get', ['install', '-y', ...prerequisites], { inherit: true, env: { PATH: '/usr/sbin:/usr/bin:/sbin:/bin', DEBIAN_FRONTEND: 'noninteractive' } });
     await mkdir(paths.config, { recursive: true, mode: 0o700 });
     await mkdir(paths.data, { recursive: true, mode: 0o700 });
     if (!known) await run('useradd', ['--system', '--user-group', '--home-dir', paths.data, '--shell', '/usr/sbin/nologin', '--no-create-home', 'bot']);
@@ -275,7 +285,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     const fields = account.stdout.trim().split(':');
     const accountUid = Number(fields[2]);
     if (!Number.isInteger(accountUid) || accountUid <= 0) throw new Error('Dedicated bot account was not created');
-    const installation = { manager: MANAGED, uid: accountUid, repository: options.repository || bundle.manifest.repository || known?.repository || null, version: bundle.manifest.version, installed: false, configured: known?.configured ?? !!known?.installed, setupPending: known?.setupPending || false, setup: known?.setup || null };
+    const installation = { manager: MANAGED, uid: accountUid, sandbox, repository: options.repository || bundle.manifest.repository || known?.repository || null, version: bundle.manifest.version, installed: false, configured: known?.configured ?? !!known?.installed, setupPending: known?.setupPending || false, setup: known?.setup || null };
     await atomicJSON(recordPath, installation);
     await mkdir(paths.app, { recursive: true, mode: 0o755 });
     await atomicJSON(appMarker, { manager: MANAGED });
@@ -296,6 +306,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     return { release };
   }
   async function installSandboxProfile() {
+    if ((await record())?.sandbox === 'none') return;
     if (!paths.apparmor || !paths.usernsRestriction || !await exists(paths.usernsRestriction) || (await readFile(paths.usernsRestriction, 'utf8')).trim() !== '1') return;
     // Ubuntu restricts unprivileged namespaces. Allow only this executable;
     // do not weaken the global kernel setting or bypass the worker sandbox.
@@ -346,7 +357,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
         await mkdir(state, { mode: 0o700 });
         await run('chown', ['bot:bot', state]);
       }
-      const args = [cliAt(release), 'setup', '--home', state, '--yes', '--provider', selections.provider, '--model', selections.model];
+      const args = [cliAt(release), 'setup', '--installed-core', '--home', state, '--yes', '--provider', selections.provider, '--model', selections.model];
       if (selections.disabled.length) args.push('--disable', selections.disabled.join(','));
       await asBot(nodeAt(release), args, selections.credentials);
     }
@@ -356,6 +367,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
   async function update(options) {
     await platformCheck();
     const { known } = await ownership();
+    await ensureStatePath();
     if (!await exists(current)) throw new Error('Bot was uninstalled; run a bundle install');
     if (!options.bundle) return remoteUpdate(options, known);
     if ((await lstat(options.bundle)).isFile()) {
@@ -462,6 +474,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
   async function uninstall() {
     await platformCheck();
     const { known } = await ownership();
+    await ensureStatePath();
     if (await exists(paths.service)) await systemctl('stop', 'bot.service');
     if (await exists(current)) {
       const release = await realpath(current);
@@ -476,7 +489,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     print(`Removed bot executables and service. Retained ${paths.data}, ${environmentPath}, and the unprivileged bot account.`);
   }
   async function dispatch(command, options = {}, positional = []) {
-    if (command === 'help' || command === '--help') { print('Usage: bot install|update [--bundle DIR] [--yes] [--repository OWNER/REPO]\n       bot [chat|status|logs|uninstall]\nFirst-launch setup: --provider ID --model ID --disable FEATURES --credential-env NAME\nUninstall retains conversation data and provider credentials.'); return; }
+    if (command === 'help' || command === '--help') { print('Usage: bot install|update [--bundle DIR] [--yes] [--repository OWNER/REPO] [--sandbox none|auto]\n       bot [chat|status|logs|uninstall]\nFirst-launch setup: --provider ID --model ID --disable FEATURES --credential-env NAME\nUninstall retains conversation data and provider credentials.'); return; }
     if (command === 'install') return install(options);
     if (command === 'update') {
       if (positional[0]) options.bundle = positional[0];
@@ -484,6 +497,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     }
     if (command === 'uninstall') return uninstall();
     await platformCheck(); const { known } = await ownership();
+    await ensureStatePath();
     if (command === 'logs') return run('journalctl', ['-u', 'bot.service', '-f', '--no-pager'], { inherit: true });
     if (!['chat', 'status'].includes(command)) throw new Error('Unknown installed bot command');
     const release = await realpath(current);
@@ -495,7 +509,8 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
         throw error;
       }
     }
-    return asBot(nodeAt(release), [cliAt(release), command, '--home', state], {}, true);
+    const isolationArgs = known.sandbox === 'none' && command === 'chat' ? ['--no-sandbox'] : [];
+    return asBot(nodeAt(release), [cliAt(release), command, '--home', state, ...isolationArgs], {}, true);
   }
   return { dispatch, install, update, uninstall };
 }

@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline/promises';
 
 const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'execution'];
 const VALUES = new Set(['home', 'provider', 'model', 'enable', 'disable', 'port']);
-const FLAGS = new Set(['help', 'yes', 'unsafe-development']);
+const FLAGS = new Set(['help', 'yes', 'unsafe-development', 'no-sandbox', 'installed-core']);
 const CREDENTIALS = { openai: ['OPENAI_API_KEY'], anthropic: ['ANTHROPIC_API_KEY'], google: ['GEMINI_API_KEY'] };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -136,7 +136,8 @@ const HELP = `Usage: bot COMMAND [options]
   --enable IDS          Explicitly enable setup features
   --port NUMBER         Local HTTP port (default 4317)
   --yes                 Accept setup defaults without prompts
-  --unsafe-development  Explicitly allow unprotected development runtime
+  --no-sandbox          Run without OS isolation (plugins share the bot account)
+  --unsafe-development  Legacy alias for --no-sandbox
 
 Credentials come from your environment. Setup and demo make no paid model calls.
 Send ordinary messages in Toad. No service installation or automatic frontend downloads.`;
@@ -152,13 +153,13 @@ export async function main(argv = process.argv.slice(2)) {
     if ((await readdir(home).catch(error => { if (error.code === 'ENOENT') return []; throw error; })).length) throw new Error(`Setup will not overwrite ${home}. Choose a new --home directory.`);
     const config = createConfig(await setupOptions(options));
     const { initialize } = await releases();
-    const result = await initialize(home, config, { defaultsDir: path.join(ROOT, 'defaults') });
+    const result = await initialize(home, config, { defaultsDir: path.join(ROOT, 'defaults'), fixedCoreRoot: options['installed-core'] ? ROOT : undefined });
     print(`Created ${home}\nModel: ${config.model.provider} / ${config.model.model}\nRevision: ${result.revision}\nStart: node src/cli.mjs start --home ${JSON.stringify(home)}`);
     return;
   }
   if (command === 'demo') {
     const { initialize } = await releases();
-    if (!await exists(home)) await initialize(home, createConfig({ ...options, provider: 'demo' }), { defaultsDir: path.join(ROOT, 'defaults') });
+    if (!await exists(home)) await initialize(home, createConfig({ ...options, provider: 'demo' }), { defaultsDir: path.join(ROOT, 'defaults'), fixedCoreRoot: options['installed-core'] ? ROOT : undefined });
     else {
       // Never silently repurpose an existing real installation as a demo.
       const { readCurrent } = await releases();
@@ -171,7 +172,7 @@ export async function main(argv = process.argv.slice(2)) {
     if (!endpoint) throw new Error('The supervisor is stopped. Run bot start, or bot serve in another terminal.');
     if (!endpoint.uiToken) throw new Error('The endpoint has no scoped chat token. Restart the supervisor with this version.');
     const { launchChat, runACP } = await import('./chat-client.mjs');
-    const result = await (command === 'chat' ? launchChat : runACP)({ home, endpoint, unsafe: !!options['unsafe-development'] });
+    const result = await (command === 'chat' ? launchChat : runACP)({ home, endpoint, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
     if (typeof result === 'number') process.exitCode = result;
     return;
   }
@@ -179,7 +180,7 @@ export async function main(argv = process.argv.slice(2)) {
     const { startSupervisor } = await import('./supervisor.mjs');
     const port = options.port === undefined ? undefined : Number(options.port);
     if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new Error('--port must be an integer from 1 to 65535.');
-    const supervisor = await startSupervisor({ home, port, unsafe: !!options['unsafe-development'] });
+    const supervisor = await startSupervisor({ home, port, fixedCoreRoot: options['installed-core'] ? ROOT : undefined, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
     if (!supervisor.uiToken) { await supervisor.stop(); throw new Error('Supervisor did not provide a scoped chat token.'); }
     print(`${command === 'demo' ? 'Demo mode — no AI or paid calls.\n' : ''}Home: ${home}\n${command === 'serve' ? `Local API: ${supervisor.url}\nAttach with bot chat --home ${JSON.stringify(home)}\nKeep this terminal open. Ctrl+C stops the bot.` : 'Starting Toad terminal chat.'}`);
     let stopping = false;
@@ -195,7 +196,7 @@ export async function main(argv = process.argv.slice(2)) {
       try {
         const { launchChat } = await import('./chat-client.mjs');
         const endpoint = await readEndpoint(home);
-        const code = await launchChat({ home, endpoint, unsafe: !!options['unsafe-development'] });
+        const code = await launchChat({ home, endpoint, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
         if (typeof code === 'number') process.exitCode = code;
       } finally { await supervisor.stop(); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     }

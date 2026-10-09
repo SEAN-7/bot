@@ -46,12 +46,12 @@ export async function readCurrent(home) {
   const config=await readJSON(join(home,'revisions',revision,'config.json'));
   return { ...meta, revision, config, coreRoot:config.coreRoot||CORE_ROOT };
 }
-export async function initialize(home,config,{defaultsDir=join(CORE_ROOT,'defaults')}={}) {
+export async function initialize(home,config,{defaultsDir=join(CORE_ROOT,'defaults'),fixedCoreRoot}={}) {
   home=resolve(home);
   try { await access(metadataPath(home)); throw new Error('This bot home is already initialized'); } catch(error) { if(error.code!=='ENOENT') throw error; }
   await mkdir(join(home,'control'),{recursive:true,mode:0o700});
   for(const dir of ['drafts','workspace','revisions']) await mkdir(join(home,dir),{recursive:true});
-  config={apiVersion:API_VERSION,modules:{},model:{},...config,coreRoot:await coreSnapshot(home,config.coreRoot||CORE_ROOT)};
+  config={apiVersion:API_VERSION,modules:{},model:{},...config,coreRoot:fixedCoreRoot ? await trustedCore(fixedCoreRoot) : await coreSnapshot(home,config.coreRoot||CORE_ROOT)};
   if(config.apiVersion!==API_VERSION) throw new Error('Unsupported configuration API');
   for(const entry of await readdir(defaultsDir,{withFileTypes:true})) if(entry.isDirectory()) {
     const source=join(defaultsDir,entry.name); const m=await manifestAt(source);
@@ -107,12 +107,20 @@ export async function installModule(home,source,{enable=true}={}) {
   await atomicJSON(join(home,'drafts','config.json'),config);
   return manifest;
 }
-export async function stageCore(home,source) {
+async function trustedCore(source) {
+  source=await realpath(resolve(source));
+  const pkg=await readJSON(join(source,'package.json'));
+  if(pkg.botCoreApi!==API_VERSION) throw new Error('Core module API is incompatible; migration required');
+  await access(join(source,'src','runtime.mjs'));
+  return source;
+}
+export async function stageCore(home,source,{fixed=false}={}) {
   source=await realpath(resolve(source));
   const pkg=await readJSON(join(source,'package.json'));
   if(pkg.botCoreApi!==API_VERSION) throw new Error('Core module API is incompatible; migration required');
   await access(join(source,'src','runtime.mjs'));
   // The operator supplies an installed, trusted core release. Modules cannot call this path.
+  if(fixed)return stage(home,source);
   const snapshot=await coreSnapshot(home,source,{copyDependencies:true});
   try{return await stage(home,snapshot);}catch(error){await rm(snapshot,{recursive:true,force:true});throw error;}
 }
