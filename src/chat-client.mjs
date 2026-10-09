@@ -1,13 +1,13 @@
-import { access, mkdir, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, realpath } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { readCurrent, manifestAt } from './releases.mjs';
+import { readJSON } from './releases.mjs';
+import { appManifest, commandAt } from './app-package.mjs';
 import { sandboxAvailable } from './sandbox.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-export const shellQuote = value => `'${String(value).replaceAll("'", "'\\''")}'`;
 
 // ACP clients may offer unsandboxed filesystem/terminal operations. An editable
 // transport must never use them to bypass the bot's protected core boundary.
@@ -37,6 +37,7 @@ export function filterACPOutput(message, outstanding) {
   if (source.sessionUpdate.endsWith('_chunk')) {
     if (source.content?.type !== 'text' || typeof source.content.text !== 'string') return null;
     update = { sessionUpdate: source.sessionUpdate, content: { type: 'text', text: source.content.text } };
+    if (source.sessionUpdate === 'agent_message_chunk' && source._meta?.['bot/notice'] === true) update._meta = { 'bot/notice': true };
   } else {
     if (typeof source.toolCallId !== 'string') return null;
     update = { sessionUpdate: source.sessionUpdate, toolCallId: source.toolCallId };
@@ -65,15 +66,17 @@ function jsonLines(stream, onMessage, onError) {
 }
 
 async function adapterFor(home) {
-  const current = await readCurrent(home);
+  const config = await readJSON(join(home,'drafts','config.json'));
   const adapters = [];
-  for (const [id, settings] of Object.entries(current.config.modules)) {
+  for (const [id, settings] of Object.entries(config.apps)) {
     if (!settings.enabled) continue;
-    const folder = join(home, 'revisions', current.revision, 'plugins', id);
-    const manifest = await manifestAt(folder);
-    if (manifest.acp) adapters.push(join(folder, manifest.acp));
+    const folder = join(home, 'drafts', 'apps', id);
+    let manifest;
+    try { manifest=await appManifest(folder); }
+    catch(error) { console.error(`App ${id} is unavailable: ${error.message}`);continue; }
+    if (manifest.acp) adapters.push(commandAt(folder,manifest.acp));
   }
-  if (adapters.length !== 1) throw new Error('Enable exactly one chat module with an ACP entry to open the TUI. Use serve for headless operation.');
+  if (adapters.length !== 1) throw new Error('Enable exactly one chat app with an ACP command to open chat. Use serve for headless operation.');
   return adapters[0];
 }
 
@@ -110,14 +113,14 @@ export async function runACP({ home, endpoint, unsafe = false }) {
     XDG_CACHE_HOME: join(workspace, '.cache'), npm_config_cache: join(workspace, '.cache', 'npm'),
   };
   delete env.BOT_CONTROL_TOKEN;
-  let command = process.execPath, args = [adapter];
+  let command=adapter.command,args=adapter.args;
   if (sandbox === 'seatbelt') {
     const policy = `(version 1)\n(allow default)\n(deny file-write*)\n(deny signal)\n(allow signal (target same-sandbox))\n(deny file-read* (subpath ${JSON.stringify(control)}))\n${[workspace, drafts].map(p => `(allow file-write* (subpath ${JSON.stringify(p)}))`).join('\n')}\n(allow file-write* (literal "/dev/null"))\n`;
-    command = '/usr/bin/sandbox-exec'; args = ['-p', policy, process.execPath, adapter];
+    command = '/usr/bin/sandbox-exec'; args = ['-p', policy, adapter.command, ...adapter.args];
   } else if (sandbox === 'bwrap') {
-    command = 'bwrap'; args = ['--die-with-parent', '--unshare-pid', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', control, '--bind', workspace, workspace, '--bind', drafts, drafts, '--', process.execPath, adapter];
+    command = 'bwrap'; args = ['--die-with-parent', '--unshare-pid', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', control, '--bind', workspace, workspace, '--bind', drafts, drafts, '--', adapter.command, ...adapter.args];
   }
-  const child = spawn(command, args, { cwd: workspace, env, stdio: ['pipe', 'pipe', 'inherit'] });
+  const child = spawn(command, args, { cwd: adapter.cwd, env, stdio: ['pipe', 'pipe', 'inherit'] });
   const outstanding = new Map();
   const abort = () => { process.stderr.write('Invalid or oversized ACP transport data\n'); child.kill('SIGTERM'); };
   const removeInput = jsonLines(process.stdin, message => {
@@ -139,30 +142,10 @@ export async function launchChat({ home, endpoint, unsafe = false }) {
   home = await realpath(home);
   await adapterFor(home);
   if (!endpoint?.uiToken) throw new Error('Restart the supervisor to obtain a scoped chat credential.');
-  const localToad = join(ROOT, '.tui', 'bin', 'toad');
-  const local = await access(localToad).then(() => true, () => false);
-  const toad = process.env.BOT_TOAD_BIN || (local ? localToad : 'toad');
-  const command = [process.execPath, join(ROOT, 'src', 'cli.mjs'), 'acp', '--home', home];
-  if (unsafe) command.push('--no-sandbox');
-  const state = join(home, 'control', 'toad');
-  for (const folder of ['config', 'data', 'cache', 'state']) await mkdir(join(state, folder), { recursive: true, mode: 0o700 });
-  // Start with a conversation and input; retain any user customizations thereafter.
-  const configDir = join(state, 'config', 'toad');
-  await mkdir(configDir, { recursive: true, mode: 0o700 });
-  try {
-    await writeFile(join(configDir, 'toad.json'), JSON.stringify({
-      ui: { 'compact-input': true, 'sessions-bar': 'never', footer: false,
-        'info-bar': false, 'status-line': false, 'agent-title': false,
-        column: false, scrollbar: 'thin', throbber: 'pulse', prompt_message: 'Message…' },
-      sidebar: { hide: true }, agent: { thoughts: false },
-    }, null, 2) + '\n', { flag: 'wx', mode: 0o600 });
-  } catch (error) { if (error.code !== 'EEXIST') throw error; }
-  const env = { ...process.env, XDG_CONFIG_HOME: join(state, 'config'), XDG_DATA_HOME: join(state, 'data'), XDG_CACHE_HOME: join(state, 'cache'), XDG_STATE_HOME: join(state, 'state') };
+  const args = [join(ROOT, 'src', 'cli.mjs'), 'acp', '--home', home];
+  if (unsafe) args.push('--no-sandbox');
+  const env = { ...process.env, NODE_OPTIONS: '' };
   delete env.BOT_CONTROL_TOKEN;
-  try {
-    return await waitFor(spawn(toad, ['acp', command.map(shellQuote).join(' '), '--title', 'Bot', '--project-dir', join(home, 'workspace')], { cwd: join(home, 'workspace'), env, stdio: 'inherit' }), 'Toad');
-  } catch (error) {
-    if (error.message.includes('ENOENT')) throw new Error('Toad is not installed. Follow the TUI setup in README.md, or run bot serve for headless operation.');
-    throw error;
-  }
+  const { runTerminalChat } = await import('./terminal-chat.mjs');
+  return runTerminalChat({ command: process.execPath, args, cwd: join(home, 'workspace'), env });
 }

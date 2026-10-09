@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 
 export const DEFAULT_PATHS = { app: '/opt/bot', data: '/var/lib/bot', config: '/etc/bot', service: '/etc/systemd/system/bot.service', launcher: '/usr/local/bin/bot', osRelease: '/etc/os-release', apparmor: '/etc/apparmor.d/bot-bwrap', usernsRestriction: '/proc/sys/kernel/apparmor_restrict_unprivileged_userns' };
 const MANAGED = 'Managed by self-building-bot installer';
-const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'execution'];
+const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'skills', 'web-search'];
 const KEYS = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', google: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', mistral: 'MISTRAL_API_KEY', deepseek: 'DEEPSEEK_API_KEY', xai: 'XAI_API_KEY', cerebras: 'CEREBRAS_API_KEY' };
 const inside = (parent, child) => { const path = relative(parent, child); return path === '' || (!path.startsWith('..') && !isAbsolute(path)); };
 const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
@@ -23,9 +23,9 @@ async function atomic(path, text, mode = 0o600) {
 }
 const atomicJSON = (path, value) => atomic(path, JSON.stringify(value, null, 2) + '\n');
 export function parseArgs(args) {
-  const [command = 'chat', ...rest] = args;
+  const [command = 'help', ...rest] = args;
   const options = {}, positional = [];
-  const values = new Set(['bundle', 'provider', 'model', 'disable', 'credential-env', 'repository', 'sandbox']);
+  const values = new Set(['bundle', 'provider', 'model', 'enable', 'disable', 'credential-env', 'repository', 'sandbox']);
   for (let index = 0; index < rest.length; index++) {
     const item = rest[index];
     if (!item.startsWith('--')) { positional.push(item); continue; }
@@ -43,7 +43,7 @@ export async function validateBundle(path, arch = process.arch) {
   const root = await realpath(resolve(path));
   const manifest = await json(join(root, 'bundle.json'));
   if (manifest.format !== 1 || manifest.platform !== 'linux' || manifest.arch !== arch || !['x64', 'arm64'].includes(arch) || typeof manifest.version !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(manifest.version)) throw new Error('Unsupported bundle format, platform, architecture, or version');
-  for (const item of ['app/src/cli.mjs', 'app/src/releases.mjs', 'app/package.json', 'app/defaults', 'app/node_modules', 'runtime/node/bin/node', 'runtime/python', 'runtime/toad', 'bin/toad', 'install/manage.mjs', 'install/update-state.mjs', 'install/materialize-state.mjs', 'install/templates/bot', 'install/templates/bot.service']) {
+  for (const item of ['app/src/cli.mjs', 'app/src/releases.mjs', 'app/package.json', 'app/apps', 'app/node_modules', 'runtime/node/bin/node', 'app/src/terminal-chat.mjs', 'app/src/chat-session.mjs', 'app/node_modules/@earendil-works/pi-tui/package.json', 'install/manage.mjs', 'install/update-state.mjs', 'install/materialize-state.mjs', 'install/templates/bot', 'install/templates/bot.service']) {
     if (!inside(root, await realpath(join(root, item)))) throw new Error(`Bundle path escapes release: ${item}`);
   }
   const inspect = async directory => {
@@ -57,7 +57,7 @@ export async function validateBundle(path, arch = process.arch) {
     }
   };
   await inspect(root);
-  if ((await json(join(root, 'app/package.json'))).botCoreApi !== 1) throw new Error('Bundle core API is incompatible');
+  if ((await json(join(root, 'app/package.json'))).botCoreApi !== 3) throw new Error('Bundle core API is incompatible');
   return { root, manifest };
 }
 export function environmentText(credentials) {
@@ -115,8 +115,12 @@ async function secret(question) {
 }
 export async function setupChoices(options, { env = process.env, question = ask, password = secret, interactive = process.stdin.isTTY, print = console.log, catalogue = [] } = {}) {
   let provider = options.provider, model = options.model;
-  const disabled = new Set((options.disable || '').split(',').filter(Boolean));
+  const disabled = new Set([ ...(options.disable || '').split(',').filter(Boolean)]);
   for (const feature of disabled) if (!FEATURES.includes(feature)) throw new Error(`Unknown feature ${feature}`);
+  for (const feature of (options.enable || '').split(',').filter(Boolean)) {
+    if (!FEATURES.includes(feature)) throw new Error(`Unknown feature ${feature}`);
+    disabled.delete(feature);
+  }
   if (!provider && !options.yes && interactive) {
     print('Providers: demo (no paid calls), ' + [...new Set(catalogue.map(item => item.provider))].join(', '));
     provider = await question('Provider [demo]: ') || 'demo';
@@ -132,7 +136,9 @@ export async function setupChoices(options, { env = process.env, question = ask,
   if (provider !== 'demo' && catalogue.length && !catalogue.some(item => item.provider === provider && item.id === model)) throw new Error('Provider/model combination is not in the bundled registry');
   if (provider !== 'demo' && (!model || /[\r\n\0]/.test(model))) throw new Error('A real provider requires --model or an interactive model selection');
   if (!options.yes && interactive) for (const feature of FEATURES) {
-    if (/^n(?:o)?$/i.test(await question(`Enable ${feature}? [Y/n]: `))) disabled.add(feature);
+    const answer = await question(`Enable ${feature}? ${disabled.has(feature) ? '[y/N]' : '[Y/n]'}: `);
+    if (/^n(?:o)?$/i.test(answer)) disabled.add(feature);
+    if (/^y(?:es)?$/i.test(answer)) disabled.delete(feature);
   }
   const credentials = {};
   if (provider !== 'demo') {
@@ -164,7 +170,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
   const current = join(paths.app, 'current');
   const nodeAt = release => join(release, 'runtime/node/bin/node');
   const cliAt = release => join(release, 'app/src/cli.mjs');
-  const safeEnv = credentials => ({ PATH: `${current}/runtime/node/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, HOME: paths.data, LANG: env.LANG || 'C.UTF-8', ...(env.TERM ? { TERM: env.TERM } : {}), ...(env.COLORTERM ? { COLORTERM: env.COLORTERM } : {}), BOT_TOAD_BIN: join(current, 'bin/toad'), ...credentials });
+  const safeEnv = credentials => ({ PATH: `${current}/runtime/node/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, HOME: paths.data, LANG: env.LANG || 'C.UTF-8', ...(env.TERM ? { TERM: env.TERM } : {}), ...(env.COLORTERM ? { COLORTERM: env.COLORTERM } : {}), ...credentials });
   const asBot = (command, args, credentials = {}, inherit = false) => run('runuser', ['-u', 'bot', '--', command, ...args], { env: safeEnv(credentials), inherit });
   const systemctl = (...args) => run('systemctl', args);
   async function platformCheck() {
@@ -243,7 +249,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     await atomic(paths.launcher, launcher, 0o755);
   }
   async function readCredentials() { return await exists(environmentPath) ? parseEnvironment(await readFile(environmentPath, 'utf8')) : {}; }
-  async function defaultHealth({ candidate } = {}) {
+  async function defaultHealth({ candidate, allowTrial = false } = {}) {
     const protectedRequired = (await record())?.sandbox !== 'none';
     const deadline = Date.now() + 30000;
     let explanation = 'Supervisor did not become ready';
@@ -255,7 +261,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
         const response = await fetch(new URL('/api/status', url), { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(2000) });
         if (response.ok) {
           const value = await response.json();
-          if (value.protected === protectedRequired && ['idle', 'working'].includes(value.state) && (!candidate || value.revision === candidate)) return value;
+          if (value.protected === protectedRequired && ['idle', 'working'].includes(value.state) && (!candidate || (value.revision === candidate && (allowTrial || !value.trial)))) return value;
           explanation = value.error || value.state;
         }
       } catch {}
@@ -302,7 +308,7 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
     await systemctl('unmask', '--runtime', 'bot.service');
     await systemctl('disable', '--now', 'bot.service');
     await atomicJSON(recordPath, { ...installation, installed: true, release });
-    print(`Installed bot ${installation.version}. The service is stopped. Run bot to configure and open chat.`);
+    print(`Installed bot ${installation.version}. The service is stopped. Run bot start to configure and start it, then bot chat to open chat.`);
     return { release };
   }
   async function installSandboxProfile() {
@@ -324,7 +330,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     await run('apparmor_parser', ['-r', paths.apparmor]);
   }
   async function configure(known, release, options) {
-    if (!interactive && !options.yes) throw new Error('First launch needs an interactive terminal. SSH in and run bot.');
+    if (!interactive && !options.yes) throw new Error('First launch needs an interactive terminal. SSH in and run bot start.');
     let catalogue = [];
     if (choices === setupChoices) {
       const registry = pathToFileURL(join(release, 'app/node_modules/@earendil-works/pi-ai/dist/providers/all.js')).href;
@@ -343,9 +349,16 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       // Also recovers interrupted setup and the old installer's unstarted demo.
       const configPath = join(state, 'drafts/config.json');
       const config = await json(configPath);
-      for (const feature of FEATURES) config.modules[feature] = { ...config.modules[feature], enabled: !selections.disabled.includes(feature) };
-      config.modules['pi-model'] = { enabled: selections.provider !== 'demo', provider: selections.provider, model: selections.model };
-      config.modules['demo-model'] = { enabled: selections.provider === 'demo' };
+      config.apps ||= {};
+      for (const feature of FEATURES) {
+        if(config.modules&&feature!=='web-search')config.modules[feature] = { ...config.modules[feature], enabled: !selections.disabled.includes(feature) };
+        config.apps[feature]={...config.apps[feature],enabled:!selections.disabled.includes(feature)};
+      }
+      if(config.modules)config.modules['pi-model'] = { enabled: selections.provider !== 'demo', provider: selections.provider, model: selections.model };
+      if(config.modules)config.modules['demo-model'] = { enabled: selections.provider === 'demo' };
+      config.apps['pi-model']={enabled:selections.provider!=='demo',provider:selections.provider,model:selections.model};
+      config.apps['demo-model']={enabled:selections.provider==='demo'};
+      config.controller='agent';config.apps.agent={...config.apps.agent,enabled:true,modelApp:selections.provider==='demo'?'demo-model':'pi-model',contextApp:config.apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>config.apps[id]?.enabled),projections:config.apps.chat?.enabled?['chat']:[],tickApps:config.apps.scheduler?.enabled?['scheduler']:[],services:config.apps.chat?.enabled?['chat']:[]};
       config.model = { provider: selections.provider, model: selections.model };
       await atomicJSON(configPath, config);
       await run('chown', ['bot:bot', configPath]);
@@ -385,19 +398,39 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       await installSandboxProfile();
       await systemctl('daemon-reload');
       await atomicJSON(recordPath, { ...known, version: bundle.manifest.version, release });
-      print('Updated bot. Run bot to complete first-launch setup.');
+      print('Updated bot. Run bot start to complete first-launch setup.');
       return { release };
     }
     const metadata = await json(join(state, 'control/releases.json'));
-    if (metadata.pending || metadata.trial) throw new Error('An agent update is pending or on trial; settle it before updating the installed runtime');
+    if (metadata.pending) throw new Error('A module update is pending; settle it before updating the installed runtime');
+    let settleCore = false;
+    if (metadata.trial) {
+      const before = await json(join(state, 'revisions', metadata.trial.from, 'config.json'));
+      const active = await json(join(state, 'revisions', metadata.active, 'config.json'));
+      if (before.coreRoot === active.coreRoot) throw new Error('A bot-managed module update is on trial; settle it before updating the installed runtime');
+      const status = await checkHealth({ candidate: metadata.active, allowTrial: true });
+      if (status.state !== 'idle' || status.pending) throw new Error('Previous core update is not idle and healthy');
+      settleCore = true;
+    }
     const previous = await realpath(current);
     const release = await copyRelease(bundle);
     const credentials = await readCredentials();
     // Stage via the trusted core API while the service is stopped. The supervisor
     // owns candidate preflight and state snapshot/rollback after it starts again.
     let candidate;
+    // Migrate the running service's chat credential before its endpoint is
+    // removed on shutdown. Open chat apps keep this scoped credential.
+    const chatCredentials = join(state, 'control/chat-credentials.json');
+    const endpointPath = join(state, 'control/endpoint.json');
+    if (!await exists(chatCredentials) && await exists(endpointPath)) {
+      const endpoint = await json(endpointPath);
+      if (typeof endpoint.uiToken !== 'string' || !/^[a-f0-9]{64}$/.test(endpoint.uiToken)) throw new Error('Invalid existing chat credential; refusing to break connected clients');
+      await atomicJSON(chatCredentials, { token: endpoint.uiToken, legacyTokens: [] });
+      await run('chown', ['bot:bot', chatCredentials]);
+    }
     await systemctl('stop', 'bot.service');
     try {
+      if (settleCore) await asBot(nodeAt(previous), [join(release, 'install/update-state.mjs'), 'settle-core', state, join(previous, 'app'), metadata.active], credentials);
       if (stage) candidate = (await stage({ release, state, credentials, previous })).revision;
       else {
         const result = await asBot(nodeAt(release), [join(release, 'install/update-state.mjs'), 'stage', state, join(release, 'app')], credentials);
@@ -409,8 +442,9 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       await systemctl('daemon-reload');
       await systemctl('start', 'bot.service');
       const status = await checkHealth({ candidate });
+      if (status.trial) throw new Error('Core health validation did not complete');
       await atomicJSON(recordPath, { ...known, version: bundle.manifest.version, release, previousRelease: previous, installed: true });
-      print(`Installed bot ${bundle.manifest.version}; supervisor health: ${status.state}. ${status.trial ? 'Runtime update is on probation until the next successful conversation turn.' : 'Runtime candidate completed probation.'} This check made no model call.`);
+      print(`Installed bot ${bundle.manifest.version}; supervisor health: ${status.state}. Core startup validation completed; the previous release remains available for rollback. This check made no model call.`);
       return { release, status, probation: !!status.trial };
     } catch (error) {
       await systemctl('stop', 'bot.service').catch(() => {});
@@ -489,7 +523,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     print(`Removed bot executables and service. Retained ${paths.data}, ${environmentPath}, and the unprivileged bot account.`);
   }
   async function dispatch(command, options = {}, positional = []) {
-    if (command === 'help' || command === '--help') { print('Usage: bot install|update [--bundle DIR] [--yes] [--repository OWNER/REPO] [--sandbox none|auto]\n       bot [chat|status|logs|uninstall]\nFirst-launch setup: --provider ID --model ID --disable FEATURES --credential-env NAME\nUninstall retains conversation data and provider credentials.'); return; }
+    if (command === 'help' || command === '--help') { print('Usage: bot COMMAND\n\n  start       Start the background service and enable it after reboot\n  stop        Stop the service and disable startup after reboot\n  chat        Attach the chat plugin to the running service\n  status      Show runtime health\n  logs        Follow service logs\n  update      Update the installed application\n  uninstall   Remove executables; retain conversation and credentials\n\nBare bot shows this help. Closing chat leaves the service running.\nFirst bot start configures the model and features if needed.\nSetup: --provider ID --model ID --enable FEATURES --disable FEATURES --credential-env NAME --yes\nInstall/update: [--bundle DIR] [--repository OWNER/REPO]; install: [--sandbox none|auto]'); return; }
     if (command === 'install') return install(options);
     if (command === 'update') {
       if (positional[0]) options.bundle = positional[0];
@@ -499,16 +533,28 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     await platformCheck(); const { known } = await ownership();
     await ensureStatePath();
     if (command === 'logs') return run('journalctl', ['-u', 'bot.service', '-f', '--no-pager'], { inherit: true });
-    if (!['chat', 'status'].includes(command)) throw new Error('Unknown installed bot command');
+    if (!['start', 'stop', 'chat', 'status'].includes(command)) throw new Error('Unknown installed bot command. Run bot --help.');
+    if (positional.length) throw new Error(`Usage: bot ${command}`);
     const release = await realpath(current);
-    if (command === 'chat') {
+    if (command === 'stop') {
+      await systemctl('disable', '--now', 'bot.service');
+      const result = await run('systemctl', ['is-active', 'bot.service'], { allowFailure: true });
+      if (result.stdout.trim() !== 'inactive') throw new Error('Bot service did not stop; inspect bot logs.');
+      print('Bot stopped. Startup after reboot is disabled. Conversation and credentials are preserved. Run bot start to resume.');
+      return;
+    }
+    if (command === 'start') {
       if (!(known.configured ?? known.installed)) await configure(known, release, options);
       await systemctl('enable', '--now', 'bot.service');
-      try { await checkHealth(); } catch (error) {
+      let status;
+      try { status = await checkHealth(); } catch (error) {
         await systemctl('disable', '--now', 'bot.service');
         throw error;
       }
+      print(`Bot running in the background; supervisor health: ${status.state}. Startup after reboot is enabled. Run bot chat to attach.`);
+      return status;
     }
+    if (command === 'chat' && !(known.configured ?? known.installed)) throw new Error('Bot is not configured. Run bot start first.');
     const isolationArgs = known.sandbox === 'none' && command === 'chat' ? ['--no-sandbox'] : [];
     return asBot(nodeAt(release), [cliAt(release), command, '--home', state, ...isolationArgs], {}, true);
   }

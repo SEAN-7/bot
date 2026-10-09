@@ -1,0 +1,12 @@
+{
+  "id": "memory",
+  "version": "1.0.0",
+  "description": "Read or update persistent preferences and notes; search complete conversation history.",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

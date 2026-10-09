@@ -1,0 +1,12 @@
+{
+  "id": "local-time",
+  "version": "1.0.0",
+  "description": "Read the current UTC time",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

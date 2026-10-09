@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
-import { filterACPOutput, shellQuote } from '../src/chat-client.mjs';
+import { filterACPOutput } from '../src/chat-client.mjs';
 
 test('ACP requests cannot use a pending reply ID to invoke host filesystem or terminals', () => {
   const outstanding = new Map([[1, 'initialize']]);
@@ -39,11 +38,11 @@ test('ACP allows matched chat replies and required notifications only', () => {
   assert.deepEqual(filterACPOutput({ jsonrpc: '2.0', id: 4, error: { code: -32000, message: 'Blocked', data: { command: 'unsafe' } } }, outstanding), { jsonrpc: '2.0', id: 4, error: { code: -32000, message: 'Blocked' } });
   const message = { jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'durable', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'reply' } } } };
   assert.deepEqual(filterACPOutput(message, outstanding), message);
+  const notice = structuredClone(message);
+  notice.params.update._meta = { 'bot/notice': true, command: 'unsafe', unrelated: true };
+  const filtered = filterACPOutput(notice, outstanding);
+  assert.deepEqual(filtered.params.update._meta, { 'bot/notice': true });
+  notice.params.update._meta['bot/notice'] = 'true';
+  assert.equal(filterACPOutput(notice, outstanding).params.update._meta, undefined);
   assert.equal(filterACPOutput({ ...message, params: { ...message.params, update: { sessionUpdate: 'available_commands_update', availableCommands: [{ name: 'unsafe' }] } } }, outstanding), null);
-});
-
-test('shell quoting preserves a path containing quotes and shell metacharacters', () => {
-  const path = "/tmp/space and 'quote'; $(printf INJECTED) `printf INJECTED` $HOME\nnext";
-  const received = execFileSync('/bin/sh', ['-c', `printf '%s' ${shellQuote(path)}`], { encoding: 'utf8' });
-  assert.equal(received, path);
 });

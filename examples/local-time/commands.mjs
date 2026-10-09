@@ -1,0 +1,1 @@
+export function commands() { return { read: {description:'Read current UTC time.',inputSchema:{type:'object',properties:{},additionalProperties:false},execute:()=>({utc:new Date().toISOString()})} }; }

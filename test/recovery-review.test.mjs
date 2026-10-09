@@ -1,3 +1,4 @@
+import { fixtureApps, fixtureSource } from './process-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, access } from 'node:fs/promises';
@@ -6,6 +7,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { tmpdir } from 'node:os';
 import { initialize, stageDrafts } from '../src/releases.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
+import { sandboxAvailable } from '../src/sandbox.mjs';
+import { Store } from '../src/store.mjs';
 
 const workingModel = `
 export default async function (api) {
@@ -47,19 +50,26 @@ async function fixture(t, source = workingModel, options = {}) {
   const home = join(directory, 'home');
   await mkdir(modelDir, { recursive: true });
   await writeFile(join(modelDir, 'module.json'), JSON.stringify({
-    id: 'test-model', name: 'Recovery test model', version: '1.0.0', apiVersion: 1, entry: 'index.mjs'
+    id: 'test-model', name: 'Recovery test model', version: '1.0.0', apiVersion: 2, entry: 'index.mjs'
   }));
   await writeFile(join(modelDir, 'index.mjs'), source);
-  await initialize(home, {
-    apiVersion: 1,
+  await initialize(home, fixtureSource({
+    apiVersion: 2,
     modules: { 'test-model': { enabled: true, ...options.moduleConfig } },
     model: {},
     runtime: {
-      port: 0, startupTimeoutMs: 1200, heartbeatTimeoutMs: 1200,
+      port: 0, startupTimeoutMs: 5000, heartbeatTimeoutMs: 5000,
       operationTimeoutMs: 1800, trialMs: 50, maxRestarts: 2, retryMs: 100,
       sandbox: options.protected ? 'auto' : 'off', ...options.runtime
     }
-  }, { defaultsDir });
+  }), { appsDir: await fixtureApps(defaultsDir) });
+  // This custom controller deliberately owns a pinned model dependency. Recovery
+  // tests exercise controller replacement, while ordinary CLI apps remain live.
+  const meta=JSON.parse(await readFile(join(home,'control/releases.json'),'utf8'));
+  const controllerPath=join(home,'revisions',meta.active,'apps','agent','main.mjs');
+  const pinned="process.env.BOT_APPS=process.env.BOT_CONTROLLER_APPS;\nif(process.argv[2]==='--preflight')await import('../test-model/main.mjs');\n"+await readFile(controllerPath,'utf8');
+  await writeFile(controllerPath,pinned);await writeFile(join(home,'drafts/apps/agent/main.mjs'),pinned);
+  if(options.controllerPatch){const meta=JSON.parse(await readFile(join(home,'control','releases.json'),'utf8'));const path=join(home,'revisions',meta.active,'apps','agent','main.mjs');await writeFile(path,options.controllerPatch(await readFile(path,'utf8')));}
   let server;
   const launch = async () => {
     server = await startSupervisor({ home, port: 0, unsafe: !options.protected });
@@ -87,7 +97,7 @@ async function fixture(t, source = workingModel, options = {}) {
   }, `assistant reply containing ${content}`);
   const send = text => api('/api/messages', { text });
   const replace = async source => {
-    await writeFile(join(home, 'drafts', 'test-model', 'index.mjs'), source);
+    await writeFile(join(home, 'drafts', 'apps', 'test-model', 'index.mjs'), source);
     await api('/api/update', {});
   };
   const request = (path, body, browser = false) => fetch(new URL(path, server.url), {
@@ -98,7 +108,28 @@ async function fixture(t, source = workingModel, options = {}) {
   return { directory, home, api, launch, stop, reply, send, replace, request };
 }
 
-test('candidate crash restores its state snapshot without losing accepted input', { timeout: 20_000 }, async t => {
+test('clean supervisor restarts stay quiet while an interrupted supervisor produces a recovery notice', { timeout: 20_000 }, async t => {
+  const bot = await fixture(t);
+  await bot.send('retained conversation');
+  await bot.reply('reply=retained conversation');
+  for (let index = 0; index < 2; index++) {
+    await bot.stop();
+    await bot.launch();
+  }
+  let messages = messagesOf(await bot.api('/api/messages'));
+  assert.equal(messages.some(message => message.metadata?.recovery), false);
+  assert.ok(messages.some(message => message.content.includes('reply=retained conversation')));
+  await bot.stop();
+  // An abrupt supervisor exit leaves this durable marker false.
+  const store = new Store(bot.home);
+  store.set('cleanShutdown', false);
+  store.close();
+  await bot.launch();
+  messages = messagesOf(await bot.api('/api/messages'));
+  assert.deepEqual(messages.filter(message => message.metadata?.recovery).map(message => message.content), ['Recovery report: Supervisor interrupted; resumed the durable conversation']);
+});
+
+test('controller candidate crash restores its state snapshot without losing accepted input', { timeout: 20_000 }, async t => {
   const bot = await fixture(t, workingModel, { runtime: { startupTimeoutMs: 5000, heartbeatTimeoutMs: 5000 } });
   await bot.send('before update');
   await bot.reply('schema=1; reply=before update');
@@ -129,7 +160,7 @@ test('candidate crash restores its state snapshot without losing accepted input'
   assert.ok(messages.some(m => m.role === 'assistant' && m.content.includes('before update')));
 });
 
-test('a candidate with a blocked event loop is killed and rolled back', { timeout: 20_000 }, async t => {
+test('a controller candidate with a blocked event loop is killed and rolled back', { timeout: 20_000 }, async t => {
   const bot = await fixture(t);
   await bot.send('baseline');
   await bot.reply('reply=baseline');
@@ -180,17 +211,10 @@ test('a started external action becomes unknown after a crash and is not replaye
     import { appendFile } from 'node:fs/promises';
     import { join } from 'node:path';
     export default api => {
-      api.registerTool({ name: 'external_effect', description: 'Simulated external effect',
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-        async execute() {
-          await appendFile(join(api.paths.workspace, 'effects'), 'effect\\n');
-          process.exit(61);
-        }
-      });
       api.registerModel({ async complete({ messages }) {
         const result = messages.findLast(m => m.role === 'tool');
         return result ? { text: 'observed:' + result.content, toolCalls: [] } :
-          { text: '', toolCalls: [{ id: 'review-action-1', name: 'external_effect', arguments: {} }] };
+          { text: '', toolCalls: [{ id: 'review-action-1', name: 'shell', arguments: { command: "printf 'effect\\n' >> effects; kill -9 $PPID" } }] };
       }});
     };
   `);
@@ -199,46 +223,16 @@ test('a started external action becomes unknown after a crash and is not replaye
   assert.equal(await readFile(join(bot.home, 'workspace', 'effects'), 'utf8'), 'effect\n');
   const value = await bot.api('/api/events');
   const events = Array.isArray(value) ? value : value.events;
-  assert.equal(events.filter(event => event.kind === 'tool.started' && event.payload.name === 'external_effect').length, 1);
+  assert.equal(events.filter(event => event.kind === 'tool.started' && event.payload.name === 'shell').length, 1);
 });
 
-test('guardian kills a tracked shell group when the runtime exits during a tool', { timeout: 20_000 }, async t => {
-  const executionURL = pathToFileURL(join(dirname(dirname(fileURLToPath(import.meta.url))), 'defaults', 'execution', 'index.mjs')).href;
-  const command = `${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('shell-pid',String(process.pid));setInterval(()=>{},1000)"`;
-  const bot = await fixture(t, `
-    import execution from ${JSON.stringify(executionURL)};
-    import { existsSync } from 'node:fs';
-    import { join } from 'node:path';
-    export default api => {
-      execution({ ...api, registerTool(tool) {
-        if (tool.name === 'shell') {
-          const execute = tool.execute;
-          tool.execute = (args, context) => {
-            // Crash after the external process starts, even on a busy test host.
-            const crash = setInterval(() => {
-              if (existsSync(join(api.paths.workspace, 'shell-pid'))) {
-                clearInterval(crash); process.exit(64);
-              }
-            }, 50);
-            return execute(args, context);
-          };
-        }
-        api.registerTool(tool);
-      }});
-      api.registerModel({ async complete({ messages }) {
-        return messages.some(m => m.role === 'tool') ? { text: 'shell recovery complete', toolCalls: [] } :
-          { text: '', toolCalls: [{ id: 'shell-review-action', name: 'shell', arguments: { command: ${JSON.stringify(command)} } }] };
-      }});
-    };
-  `);
-  await bot.send('start shell then crash runtime');
-  await until(() => exists(join(bot.home, 'workspace', 'shell-pid')), 'shell subprocess to start');
-  const pid = Number(await readFile(join(bot.home, 'workspace', 'shell-pid'), 'utf8'));
-  t.after(() => { try { process.kill(pid, 'SIGKILL'); } catch {} });
-  await bot.reply('shell recovery complete');
-  await until(() => {
-    try { process.kill(pid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
-  }, 'shell subprocess to be terminated by guardian', 5000);
+test('guardian kills a tracked shell group when the controller exits during a tool',{timeout:20000},async t=>{
+  const command=`${JSON.stringify(process.execPath)} -e "require('node:fs').writeFileSync('shell-pid',String(process.pid));setInterval(()=>{},1000)"`;
+  const bot=await fixture(t,`export default api=>api.registerModel({async complete({messages}){return messages.some(m=>m.role==='tool')?{text:'shell recovery complete',toolCalls:[]}:{text:'',toolCalls:[{id:'owned-shell-action',name:'shell',arguments:{command:${JSON.stringify(command)}}}]};}});`,{controllerPatch:source=>"import {writeFileSync} from 'node:fs';\nwriteFileSync(process.env.BOT_WORKSPACE+'/controller-pid',String(process.pid));\n"+source});
+  await bot.send('start shell then crash controller');await until(()=>exists(join(bot.home,'workspace','shell-pid')),'shell subprocess to start');
+  const pid=Number(await readFile(join(bot.home,'workspace','shell-pid'),'utf8')),controllerPid=Number(await readFile(join(bot.home,'workspace','controller-pid'),'utf8'));
+  t.after(()=>{try{process.kill(pid,'SIGKILL');}catch{}});process.kill(controllerPid,'SIGKILL');
+  await bot.reply('shell recovery complete');await until(()=>{try{process.kill(pid,0);return false;}catch(error){return error.code==='ESRCH';}},'tracked shell cleanup',5000);
 });
 
 test('idle does not call the model, and temporary model failures retain the event for retry', { timeout: 20_000 }, async t => {
@@ -287,10 +281,9 @@ test('a delayed retry cannot be overtaken by a later input in the same conversat
 test('temporary model failure during context preparation retries without restarting the runtime', { timeout: 20_000 }, async t => {
   const bot = await fixture(t, `
     export default api => {
-      let failed = false;
       api.registerModel({ async complete() {
-        if (!failed) {
-          failed = true;
+        if (!await api.state.get('contextFailed',false)) {
+          await api.state.set('contextFailed',true);
           throw Object.assign(new Error('summary provider temporarily unavailable'), { retryable: true });
         }
         return { text: 'context recovered', toolCalls: [] };
@@ -305,26 +298,10 @@ test('temporary model failure during context preparation retries without restart
   await bot.reply('context recovered');
 });
 
-test('a crash after recording the final response does not repeat the completed input', { timeout: 20_000 }, async t => {
-  const bot = await fixture(t, `
-    export default api => {
-      api.registerModel({ async complete({ messages }) {
-        return { text: 'done:' + messages.findLast(m => m.role === 'user').content, toolCalls: [] };
-      }});
-      api.on('afterTurn', async () => {
-        if (!await api.state.get('crashed', false)) {
-          await api.state.set('crashed', true);
-          process.exit(63);
-        }
-      });
-    };
-  `);
-  await bot.send('first');
-  await bot.reply('done:first');
-  await bot.send('second');
-  await bot.reply('done:second');
-  const replies = messagesOf(await bot.api('/api/messages')).filter(message => message.role === 'assistant').map(message => message.content);
-  assert.deepEqual(replies, ['done:first', 'done:second']);
+test('a controller crash after committing the final response does not repeat completed input',{timeout:20000},async t=>{
+  const bot=await fixture(t,`export default api=>api.registerModel({async complete({messages}){return {text:'done:'+messages.findLast(m=>m.role==='user').content,toolCalls:[]};}});`,{controllerPatch:source=>"import {existsSync,writeFileSync} from 'node:fs';\n"+source.replace("committed=true;}\n        else await rpc('append'", "committed=true;if(!existsSync(process.env.BOT_WORKSPACE+'/committed-crash')){writeFileSync(process.env.BOT_WORKSPACE+'/committed-crash','yes');process.exit(63);}}\n        else await rpc('append'")});
+  await bot.send('first');await bot.reply('done:first');await bot.send('second');await bot.reply('done:second');
+  assert.deepEqual(messagesOf(await bot.api('/api/messages')).filter(m=>m.role==='assistant').map(m=>m.content),['done:first','done:second']);
 });
 
 test('editable draft config cannot change the protected core or watchdog limits', { timeout: 20_000 }, async t => {
@@ -350,7 +327,8 @@ test('editable draft config cannot change the protected core or watchdog limits'
   assert.deepEqual(candidate.runtime, original.runtime);
 });
 
-test('protected runtime can edit drafts but cannot write core, journal control, or active modules', { timeout: 20_000 }, async t => {
+test('protected runtime can edit apps but cannot write core, journal control, or saved controller dependencies', { timeout: 20_000 }, async t => {
+  if (!await sandboxAvailable()) { t.skip('OS sandbox is not installed'); return; }
   const coreProbe = join(dirname(dirname(fileURLToPath(import.meta.url))), 'src', `.recovery-review-${process.pid}`);
   t.after(() => rm(coreProbe, { force: true }));
   const bot = await fixture(t, `
@@ -376,13 +354,13 @@ test('protected runtime can edit drafts but cannot write core, journal control, 
         } catch (error) { result.controlRead = error.code; }
         if (process.platform === 'darwin') {
           // Signal zero checks permission without delivering a signal to the guardian.
-          try { process.kill(process.ppid, 0); result.guardianSignal = 'allowed'; }
+          try { process.kill(api.config.guardianPid, 0); result.guardianSignal = 'allowed'; }
           catch (error) { result.guardianSignal = error.code; }
         }
         return { text: 'protection:' + JSON.stringify(result), toolCalls: [] };
       }});
     };
-  `, { protected: true, moduleConfig: { coreProbe } });
+  `, { protected: true, moduleConfig: { coreProbe, guardianPid: process.pid } });
   await writeFile(join(bot.home, 'control', 'review-secret'), 'parent-only');
   await bot.send('probe protection');
   const reply = await bot.reply('protection:');
@@ -412,10 +390,7 @@ test('protected runtime can edit drafts but cannot write core, journal control, 
 
 for (const [name, source, reason] of [
   ['invalid import', "import './missing-entry.mjs'; export default () => {};", /missing-entry|Cannot find/],
-  ['duplicate registration', `export default api => {
-    const model = { async complete() { return { text: 'bad candidate', toolCalls: [] }; } };
-    api.registerModel(model); api.registerModel(model);
-  };`, /Only one model/]
+  ['invalid startup', `export default api => {throw new Error('Invalid fixture configuration')};`, /Invalid fixture configuration/]
 ]) {
   test(`preflight rejects ${name} while the working version keeps serving`, { timeout: 20_000 }, async t => {
     const bot = await fixture(t, workingModel, { runtime: { startupTimeoutMs: 5000, heartbeatTimeoutMs: 5000 } });
@@ -458,16 +433,9 @@ test('cancelling queued input preserves active work and cancelling active tools 
     import { appendFile } from 'node:fs/promises';
     import { join } from 'node:path';
     export default api => {
-      api.registerTool({ name: 'hanging_effect', description: 'Effect then wait',
-        inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-        async execute() {
-          await appendFile(join(api.paths.workspace, 'cancel-effects'), 'effect\\n');
-          await new Promise(() => {});
-        }
-      });
       api.registerModel({ async complete({ messages }) {
         const latest = messages.findLast(message => message.role === 'user');
-        if (latest.content === 'active cancelled input') return { text: '', toolCalls: [{ id: 'cancelled-effect', name: 'hanging_effect', arguments: {} }] };
+        if (latest.content === 'active cancelled input') return { text: '', toolCalls: [{ id: 'cancelled-effect', name: 'shell', arguments: {command: "printf 'effect\\n' >> cancel-effects; sleep 100"} }] };
         const outcome = messages.findLast(message => message.role === 'tool');
         return { text: 'next input:' + latest.content + '; outcome=' + (outcome?.content || 'none'), toolCalls: [] };
       }});
@@ -497,4 +465,88 @@ test('cancelling queued input preserves active work and cancelling active tools 
   const messages = messagesOf(await bot.api('/api/messages'));
   assert.equal(messages.filter(message => message.role === 'user' && message.content === 'active cancelled input').length, 1);
   assert.equal(messages.some(message => message.role === 'user' && message.content === 'queued cancelled input'), false);
+});
+
+test('shell sessions survive idle and turn boundaries, then stop with the supervisor', { timeout: 20_000 }, async t => {
+  const executionURL = pathToFileURL(join(dirname(dirname(fileURLToPath(import.meta.url))), 'src', 'execution.mjs')).href;
+  const bot = await fixture(t, `
+    import execution from ${JSON.stringify(executionURL)};
+    export default api => {
+
+      api.registerModel({ async complete({ messages }) {
+        const user = messages.findLast(m => m.role === 'user');
+        const later = messages.filter(m => m.id > user.id);
+        if (later.some(m => m.role === 'tool')) {
+          const result = JSON.parse(later.findLast(m => m.role === 'tool').content);
+          return { text: result.outcome === 'running' ? 'yielded session started' : 'session finished: ' + result.stdout, toolCalls: [] };
+        }
+        if (user.content === 'poll session') {
+          const previous = messages.findLast(m => m.role === 'tool' && m.toolName === 'shell');
+          return { text: '', toolCalls: [{ id: 'poll-' + user.id, name: 'shell', arguments: { sessionId: JSON.parse(previous.content).sessionId, chars: 'hello\\n' } }] };
+        }
+        return { text: '', toolCalls: [{ id: 'start-' + user.id, name: 'shell', arguments: { command: 'printf "%s" $$ > yielded-pid; read line; printf "reply:%s" "$line"', yieldTimeMs: 0 } }] };
+      }});
+    };
+  `);
+  await bot.send('start session');
+  await bot.reply('yielded session started');
+  await until(() => exists(join(bot.home, 'workspace', 'yielded-pid')), 'yielded subprocess to start');
+  const pid = Number(await readFile(join(bot.home, 'workspace', 'yielded-pid'), 'utf8'));
+  // Longer than this fixture's operation deadline: only individual tool waits are bounded.
+  await delay(2000);
+  assert.doesNotThrow(() => process.kill(pid, 0));
+  assert.equal((await bot.api('/api/status')).state, 'idle');
+  await bot.send('poll session');
+  await bot.reply('session finished: reply:hello');
+  await bot.send('start another session');
+  await until(async () => Number(await readFile(join(bot.home, 'workspace', 'yielded-pid'), 'utf8')) !== pid, 'second session to start');
+  const secondPid = Number(await readFile(join(bot.home, 'workspace', 'yielded-pid'), 'utf8'));
+  await bot.stop();
+  await until(() => {
+    try { process.kill(secondPid, 0); return false; } catch (error) { return error.code === 'ESRCH'; }
+  }, 'yielded subprocess to be terminated by guardian');
+});
+
+test('chat credentials survive service restart while operator credentials rotate and remain restricted', { timeout: 20_000 }, async t => {
+  const bot = await fixture(t);
+  const original = JSON.parse(await readFile(join(bot.home, 'control/endpoint.json'), 'utf8'));
+  await bot.stop();
+  const next = await bot.launch();
+  assert.equal(next.uiToken, original.uiToken);
+  assert.notEqual(next.token, original.token);
+  const request = (path, token, body) => fetch(new URL(path, next.url), {
+    method: body === undefined ? 'GET' : 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) })
+  });
+  assert.equal((await request('/api/status', original.token)).status, 401);
+  assert.equal((await request('/api/status', original.uiToken)).status, 200);
+  assert.equal((await request('/api/update', original.uiToken, {})).status, 403);
+  assert.equal((await request('/api/core-update', original.uiToken, {})).status, 403);
+  const input = { id: 'chat-across-service-restart', text: 'still connected' };
+  assert.equal((await request('/api/messages', original.uiToken, input)).status, 202);
+  assert.equal((await request('/api/messages', original.uiToken, input)).status, 202);
+  await bot.reply('reply=still connected');
+  assert.equal(messagesOf(await bot.api('/api/messages')).filter(m => m.role === 'user' && m.content === input.text).length, 1);
+});
+
+test('migrated open-chat credentials retain chat-only access, and invalid credentials fail startup cleanly', { timeout: 20_000 }, async t => {
+  const bot = await fixture(t);
+  const path = join(bot.home, 'control/chat-credentials.json');
+  const original = JSON.parse(await readFile(path, 'utf8'));
+  await bot.stop();
+  await writeFile(path, JSON.stringify({ token: 'a'.repeat(64), legacyTokens: [original.token] }));
+  const next = await bot.launch();
+  const request = (method, path) => fetch(new URL(path, next.url), {
+    method, headers: { authorization: `Bearer ${original.token}`, 'content-type': 'application/json' },
+    ...(method === 'POST' ? { body: '{}' } : {})
+  });
+  assert.equal((await request('GET', '/api/status')).status, 200);
+  assert.equal((await request('POST', '/api/update')).status, 403);
+  await bot.stop();
+  await writeFile(path, JSON.stringify({ token: 'invalid', legacyTokens: [] }));
+  await assert.rejects(bot.launch(), /Invalid persistent chat credentials/);
+  await writeFile(path, JSON.stringify(original));
+  await bot.launch();
+  assert.equal((await bot.api('/api/status')).error, null);
 });

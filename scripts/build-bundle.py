@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-"""Build on Linux, using official Node and Astral standalone Python runtimes."""
-import hashlib, json, os, platform, shutil, subprocess, sys, tarfile, tempfile, urllib.request, zipfile
+"""Build on Linux, using the official Node runtime."""
+import hashlib, json, os, platform, shutil, subprocess, sys, tarfile, tempfile, urllib.request
 from pathlib import Path, PurePosixPath
 
 NODE = '24.21.0'
-PYTHON = '3.14.0'
-UV = '0.9.18'
-TOAD = '0.6.20'
 ROOT = Path(__file__).resolve().parents[1]
 
 def download(url, path):
@@ -58,7 +55,7 @@ def main():
         bundle = temp / 'bundle'
         app = bundle / 'app'
         app.mkdir(parents=True)
-        for name in ('package.json', 'package-lock.json', 'README.md', 'src', 'defaults', 'docs', 'examples'):
+        for name in ('package.json', 'package-lock.json', 'README.md', 'src', 'apps', 'docs', 'examples'):
             source = ROOT / name
             if source.is_dir(): shutil.copytree(source, app / name)
             else: shutil.copy2(source, app / name)
@@ -77,30 +74,10 @@ def main():
         env = {**os.environ, 'PATH': f'{node.parent}:{os.environ["PATH"]}'}
         run(node, runtime / 'node/lib/node_modules/npm/bin/npm-cli.js', 'ci', '--omit=dev', '--ignore-scripts', cwd=app, env=env)
         trim_node(runtime / 'node')
-        # Install uv from a pinned, checksum-verified PyPI wheel; never run a remote shell installer.
-        with urllib.request.urlopen(f'https://pypi.org/pypi/uv/{UV}/json') as response: metadata = json.load(response)
-        wheelarch = 'x86_64' if arch == 'x64' else 'aarch64'
-        wheeltag = f'manylinux_2_17_{wheelarch}.manylinux2014_{wheelarch}.whl' if arch == 'x64' else 'manylinux_2_28_aarch64.whl'
-        wheel = next(item for item in metadata['urls'] if item['filename'].endswith(wheeltag))
-        download(wheel['url'], temp / 'uv.whl')
-        if digest(temp / 'uv.whl') != wheel['digests']['sha256']: raise RuntimeError('uv wheel checksum mismatch')
-        with zipfile.ZipFile(temp / 'uv.whl') as archive: archive.extractall(temp / 'uv')
-        uv = next(path for path in (temp / 'uv').rglob('uv') if path.is_file())
-        uv.chmod(0o755)
-        pyenv = {**env, 'UV_PYTHON_INSTALL_DIR': str(temp / 'python'), 'UV_PYTHON_BIN_DIR': str(temp / 'python-bin'), 'UV_CACHE_DIR': str(temp / 'uv-cache')}
-        run(uv, 'python', 'install', PYTHON, env=pyenv)
-        pyhome = next(path for path in (temp / 'python').iterdir() if path.name.startswith('cpython-') and path.is_dir())
-        shutil.copytree(pyhome, runtime / 'python', symlinks=True)
-        python = runtime / 'python/bin/python3'
-        run(uv, 'pip', 'install', '--python', python, '--target', runtime / 'toad', f'batrachian-toad=={TOAD}', env=pyenv)
-        (bundle / 'bin').mkdir()
-        (bundle / 'bin/toad').write_text('#!/bin/sh\nset -eu\nBUNDLE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)\nexport PYTHONPATH="$BUNDLE_ROOT/runtime/toad"\nexport PYTHONNOUSERSITE=1\nexec "$BUNDLE_ROOT/runtime/python/bin/python3" -m toad "$@"\n')
-        (bundle / 'bin/toad').chmod(0o755)
         version = json.loads((app / 'package.json').read_text())['version']
-        (bundle / 'bundle.json').write_text(json.dumps({'format': 1, 'repository': 'SEAN-7/bot', 'version': version, 'platform': 'linux', 'arch': arch, 'runtimes': {'node': NODE, 'python': PYTHON, 'toad': TOAD}}, indent=2) + '\n')
+        (bundle / 'bundle.json').write_text(json.dumps({'format': 1, 'repository': 'SEAN-7/bot', 'version': version, 'platform': 'linux', 'arch': arch, 'runtimes': {'node': NODE}}, indent=2) + '\n')
         run(node, '--version')
-        run(python, '--version')
-        run(bundle / 'bin/toad', '--version')
+        run(node, '--input-type=module', '-e', 'import { TuiAltScreen } from "@earendil-works/pi-tui"; if (typeof TuiAltScreen !== "function") process.exit(1)', cwd=app)
         stage = os.environ.get('BOT_BUNDLE_STAGE')
         if stage:
             stagepath = Path(stage).resolve()
@@ -112,6 +89,8 @@ def main():
         package(bundle, out, arch)
 
 def package(bundle, out, arch):
+    # Validate the actual release, including installer/core compatibility, before packaging.
+    run(bundle / "runtime/node/bin/node", "--input-type=module", "-e", 'import { validateBundle } from "./install/manage.mjs"; await validateBundle(process.cwd());', cwd=bundle)
     archivepath = out / '.payload.tar.gz'
     with tarfile.open(archivepath, 'w:gz', compresslevel=6) as archive:
         for child in sorted(bundle.iterdir()): archive.add(child, arcname=child.name)
@@ -137,9 +116,16 @@ def repack():
     bundle = Path(sys.argv[2]).resolve()
     out = Path(sys.argv[3]).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    if (bundle / 'app/package-lock.json').read_bytes() != (ROOT / 'package-lock.json').read_bytes():
+    def dependency_lock(path):
+        value = json.loads(path.read_text())
+        value.pop('version', None)
+        value.get('packages', {}).get('', {}).pop('version', None)
+        return value
+    if dependency_lock(bundle / 'app/package-lock.json') != dependency_lock(ROOT / 'package-lock.json'):
         raise SystemExit('Dependency lock changed; rebuild runtimes and production dependencies.')
-    for name in ('src', 'defaults', 'docs', 'examples'):
+    shutil.rmtree(bundle / 'app' / 'defaults', ignore_errors=True)
+    shutil.copy2(ROOT / 'package-lock.json', bundle / 'app/package-lock.json')
+    for name in ('src', 'apps', 'docs', 'examples'):
         shutil.rmtree(bundle / 'app' / name)
         shutil.copytree(ROOT / name, bundle / 'app' / name)
     shutil.copy2(ROOT / 'package.json', bundle / 'app/package.json')

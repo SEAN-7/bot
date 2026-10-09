@@ -9,7 +9,7 @@ export async function sandboxAvailable() {
   if(process.platform==='linux') {try{await exec('which',['bwrap']);return 'bwrap';}catch{return null;}}
   return null;
 }
-export async function launchRuntime({home,revision,coreRoot,unsafe=false,preflight=false}) {
+export async function launchRuntime({home,revision,coreRoot,unsafe=false,preflight=false,preflightFile}) {
   const sandbox=unsafe?null:await sandboxAvailable();
   if(!sandbox&&!unsafe) throw new Error('Protected execution requires macOS sandbox-exec or Linux bubblewrap. Install it, or explicitly use --unsafe-development for local testing.');
   const args=[join(coreRoot,'src','runtime.mjs'),home,revision,preflight?'preflight':'run'];
@@ -17,6 +17,7 @@ export async function launchRuntime({home,revision,coreRoot,unsafe=false,preflig
   const temp=join(home,'workspace','.tmp');await mkdir(temp,{recursive:true});
   const env={...process.env,TMPDIR:temp,TMP:temp,TEMP:temp,NODE_OPTIONS:'',npm_config_cache:join(home,'workspace','.cache','npm'),XDG_CACHE_HOME:join(home,'workspace','.cache')};
   delete env.BOT_CONTROL_TOKEN;
+  if(preflightFile)env.BOT_PREFLIGHT_FILE=preflightFile;else delete env.BOT_PREFLIGHT_FILE;
   if(sandbox==='seatbelt') {
     const quote=value=>JSON.stringify(value);
     const paths=await Promise.all([home,join(home,'workspace'),join(home,'drafts')].map(p=>realpath(p)));

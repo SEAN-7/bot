@@ -1,0 +1,12 @@
+{
+  "id": "demo-model",
+  "version": "1.0.0",
+  "description": "demo-model behavior application",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

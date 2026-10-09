@@ -1,0 +1,12 @@
+{
+  "id": "web-search",
+  "version": "1.0.0",
+  "description": "Search the web for source links and snippets using DuckDuckGo.",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

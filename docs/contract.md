@@ -1,54 +1,82 @@
-# Shared implementation contract (API version 1)
+# Process application contract (API 3)
 
-Node 24+, ESM JavaScript. One agent runtime child process. Parent supervisor owns durable SQLite journal, queued events, checkpoints, version switching and local HTTP control API. Core source is not editable by the agent. Default modules are copied into an editable drafts directory and versioned in candidate bundles.
+The bot has one durable conversation and one model-facing tool, `shell`. The protected supervisor owns the journal, serial event queue, process cleanup, action outcomes and installation recovery. A protected runtime supervises one replaceable controller process. No core process imports app code. There is no plugin loader, hook registration, model/context registration or tool registration API.
 
-## Module package
+## Executable apps and skills
 
-Each directory has `module.json`: `{ "id": "memory", "name": "Memory", "version": "1.0.0", "apiVersion": 1, "entry": "index.mjs" }`. Optional `acp: "acp.mjs"` names a terminal frontend protocol adapter. No implicit npm install scripts. Module installation accepts a local directory with any dependencies already bundled. Remote npm packages and marketplaces are not supported. Duplicate IDs/tools/model/context registrations fail startup. Default export is an async or sync function `(api) => { ... }`.
+An app is a directory containing `app.json`, a `SKILL.md` guide, and its ordinary executable files. For example:
 
-All modules receive the same API:
+```json
+{
+  "id": "local-time",
+  "version": "1.0.0",
+  "description": "Read the current UTC time.",
+  "command": ["python3", "main.py"],
+  "preflight": ["--preflight"]
+}
+```
 
-- `api.config`: module configuration object from `config.modules[id]` (`enabled` included).
-- `api.paths`: `{ module, workspace, drafts }`. Only workspace and drafts are OS-writable in protected mode.
-- `api.state.get(key, fallback)` / `api.state.set(key, value)` / `api.state.delete(key)`: async, JSON, parent-owned per-module state, snapshot at change boundaries.
-- `api.history()`: async durable conversation array of `{id, role:'user'|'assistant'|'tool'|'context', content:string, toolCalls?, toolCallId?, toolName?, isError?, timestamp, metadata?}`. Includes unsummarized history. Does not include invisible core audit records.
-- `api.enqueue({ id?, text, metadata? })`: async idempotent wake-up; plugin provenance assigned by core. Scheduler uses a stable ID to avoid repeated delivery. Never calls a model directly.
-- `api.registerTool({ name, description, inputSchema, execute(args, context) })`; execute returns JSON or text. Context `{signal, callId}`. Tool schema is JSON Schema. Runtime validates with Ajv. All calls are journaled before execution, all results after. Never automatically retry a started tool with unknown outcome.
-- `api.registerModel({ complete(request), listModels?() })`: exactly one enabled registration. Request `{messages, tools, settings, signal}`; messages as history above; tools `{name,description,inputSchema}`. Result `{text:string, toolCalls:[{id,name,arguments}], usage?, metadata?}`. `metadata` may preserve opaque provider-native messages for faithful replay.
-- A model may also expose `describe(settings)` returning `{contextWindow, maxOutputTokens}`. The context module uses those limits with an approximate characters/4 estimate and output headroom; `maxInputTokens` or `maxInputChars` overrides the compaction threshold. It preserves the latest user request and complete tool groups and reports a blocked error when the retained current turn exceeds the estimated input budget.
-- `api.registerContext(async ({messages, tools, settings, model, signal}) => ({messages}))`: zero/one active context manager. With none, use full history. `model.complete` available for summarization, not tool execution.
-- `api.on('beforeModel', async ({messages, settings, signal}) => [{content, key?}])`: context contributions appended to durable history in module registration order. A stable `key` means insert only once (e.g. a memory revision). Contributions are data, never developer instructions.
-- `api.on('afterTurn', async ({signal}) => {})`, `api.on('tick', async ({signal}) => {})`, `api.on('start', async ({signal}) => {})`, `api.on('stop', async () => {})`: notification hooks, serialized by runtime. Return values ignored. No timers or servers in module factories. Tick runs only while idle, no automatic model call. Catching module errors must not swallow activation failures.
-- `api.log(message)`: diagnostics to parent.
-- `api.trackProcess(pid)` / `api.releaseProcess(pid)`: register and release a child process for cleanup after a runtime interruption. Execution modules must await registration before allowing work to continue.
-- `api.proposeUpdate()`: stage the current drafts as a new module bundle, switch AFTER current event/turn settles, trial and roll back on failure. Exposed as a tool by the execution module. It cannot update core.
+The command is an argv array, executed without a shell from the app directory. `node` resolves to the installed Node binary; other executables use the inherited PATH. The runtime must already provide any interpreter or binary an app needs. An app may define any CLI; JavaScript exports are not a core interface. The bundled JavaScript apps optionally share their own `_lib` helpers. `bot-app APP [ARGS...]` launches the configured executable and forwards stdin/stdout/stderr and exit status. `bot-app --help` lists apps and guides. Read the guide before use.
 
-## Default modules
+Programs live in `drafts/apps/ID` (the historical directory name). Enable core-bridge access with `config.apps[ID].enabled=true` in drafts/config.json. Ordinary invocations use these editable files immediately; no apply step is required. Existing processes use their loaded code until restarted. The running controller uses a saved copy under `revisions/REV/apps`. Workspace scripts and third-party tools can also run directly without packaging. Controller snapshots cannot contain symlinks. Legacy `module.json` and JavaScript `entry` manifests are unsupported.
 
-`defaults/pi-model`: uses installed @earendil-works/pi-ai API, no agent loop; a real provider requires an explicit provider and model; metadata preserves provider assistant response. Map memory data to a user data block, never system prompt. Authentication comes from the launching terminal environment; setup does not write credentials.
+`preflight` is an optional check the author can run. It is mandatory only when declared by a controller being replaced, and is an argument array appended to its command. It must exit zero after validating its package and configuration without external actions. It runs with a disposable state snapshot and, in protected mode, denied network and filesystem writes. `BOT_PREFLIGHT_FILE` points to that snapshot. `botctl` handles configuration/state inspection locally in this mode and rejects publication, enqueue and updates. State edits affect only the validation process. Do not call providers during validation.
 
-`defaults/context`: append-only normal requests, snapshot summary at configurable threshold; preserve full history in journal, retain recent complete message/tool groups; threshold configurable. Store `{summary, throughId}` via api.state. Do not split tool-call/result blocks. Subsequent requests should reuse exact summary prefix until next compaction. Model errors propagate for retry, no destructive history edits.
+## Core CLI
 
-`defaults/memory`: Hermes-like bounded USER/notes JSON state; tools `memory_get`, `memory_update`, `history_search`; beforeModel contributes stable snapshot once, later updates append new revision. No automatic perpetual learning agenda.
+Within supervised execution, `botctl APP OPERATION '[JSON]'` (or `--stdin`) requests a durable primitive. Any language can invoke it. Bundled apps also have an optional HTTP client for the same protocol. The bridge is loopback-only, uses an ephemeral runtime credential, and has no operator or human-input operation.
 
-`defaults/scheduler`: tools `schedule_create`, `schedule_list`, `schedule_cancel`. Durable state, one-shot/recurring ISO due times; `tick` uses stable event IDs and records delivered schedule slot. Single queue handles all wakes.
+| Operation | Arguments | Result |
+| --- | --- | --- |
+| `config` | `{}` | Enabled app settings |
+| `history` | `{}` | Durable history for the current active event |
+| `state.get` | `{key,fallback?}` | Stored value or fallback |
+| `state.set` | `{key,value}` | Stores a JSON value |
+| `state.delete` | `{key}` | Removes the value |
+| `publish` | `{content}` | Durably publishes from an active action |
+| `enqueue` | `{event:{id?,text,metadata?}}` | Wakes the same conversation with app provenance |
+| `update.request` | `{}` | Requests controller replacement after the active turn |
 
-`defaults/execution`: tools `shell` (bounded output/time, workspace cwd, process descendants under same OS sandbox), `module_apply` via api.proposeUpdate. Files edited using shell. Report unknown outcome for cancellation; core handles timeout uncertainty. No spawning detached jobs.
+Ordinary app settings and enabled flags are read from drafts/config.json on each bridge request; the running controller keeps its saved startup settings. State defaults to namespace `app:ID`. The operator migration sets `stateNamespace` to retain the old namespaces without rewriting state. Apps share the bot execution authority; the app ID establishes state and event provenance, not an isolation boundary between mutually hostile apps. Apps never receive the operator token. Human messages come through the separately authenticated frontend, never through an app operation.
 
-## Default chat
+`BOT_APPS`, `BOT_WORKSPACE`, `BOT_DRAFTS`, `BOT_NODE`, `BOT_CORE_CLI`, `BOT_APP_URL` and `BOT_APP_TOKEN` describe the active environment. `BOT_CALL_ID` identifies the active shell action. Communication apps use it to record delivery receipts in their own storage; the generic publish primitive remains available for other applications. Send in a separate shell call and await completion. Durable receipts survive a later crash; an unknown external action must be inspected before retrying.
 
-`defaults/chat/module.json` declares `acp: "acp.mjs"`; `index.mjs` is a no-op runtime registration function. The CLI launches unmodified Toad with a fixed core bridge command. That bridge runs the active ACP module under the runtime OS sandbox with a scoped chat token. The frontend does not receive the operator token.
+## Controller process protocol 1
 
-The adapter supports ACP version 1 initialization, creation/loading of the same durable bot conversation, replay of user/assistant/tool history, tool progress, and spontaneous replies from queued work. Prompts accept text content only. Client-provided MCP servers, filesystem operations, and model configuration are not supported. Cancellation requests the supervisor to stop the current input and worker; interrupted tools can have unknown external effects and are never automatically replayed. Blocked or failed turns return an ACP error and preserve the accepted input in the journal.
+`config.controller` selects one enabled app. The runtime launches its command with `--serve` and exchanges newline-delimited JSON on stdin/stdout, bounded to 20 MB. Stdout is exclusively protocol data; diagnostics go to stderr. The controller may use any implementation language. Core requests and supervisor RPC arguments remain bounded separately.
 
-The local API exposes `/api/status`, `/api/messages` GET/POST JSON `{text, id?}`, `/api/events?after=N`, `/api/recover`, and operator-only update operations. Messages GET returns `{messages}`; modules GET returns `{modules}`. The server binds only to 127.0.0.1 and requires bearer authentication.
+The core sends `{type:"init",protocol:1,config,tools}`. `tools` contains exactly the fixed shell schema. The controller replies `{type:"ready",protocol:1}` only after validating its configuration. The core then sends `{type:"turn",event}` or `{type:"tick"}`, one at a time. Idle ticks perform app work; they do not inherently call a model. `{type:"stop"}` asks the controller to stop. Core shutdown kills all owned descendants and separately tracked shell process groups.
 
-## Config / CLI / exported core functions
+A controller requests `{type:"request",id,method,args}`; the core replies `{type:"result",id,result}` or `{type:"result",id,error:{message,retryable,blocked}}`.
 
-Home defaults to `BOT_HOME` or `.bot` under current cwd. Workspace `<home>/workspace`, drafts `<home>/drafts`, parent-only `<home>/control`, revision directories `<home>/revisions/<id>` containing `plugins/` and `config.json`. Config `{apiVersion:1, modules:{id:{enabled:true,...}}, model:{provider,model}, runtime:{port:4317, startupTimeoutMs:10000, heartbeatTimeoutMs:10000, operationTimeoutMs:120000, trialMs:3000, maxRestarts:2, retryMs:3000, sandbox:'auto'}}`. Never auto-enable optional modules on upgrade.
+| Method | Arguments | Guarantee |
+| --- | --- | --- |
+| `history` | `{}` | Returns journal history, scoped to the active event |
+| `contribute` | `{module:APP,key,content}` | Journals bounded, idempotent reference data from an enabled app |
+| `append` | `{message}` | Allows assistant/context records during an active event; rejects forged user/tool records |
+| `action.run` | `{eventId,call:{id,name,arguments}}` | Journals action start and result; executes only validated `shell` requests, one at a time |
+| `turn.commit` | `{eventId,message}` | Atomically records the final response and completes the active event |
 
-The core exports `initialize(home, config, {defaultsDir?})` from `src/releases.mjs`, `startSupervisor({home, port?, unsafe?:false})` from `src/supervisor.mjs` returning `{url, token, stop()}`, `installModule(home, source, {enable:true})`, `stageDrafts(home)` and `rollback(home)` from releases. Online installs must be coordinated by supervisor: POST `/api/update` triggers module stage at next turn boundary. CLI may install to drafts while running, then POST `/api/update` (root-owned token read by operator CLI); offline install stages before next boot.
+The controller sends `{type:"progress",phase}` as work changes, `{type:"turnDone",eventId}` after a successful commit, `{type:"turnError",eventId,error,retryable?,blocked?}` before commit on a recoverable provider error, `{type:"tickDone"}` after idle work, or `{type:"fatal",error}` on failure. The core validates event identity, serialization and commit ordering. It never automatically re-executes a started action after interruption.
 
-`src/cli.mjs` implements setup/start/serve/chat/acp/status/modules install/apply/recover/demo. Setup feature choices + provider/model, default all starter modules; choosing real provider requires credentials via environment. Demo uses the deterministic `defaults/demo-model` through the same module API. Setup selects demo unless a real provider is explicitly chosen. No paid calls during tests or setup. `demo` creates isolated .bot-demo unless --home supplied and launches deterministic model. No auto service installation.
+The bundled `agent` app owns the agent loop and strategy. Its settings select `modelApp`, `contextApp`, `contributors`, `projections`, `tickApps`, `services` and `maxSteps`. It calls ordinary apps for model completion/description, context preparation, memory/skill contributions, chat projection and scheduling. `services` lists background apps whose `watch` command the controller supervises, including while a turn is active. These command names are conventions of that controller, not core interfaces. Replace the controller to change that policy.
 
-Core update handling is operator-only `core` paths (no plugin RPC); preserve previous tested executable root and API version, verify candidate health before switching. Implementation/docs must distinguish local development mode from enforced core protection. macOS sandbox-exec or Linux bwrap protects core/control/revisions from runtime writes; if sandbox unavailable fail closed unless explicit --unsafe-development. Parent is never exposed through model tools.
+Communication apps own their message storage and delivery state in workspace.
+Terminal chat and Telegram are independent conversations. Their incoming messages
+generate reference notifications in the core's durable working queue. The bot
+uses the corresponding app's read/send commands to communicate. Legacy journal
+messages remain available for recovery and are copied into terminal-chat storage.
+
+## Activation and recovery
+
+Ordinary app edits, installations and upgrades take effect on the next invocation. There is no mandatory preflight, activation, probation or controller restart. An app failure is handled at its invocation; tests are chosen by the author. Already running programs must be restarted to load edits.
+
+Run `bot-app updates apply '{}'` only to replace the running controller or its startup configuration. Controller replacements stage at a turn boundary, check that controller and run on probation through genuine work. The previous controller revision and state checkpoint remain available. Recovery preserves independently edited ordinary app files. Applying an update does not enqueue a follow-up model turn; arrange a genuine work continuation when needed. Operator core updates use startup/heartbeat validation without injecting messages or calling a model.
+
+The core is operator-owned. `bot apps install DIR` installs an app for its next invocation (controller installations queue controller replacement); there is no module installation command. `bot apply`, `bot recover` and `bot core install DIR` are operator commands for source installations. Managed Linux updates use the administrator installer, retain the old executable, and preserve conversation and credentials. API 2 to API 3 migration verifies exact legacy package hashes before replacement, retains all drafts and the prior contract, and preserves state namespaces. Edited or custom legacy packages require explicit conversion and are never overwritten automatically.
+
+Cross-API recovery requires the retained matching executable. The current runtime rejects incompatible recovery before stopping a healthy worker. The managed installer restores the old executable and exact draft backup if its candidate fails. State rollback cannot undo external effects. Unknown actions remain durably recorded.
+
+## Protection
+
+The parent supervisor owns control files and the journal. The runtime and all app descendants run behind macOS Seatbelt or Linux Bubblewrap when enabled; controller revisions and core are read-only; ordinary app programs are editable. Source mode fails closed without a sandbox unless `--no-sandbox` is explicitly selected. Managed Linux preserves the installation's selected sandbox mode. Without OS isolation, apps share the bot account's files and processes; root-owned installed core files remain outside that account's editing authority.

@@ -4,11 +4,28 @@ import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Ajv from 'ajv';
-import memory from '../defaults/memory/index.mjs';
-import scheduler from '../defaults/scheduler/index.mjs';
-import execution from '../defaults/execution/index.mjs';
-import context, { messageGroups } from '../defaults/context/index.mjs';
-import piModel, { classifyModelError } from '../defaults/pi-model/index.mjs';
+import { contribute } from '../apps/memory/behavior.mjs';
+const memoryModule=api=>api.on('beforeModel',()=>contribute(api));
+import { commands as memoryCommands } from '../apps/memory/commands.mjs';
+import { tick } from '../apps/scheduler/behavior.mjs';
+const schedulerModule=api=>api.on('tick',input=>tick(api,input));
+import { commands as schedulerCommands } from '../apps/scheduler/commands.mjs';
+import shellExecution from '../src/execution.mjs';
+import { commands as moduleCommands } from '../apps/updates/commands.mjs';
+import { createContext, messageGroups } from '../apps/context/behavior.mjs';
+const contextModule=api=>api.registerContext(createContext(api));
+import { commands as contextCommands } from '../apps/context/commands.mjs';
+import { createModel, classifyModelError } from '../apps/pi-model/behavior.mjs';
+const piModel=(api,collection)=>api.registerModel(createModel(api.config,collection));
+
+// Exercise the migrated command bodies against the same durable-state fixtures.
+function installCommands(api, entries, names) {
+  for(const [name, entry] of Object.entries(entries)) api.registerCommand({ ...entry, name: names[name] });
+}
+function memory(api) { memoryModule(api); installCommands(api,memoryCommands(api),{get:'memory_get',update:'memory_update',search:'history_search'}); }
+function scheduler(api) { schedulerModule(api); installCommands(api,schedulerCommands(api),{create:'schedule_create',list:'schedule_list',cancel:'schedule_cancel'}); }
+function context(api) { contextModule(api); installCommands(api,contextCommands(api),{compact:'compact_conversation'}); }
+function execution(api) { api.registerCommand(shellExecution(api)); installCommands(api,moduleCommands(api),{apply:'module_apply'}); }
 
 function harness(config = {}, state = new Map()) {
   const tools = new Map();
@@ -16,14 +33,14 @@ function harness(config = {}, state = new Map()) {
   const events = new Map();
   const enqueueCalls = [];
   const processes = new Set();
-  const ajv = new Ajv();
+  const ajv = new Ajv({strict:false});
   const api = {
     config, paths: { workspace: tmpdir(), drafts: join(tmpdir(), 'drafts') },
     state: { get: async (key, fallback) => structuredClone(state.has(key) ? state.get(key) : fallback),
       set: async (key, value) => { state.set(key, structuredClone(value)); }, delete: async key => state.delete(key) },
     history: async () => [],
     enqueue: async event => { enqueueCalls.push(event); events.set(event.id, event); },
-    registerTool: tool => { tools.set(tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }); },
+    registerCommand: tool => { tools.set(tool.name, { ...tool, validate: ajv.compile(tool.inputSchema) }); },
     registerContext: manager => { api.context = manager; },
     registerModel: model => { api.model = model; },
     on: (name, fn) => hooks.set(name, fn), log: () => {}, proposeUpdate: async () => ({ staged: true }),
@@ -309,18 +326,6 @@ test('shell runs from workspace, bounds bytes, reports failure, and releases tra
   assert.deepEqual(await h.call('module_apply'), { staged: true });
 });
 
-test('execution publishes stable environment reference with editable paths and module workflow', async () => {
-  const h = harness();
-  execution(h.api);
-  const first = await h.hooks.get('beforeModel')({});
-  const next = await h.hooks.get('beforeModel')({});
-  assert.deepEqual(first, next);
-  assert.match(first[0].content, /BOT-API\.md/);
-  assert.ok(first[0].content.includes(h.api.paths.drafts));
-  assert.match(first[0].content, /module\.json/);
-  assert.match(first[0].content, /module_apply/);
-});
-
 test('shell timeout and abort kill descendants and report uncertain effects', async t => {
   const directory = await mkdtemp(join(tmpdir(), 'bot-module-kill-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -381,4 +386,123 @@ test('Pi describes the selected model without making a provider call', () => {
   });
   assert.deepEqual(h.api.model.describe({}), { contextWindow: 4000, maxOutputTokens: 1000 });
   assert.equal(h.api.model.describe({ model: 'large' }).contextWindow, 100000);
+});
+
+async function shellOutput(h, result) {
+  const deadline = Date.now() + 5000;
+  while (result.outcome === 'running' && !result.stdout && Date.now() < deadline) {
+    result = await h.call('shell', { sessionId: result.sessionId, yieldTimeMs: 100 });
+  }
+  return result;
+}
+
+test('shell yields a supervised session, polls incremental output, and accepts stdin and EOF', async t => {
+  const h = harness();
+  execution(h.api);
+  t.after(() => h.hooks.get('stop')());
+  const first = await shellOutput(h, await h.call('shell', { command: 'printf first; read line; printf "second:%s" "$line"; cat; printf done', yieldTimeMs: 30 }));
+  assert.equal(first.outcome, 'running');
+  assert.equal(first.stdout, 'first');
+  assert.equal(h.processes.size, 1);
+  const idle = await h.call('shell', { sessionId: first.sessionId, yieldTimeMs: 0 });
+  assert.equal(idle.stdout, '');
+  assert.equal(idle.sessionId, first.sessionId);
+  const second = await shellOutput(h, await h.call('shell', { sessionId: first.sessionId, chars: 'hello\n', yieldTimeMs: 30 }));
+  assert.equal(second.outcome, 'running');
+  assert.equal(second.stdout, 'second:hello');
+  const final = await h.call('shell', { sessionId: first.sessionId, chars: 'tail', endInput: true });
+  assert.equal(final.outcome, 'completed');
+  assert.equal(final.stdout, 'taildone');
+  assert.equal(final.exitCode, 0);
+  assert.equal(h.processes.size, 0);
+  await assert.rejects(h.call('shell', { sessionId: first.sessionId }), /not found/);
+});
+
+test('yielding never kills commands and completion remains available until polled', async t => {
+  const h = harness();
+  execution(h.api);
+  t.after(() => h.hooks.get('stop')());
+  const first = await h.call('shell', { command: 'sleep 0.15; printf finished; exit 9', yieldTimeMs: 10 });
+  assert.equal(first.outcome, 'running');
+  assert.equal(first.timedOut, false);
+  await new Promise(resolve => setTimeout(resolve, 250));
+  const final = await h.call('shell', { sessionId: first.sessionId, yieldTimeMs: 0 });
+  assert.equal(final.exitCode, 9);
+  assert.equal(final.stdout, 'finished');
+  assert.equal(final.timedOut, false);
+  assert.equal(final.outcome, 'completed');
+  assert.equal(h.tools.get('shell').validate({ command: 'true', timeoutMs: 180_000 }), true);
+});
+
+test('yielded sessions bound unread output, reset the output budget on polling, and stop descendants', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'bot-session-kill-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const h = harness({ outputBytes: 1024 });
+  h.api.paths.workspace = directory;
+  execution(h.api);
+  t.after(() => h.hooks.get('stop')());
+  const first = await shellOutput(h, await h.call('shell', { command: 'yes x | head -c 4000; read line; printf fresh; (sleep 0.4; touch late) & wait', yieldTimeMs: 100 }));
+  assert.equal(first.truncated, true);
+  assert.equal(Buffer.byteLength(first.stdout), 1024);
+  const next = await shellOutput(h, await h.call('shell', { sessionId: first.sessionId, chars: '\n', yieldTimeMs: 30 }));
+  assert.equal(next.stdout, 'fresh');
+  assert.equal(next.truncated, false);
+  const stopped = await h.call('shell', { sessionId: first.sessionId, terminate: true });
+  assert.equal(stopped.cancelled, true);
+  assert.equal(stopped.outcome, 'unknown');
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await assert.rejects(access(join(directory, 'late')));
+  assert.equal(h.processes.size, 0);
+});
+
+test('explicit timeout, polling cancellation, and module stop clean up yielded sessions', async () => {
+  const h = harness({ maxSessions: 1 });
+  execution(h.api);
+  const first = await h.call('shell', { command: 'sleep 10', timeoutMs: 40, yieldTimeMs: 0 });
+  const timed = await h.call('shell', { sessionId: first.sessionId });
+  assert.equal(timed.timedOut, true);
+  assert.equal(timed.outcome, 'unknown');
+  const second = await h.call('shell', { command: 'sleep 10', yieldTimeMs: 30 });
+  await assert.rejects(h.call('shell', { command: 'true' }), /session limit/);
+  const controller = new AbortController();
+  const pending = h.call('shell', { sessionId: second.sessionId }, controller.signal);
+  controller.abort();
+  assert.equal((await pending).cancelled, true);
+  const third = await h.call('shell', { command: 'sleep 10', yieldTimeMs: 30 });
+  await h.hooks.get('stop')();
+  assert.equal(h.processes.size, 0);
+  await assert.rejects(h.call('shell', { sessionId: third.sessionId }), /not found/);
+});
+
+test('input sent immediately after yield cannot bypass supervisor registration', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'bot-session-gate-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const h = harness();
+  h.api.paths.workspace = directory;
+  let approve;
+  h.api.trackProcess = async pid => { await new Promise(resolve => { approve = resolve; }); h.processes.add(pid); };
+  execution(h.api);
+  t.after(() => h.hooks.get('stop')());
+  const first = await h.call('shell', { command: 'touch started; read line; printf "%s" "$line"', yieldTimeMs: 0 });
+  const input = h.call('shell', { sessionId: first.sessionId, chars: 'hello\n' });
+  while (!approve) await new Promise(resolve => setImmediate(resolve));
+  await assert.rejects(access(join(directory, 'started')));
+  approve();
+  const final = await input;
+  assert.equal(final.outcome, 'completed');
+  assert.equal(final.stdout, 'hello');
+  assert.equal(h.processes.size, 0);
+});
+
+test('incremental shell output preserves UTF-8 characters split between polls', async t => {
+  const h = harness();
+  execution(h.api);
+  t.after(() => h.hooks.get('stop')());
+  const command = `${JSON.stringify(process.execPath)} -e 'process.stdout.write(Buffer.from([0xf0,0x9f])); process.stdin.once("data",()=>{process.stdout.write(Buffer.from([0x9a,0x80]));process.exit(0)});'`;
+  const first = await h.call('shell', { command, yieldTimeMs: 500 });
+  assert.equal(first.outcome, 'running');
+  assert.equal(first.stdout, '');
+  const final = await h.call('shell', { sessionId: first.sessionId, chars: '\n' });
+  assert.equal(final.outcome, 'completed');
+  assert.equal(final.stdout, '🚀');
 });

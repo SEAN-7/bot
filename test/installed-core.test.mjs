@@ -1,3 +1,4 @@
+import { fixtureApps, fixtureSource } from './process-fixtures.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm, access, symlink, realpath } from 'node:fs/promises';
@@ -12,9 +13,9 @@ async function fixture(t) {
   t.after(() => rm(directory, {recursive:true,force:true}));
   const home = join(directory,'home'), defaultsDir = join(directory,'defaults');
   await mkdir(join(defaultsDir,'test-model'),{recursive:true});
-  await writeFile(join(defaultsDir,'test-model/module.json'),JSON.stringify({id:'test-model',apiVersion:1,version:'1',entry:'index.mjs'}));
+  await writeFile(join(defaultsDir,'test-model/module.json'),JSON.stringify({id:'test-model',apiVersion: 2,version:'1',entry:'index.mjs'}));
   await writeFile(join(defaultsDir,'test-model/index.mjs'),model('original'));
-  await initialize(home,{coreRoot:join(directory,'ignored-untrusted-core'),modules:{'test-model':{enabled:true}},runtime:{port:0,trialMs:50,retryMs:100}}, {defaultsDir,fixedCoreRoot:CORE_ROOT});
+  await initialize(home,fixtureSource({coreRoot:join(directory,'ignored-untrusted-core'),modules:{'test-model':{enabled:true}},runtime:{port:0,trialMs:50,retryMs:100}}), {appsDir:await fixtureApps(defaultsDir),fixedCoreRoot:CORE_ROOT});
   return {directory,home};
 }
 async function until(check) {
@@ -56,7 +57,7 @@ test('fixed supervisor ignores writable core paths during startup and plugin pre
   const denied=await request('/api/core-update',{source:malicious});
   assert.equal(denied.status,403);
   assert.match((await denied.json()).error,/bot update/);
-  await writeFile(join(home,'drafts/test-model/index.mjs'),model('updated plugin'));
+  await writeFile(join(home,'drafts/apps/test-model/index.mjs'),model('updated plugin'));
   const staged=await request('/api/update',{});
   assert.equal(staged.status,202);
   const revision=(await staged.json()).revision;

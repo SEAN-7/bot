@@ -17,7 +17,7 @@ async function fixture(t) {
 }
 for (const [name, path, arg, pattern] of [
   ['CLI', 'src/cli.mjs', '--help', /Usage:|setup\s+Create/],
-  ['installer manager', 'install/manage.mjs', 'help', /Usage: bot install\|update/]
+  ['installer manager', 'install/manage.mjs', 'help', /Usage: bot COMMAND/]
 ]) {
   test(`${name} executes when invoked through the installed current directory symlink`, async t => {
     const { current } = await fixture(t);

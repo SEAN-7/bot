@@ -36,3 +36,17 @@ test('resume makes blocked pending input available after an operator restart', a
   assert.equal(store.next().id, 'blocked');
   assert.equal(store.history().filter(message => message.role === 'user').length, 1);
 });
+
+test('clean restart still reports unfinished tool outcomes without repeating recovery', async t => {
+  const home = await mkdtemp(join(tmpdir(), 'bot-store-interrupted-'));
+  const store = new Store(home);
+  t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }); });
+  store.append({ role: 'assistant', content: '', toolCalls: [{ id: 'unfinished', name: 'shell', arguments: {} }] });
+  store.startAction('unfinished', 'input', 'shell', {});
+  assert.equal(store.recover(null)[0].outcome, 'unknown');
+  const report = store.history().find(message => message.metadata?.recovery);
+  assert.match(report.content, /Interrupted actions reconciled/);
+  assert.match(report.content, /unknown/);
+  assert.deepEqual(store.recover(null), []);
+  assert.equal(store.history().filter(message => message.metadata?.recovery).length, 1);
+});

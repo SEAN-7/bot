@@ -3,6 +3,9 @@
 set -eu
 manager='@APP_ROOT@/current/install/manage.mjs'
 node='@APP_ROOT@/current/runtime/node/bin/node'
+case "${1:-help}" in
+  help|--help) exec "$node" "$manager" "$@" ;;
+esac
 if [ "$(id -u)" -eq 0 ]; then
   exec "$node" "$manager" "$@"
 fi

@@ -1,0 +1,4 @@
+{
+  "id": "agent", "version": "1.0.0", "description": "Replaceable conversation controller and working strategy.",
+  "command": ["node", "main.mjs"], "preflight": ["--preflight"]
+}

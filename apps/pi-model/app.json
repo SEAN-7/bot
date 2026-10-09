@@ -1,0 +1,12 @@
+{
+  "id": "pi-model",
+  "version": "1.0.0",
+  "description": "pi-model behavior application",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

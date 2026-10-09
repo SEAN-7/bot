@@ -1,0 +1,16 @@
+{
+  "id": "chat",
+  "version": "2.0.0",
+  "description": "Read and reply in a terminal chat conversation owned by this app.",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ],
+  "acp": [
+    "node",
+    "acp.mjs"
+  ]
+}

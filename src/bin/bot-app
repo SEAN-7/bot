@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$BOT_NODE" "$BOT_APP_LAUNCHER" "$@"

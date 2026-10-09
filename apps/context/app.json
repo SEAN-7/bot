@@ -1,0 +1,12 @@
+{
+  "id": "context",
+  "version": "1.0.0",
+  "description": "Request conversation compaction while preserving full history and the current turn.",
+  "command": [
+    "node",
+    "main.mjs"
+  ],
+  "preflight": [
+    "--preflight"
+  ]
+}

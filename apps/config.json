@@ -1,0 +1,52 @@
+{
+  "appUpdates": "direct",
+  "controller": "agent",
+  "apps": {
+    "agent": {
+      "enabled": true,
+      "modelApp": "demo-model",
+      "contextApp": "context",
+      "contributors": [
+        "memory",
+        "skills"
+      ],
+      "projections": [
+        "chat"
+      ],
+      "tickApps": [
+        "scheduler"
+      ],
+      "services": ["chat"]
+    },
+    "chat": {
+      "enabled": true
+    },
+    "telegram": {
+      "enabled": false
+    },
+    "memory": {
+      "enabled": true
+    },
+    "context": {
+      "enabled": true
+    },
+    "scheduler": {
+      "enabled": true
+    },
+    "skills": {
+      "enabled": true
+    },
+    "web-search": {
+      "enabled": true
+    },
+    "updates": {
+      "enabled": true
+    },
+    "demo-model": {
+      "enabled": true
+    },
+    "pi-model": {
+      "enabled": false
+    }
+  }
+}

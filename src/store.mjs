@@ -107,6 +107,20 @@ export class Store {
       return this.append({ role: 'tool', content: typeof result === 'string' ? result : JSON.stringify(result ?? null), toolCallId: id, toolName: action.name, isError });
     });
   }
+  publish(module, callId, content, eventId) {
+    if(typeof content!=='string'||!content.trim()||content.length>100_000)throw new Error('Invalid publication');
+    return this.transaction(()=>{
+      const action=this.db.prepare('SELECT event_id,status FROM actions WHERE id=?').get(callId);
+      if(!action||action.status!=='started'||action.event_id!==eventId)throw new Error('Publication requires an active tool action');
+      const existing=this.history().find(m=>m.role==='channel'&&m.metadata?.module===module&&m.metadata?.callId===callId);
+      if(existing) {
+        if(existing.content!==content)throw new Error('Tool action already published different content');
+        return {id:existing.id};
+      }
+      const saved=this.append({role:'channel',content,metadata:{module,callId,eventId}});
+      return {id:saved.id};
+    });
+  }
   recover(reason) {
     return this.transaction(() => {
       const unresolved = [];
@@ -122,6 +136,7 @@ export class Store {
         unresolved.push({ id:call.id, name:call.name, outcome:unknown ? 'unknown' : 'not-executed' });
       }
       this.db.prepare("UPDATE inbox SET status='pending',retry_at=0 WHERE status='processing'").run();
+      reason ||= unresolved.length ? 'Interrupted actions reconciled after supervisor restart' : null;
       if (reason) {
         this.record('runtime.recovered', { reason, unresolved });
         this.append({ role:'context', content:`Recovery report: ${reason}${unresolved.length ? '\nInterrupted actions: ' + JSON.stringify(unresolved) : ''}`, metadata:{ recovery:true } });
