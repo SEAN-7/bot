@@ -167,3 +167,39 @@ func TestValidAgentDir(t *testing.T) {
 		}
 	}
 }
+
+func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
+	h := newHarness(t, step("sleep 0.5", 100), done())
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
+	os.WriteFile(h.cfg.SettingsFile(), []byte("{"), 0o644)
+	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "done" {
+		t.Fatalf("run ended %q after settings.json broke", end)
+	}
+	if fileContains(filepath.Join(h.cfg.Home, "ERROR"), "Agent limit") {
+		t.Fatal("broken settings treated as max_agents=0")
+	}
+	time.Sleep(100 * time.Millisecond)
+	if n := strings.Count(h.logs.String(), "settings"); n != 1 {
+		t.Fatalf("settings error logged %d times", n)
+	}
+}
+
+func TestLimitedAgentResumes(t *testing.T) {
+	h := newHarness(t, matchStep("inbox/processed/task.md", "sleep 30", 100), `{"match":"-interrupted.md","text":"resumed"}`)
+	child := makeChild(t, h, "c", true)
+	h.drop(child, "task.md", "work")
+	h.start()
+	waitFor(t, "child command", func() bool { return len(h.requests()) >= 1 })
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
+	waitFor(t, "limit ERROR", func() bool { return fileContains(filepath.Join(child, "ERROR"), "Agent limit") })
+	if runs := h.runs(child); len(runs) != 1 || ended(runs[0]) {
+		t.Fatalf("held-back run was ended cleanly: %v", runs)
+	}
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
+	waitFor(t, "interrupted note", func() bool { return countNotes(child, "-interrupted.md") == 1 })
+	if records := h.waitEnds(child, 2); lastEnd(records) != "done" {
+		t.Fatalf("resumed run %v", records)
+	}
+}

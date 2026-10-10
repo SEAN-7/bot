@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
-	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
@@ -56,7 +55,10 @@ func DefaultConfig(self string) Config {
 
 // errRemoved cancels an agent whose directory disappeared, as opposed to a
 // daemon shutdown, which leaves the run unclean for crash recovery.
-var errRemoved = errors.New("agent directory removed")
+var (
+	errRemoved = errors.New("agent directory removed")
+	errLimited = errors.New("agent limit reached")
+)
 
 type daemon struct {
 	cfg       Config
@@ -66,15 +68,18 @@ type daemon struct {
 	agentName string
 	agentUID  int
 
-	mu        sync.Mutex
-	agents    map[string]*agent
-	delivered *delivered
-	limited   map[string]bool // agents held back by max_agents, already reported
-	wg        sync.WaitGroup
+	mu          sync.Mutex
+	agents      map[string]*agent
+	delivered   *delivered
+	settings    layout.Settings // last good settings.json
+	settingsErr string
+	limited     map[string]bool // agents held back by max_agents, already reported
+	wg          sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
 	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}}
+	d.settings, _ = layout.LoadSettings("")
 	var err error
 	if d.agentCred, err = osuser.Lookup(cfg.AgentUser); err != nil {
 		return err
@@ -97,7 +102,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
-	d.recover()
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
 	for {
@@ -132,7 +136,10 @@ func (d *daemon) reconcile(ctx context.Context) {
 			d.cfg.Logger.Printf("ignoring unexpected agent path %q", dir)
 		}
 	}
-	present := map[string]bool{}
+	exists, present := map[string]bool{}, map[string]bool{}
+	for _, dir := range valid {
+		exists[dir] = true
+	}
 	for _, dir := range d.admit(valid) {
 		present[dir] = true
 	}
@@ -140,7 +147,11 @@ func (d *daemon) reconcile(ctx context.Context) {
 	defer d.mu.Unlock()
 	for dir, a := range d.agents {
 		if !present[dir] {
-			a.cancel(errRemoved)
+			if exists[dir] {
+				a.cancel(errLimited) // left unclean: resumed when admitted again
+			} else {
+				a.cancel(errRemoved)
+			}
 			delete(d.agents, dir)
 		}
 	}
@@ -186,7 +197,14 @@ func validAgentDir(home, dir string) bool {
 func (d *daemon) admit(dirs []string) []string {
 	settings, err := layout.LoadSettings(d.cfg.SettingsFile())
 	if err != nil {
-		d.cfg.Logger.Printf("settings: %v", err)
+		// Keep the last good settings: a half-written file must not stop agents.
+		if msg := err.Error(); msg != d.settingsErr {
+			d.settingsErr = msg
+			d.cfg.Logger.Printf("settings.json: %v; keeping max_agents=%d", err, d.settings.MaxAgents)
+		}
+		settings = d.settings
+	} else {
+		d.settings, d.settingsErr = settings, ""
 	}
 	if len(dirs) <= settings.MaxAgents {
 		d.clearLimited(dirs)
@@ -219,30 +237,6 @@ func (d *daemon) clearLimited(dirs []string) {
 				d.fs.Remove(path)
 			}
 		}
-	}
-}
-
-// recover tells every agent whose newest run never ended that it was
-// interrupted, then marks that run ended so the note is sent once.
-func (d *daemon) recover() {
-	dirs, err := d.fs.Scan(d.cfg.Home)
-	if err != nil {
-		d.cfg.Logger.Printf("recovery scan: %v", err)
-		return
-	}
-	for _, dir := range dirs {
-		path, clean, err := journal.Latest(d.cfg.JournalDir(dir))
-		if err != nil || path == "" || clean {
-			continue
-		}
-		if err := d.writeNote(dir, "interrupted", MsgInterrupted); err != nil {
-			d.cfg.Logger.Printf("%s: interrupted note: %v", d.rel(dir), err)
-			continue
-		}
-		if err := journal.MarkInterrupted(path); err != nil {
-			d.cfg.Logger.Printf("%s: %v", d.rel(dir), err)
-		}
-		d.cfg.Logger.Printf("%s: resumed after interruption (%s)", d.rel(dir), path)
 	}
 }
 

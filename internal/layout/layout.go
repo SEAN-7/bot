@@ -35,17 +35,17 @@ type Settings struct {
 	Repository string `json:"repository"`
 }
 
-// LoadSettings reads settings.json, filling defaults for a missing file or field.
+// LoadSettings reads settings.json, filling defaults for a missing file or
+// field. On error it still returns usable defaults alongside the error.
 func LoadSettings(path string) (Settings, error) {
 	var s Settings
 	data, err := os.ReadFile(path)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return s, err
-	}
 	if err == nil {
-		if err := json.Unmarshal(data, &s); err != nil {
-			return s, err
+		if jerr := json.Unmarshal(data, &s); jerr != nil {
+			s, err = Settings{}, jerr
 		}
+	} else if errors.Is(err, fs.ErrNotExist) {
+		err = nil
 	}
 	if s.MaxAgents <= 0 {
 		s.MaxAgents = 16
@@ -53,5 +53,5 @@ func LoadSettings(path string) (Settings, error) {
 	if s.Repository == "" {
 		s.Repository = "SEAN-7/bot"
 	}
-	return s, nil
+	return s, err
 }
