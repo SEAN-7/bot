@@ -37,7 +37,7 @@ export function validateConfig(c) {
   for (const key of ['home', 'state']) if (!/^\/[a-zA-Z0-9_./-]+$/.test(c[key]) || c[key].split('/').includes('..')) throw new Error(`Invalid ${key}`);
   if (c.home === c.state || c.state.startsWith(c.home + '/')) throw new Error('Host state must be outside the agent home');
   if (!/^[a-z_][a-z0-9_-]*$/.test(c.user)) throw new Error('Invalid agent user');
-  for (const key of ['maxSteps', 'maxRunUsd', 'maxDayUsd', 'maxOutputTokens', 'clipBytes', 'maxOutputBytes', 'inboxBytes', 'readmeBytes', 'taskBytes']) {
+  for (const key of ['maxSteps', 'maxRunUsd', 'maxDayUsd', 'clipBytes', 'maxOutputBytes', 'inboxBytes', 'readmeBytes', 'taskBytes']) {
     if (!Number.isFinite(c[key]) || c[key] <= 0) throw new Error(`Invalid ${key}`);
   }
   if (c.maxSteps > 10000 || c.clipBytes > 65536 || c.inboxBytes > 1048576 || c.maxOutputBytes > 1073741824) throw new Error('Host limits exceed supported bounds');

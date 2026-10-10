@@ -60,10 +60,14 @@ test('request reservation is durable before model call and retained across crash
   const f = fixture(); await f.loop.boot();
   f.model.complete = async () => { assert.equal(f.stored().active.spent, .1); throw new Error('connection lost'); };
   await assert.rejects(f.loop.run(), /connection lost/);
+  f.host.journalPath = () => '/journal/new-day.jsonl';
   const recovered = new Harness(f.host, { ...f.model, complete: async () => answer() }, f.config);
   await recovered.boot(); assert.equal(recovered.state.active.steps, 1);
   assert.equal(recovered.state.active.spent, .1);
-  await recovered.run(); assert.ok(f.events.some(e => e.type === 'inbox' && e.source === 'recovery'));
+  await recovered.run();
+  const recovery = f.events.find(e => e.type === 'inbox' && e.source === 'recovery');
+  assert.match(recovery.text, /previous journal: \/journal\/previous.jsonl/);
+  assert.match(recovery.text, /TASK may predate the latest owner message/);
   assert.equal(f.stored().active, null);
 });
 test('error responses retain the full reservation even when provider reports zero usage', async () => {
@@ -115,11 +119,40 @@ test('daily heartbeat is idempotent across restart and no tool call finishes a w
   const next = new Harness(f.host, f.model, f.config); await next.boot(); await next.heartbeat('2026-10-10'); await next.run();
   assert.equal(f.events.filter(e => e.type === 'inbox' && e.source === 'heartbeat').length, 1);
 });
-test('multiple tools and incomplete replies cannot execute commands', async () => {
+test('multiple tools cannot execute commands', async () => {
   const invalid = answer('bad'); invalid.content.push({ ...invalid.content[0], id: 'second' });
   const f = fixture([invalid, answer()]); await f.loop.boot(); await f.loop.run(); assert.deepEqual(f.commands, []);
+});
+test('truncation retries without executing or forwarding partial calls and preserves redirects', async () => {
   const partial = answer('partial'); partial.stopReason = 'length';
-  const g = fixture([partial]); await g.loop.boot(); await assert.rejects(g.loop.run(), /Incomplete/); assert.deepEqual(g.commands, []);
+  partial.content.unshift({ type: 'thinking', thinking: 'incomplete reasoning', thinkingSignature: 'partial-signature' });
+  const f = fixture([partial, answer('complete'), answer()]);
+  const complete = f.model.complete;
+  f.model.complete = async context => {
+    const reply = await complete(context);
+    if (reply.stopReason === 'length') await f.host.enqueue('owner', 'New redirect');
+    return reply;
+  };
+  await f.loop.boot(); await f.loop.run();
+  assert.deepEqual(f.commands, ['complete']);
+  assert.equal(f.requests.length, 3);
+  assert.doesNotMatch(JSON.stringify(f.requests[1]), /partial-signature|"command":"partial"/);
+  assert.match(JSON.stringify(f.requests[1]), /No command from it was executed/);
+  assert.match(JSON.stringify(f.requests[1]), /New redirect/);
+  assert.deepEqual(f.events.find(e => e.type === 'reply').reply, partial);
+  assert.equal(f.events.filter(e => e.type === 'truncated-response').length, 1);
+  assert.ok(Math.abs(f.events.find(e => e.type === 'end').run.spent - .03) < 1e-9);
+});
+test('repeated truncation respects existing step and spend limits without executing commands', async () => {
+  const partial = answer('partial'); partial.stopReason = 'length';
+  for (const limits of [{ maxSteps: 2 }, { maxRunUsd: .115 }, { maxDayUsd: .115 }]) {
+    const f = fixture([partial, partial, partial]); Object.assign(f.config, limits);
+    await f.loop.boot(); await f.loop.run();
+    assert.equal(f.requests.length, 2); assert.deepEqual(f.commands, []);
+    assert.equal(f.events.filter(e => e.type === 'alert').length, 1);
+    assert.equal(f.events.find(e => e.type === 'end').reason, 'cap');
+    assert.equal(f.stored().active, null);
+  }
 });
 test('delegated brief gets a fresh context and a result wake under the same daily ledger', async () => {
   const f = fixture(); await f.loop.boot(); await f.loop.run();
@@ -129,9 +162,9 @@ test('delegated brief gets a fresh context and a result wake under the same dail
   await f.loop.run(); assert.match(JSON.stringify(f.requests[2]), /delegate-result/);
   assert.ok(Object.values(f.stored().days)[0] >= .029);
 });
-test('model reservation covers pricing tiers and limits provider output and retries', async () => {
+test('model uses native output allowance even with a legacy cap and reserves its full price', async () => {
   let options;
-  const model = createModel({ provider: 'stub', model: 'stub', maxOutputTokens: 200 }, {
+  const model = createModel({ provider: 'stub', model: 'stub', maxOutputTokens: 10 }, {
     getModel: () => ({ contextWindow: 10000, maxTokens: 100, cost: { input: 1, cacheRead: .1, cacheWrite: 1.25, output: 3,
       tiers: [{ inputTokensAbove: 5000, input: 2, cacheRead: .2, cacheWrite: 2.5, output: 6 }] } }),
     completeSimple: async (_model, _context, value) => { options = value; return answer(); },

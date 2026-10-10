@@ -16,7 +16,7 @@ export class Harness {
     this.state = await this.host.load();
     if (this.state.active) {
       if (this.state.active.job) await this.host.ackJob(this.state.active.job.id);
-      await this.host.enqueue('recovery', `Interrupted. Resume from task state. Run ${this.state.active.id}; prior tool or request effects may be unknown. Its step and spend counters are retained.`);
+      await this.host.enqueue('recovery', `Interrupted. Resume from task state. Run ${this.state.active.id}; previous journal: ${this.state.active.journal || this.host.journalPath()}. Read this run's inbox and results before resuming: TASK may predate the latest owner message. Prior tool or request effects may be unknown. Its step and spend counters are retained.`);
       await this.host.event('interrupted', { run: this.state.active.id });
     }
     await this.host.event('startup', { recovered: !!this.state.active });
@@ -99,8 +99,9 @@ export class Harness {
       }
       // Persist the worst-case charge BEFORE sending. Unknown requests keep it.
       run.steps++; run.spent += reserve; this.state.days[date] += reserve;
-      await this.host.save(this.state);
       await this.host.event('request', { run: run.id, step: run.steps, reserve });
+      run.journal = this.host.journalPath();
+      await this.host.save(this.state);
       const reply = await this.model.complete(context, this.host.signal);
       await this.host.event('reply', { run: run.id, reply });
       const cost = reply.usage?.cost?.total;
@@ -108,6 +109,13 @@ export class Harness {
         run.spent += cost - reserve; this.state.days[date] += cost - reserve;
         await this.host.save(this.state);
         if (cost > reserve) { await this.cap('provider charge exceeded reserved price; review host pricing'); return true; }
+      }
+      if (reply.stopReason === 'length') {
+        // Never feed partial tool calls/signatures back to the provider or execute them.
+        const content = `Your response reached the model's output limit. No command from it was executed. Return a smaller complete step. The incomplete response is recorded in ${this.host.journalPath()} (run ${run.id}, step ${run.steps}).`;
+        await this.host.event('truncated-response', { run: run.id, step: run.steps, content });
+        context.messages.push(message(content));
+        continue; // the next attempt still consumes the same run's step/spend limits
       }
       context.messages.push(reply);
       this.lastText = reply.content.filter(block => block.type === 'text').map(block => block.text).join('\n');

@@ -3,7 +3,7 @@ import { builtinModels } from '@earendil-works/pi-ai/providers/all';
 export function createModel(config, collection = builtinModels()) {
   const model = collection.getModel(config.provider, config.model);
   if (!model) throw new Error('Unknown host-configured provider/model');
-  const maxTokens = Math.min(config.maxOutputTokens, model.maxTokens);
+  const maxTokens = model.maxTokens;
   const rates = [model.cost, ...(model.cost.tiers ?? [])];
   // Reserve at the most expensive input/cache and output tier for a full window.
   // No retries, agent-selected models, credentials or model options cross the boundary.

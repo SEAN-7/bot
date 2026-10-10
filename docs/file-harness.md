@@ -64,8 +64,12 @@ files to a temporary `.tmp` name then rename atomically. Symlinks, devices,
 directories and oversized files are quarantined. Claimed files survive crashes;
 stable journal IDs expose possible replay at the admission boundary.
 
-Defaults are 100 model steps and $2 per wake, $10 per UTC day, and 4096 maximum
-output tokens per request. All model calls, including delegated briefs, share
+Defaults are 100 model steps and $2 per wake, and $10 per UTC day. Requests use
+the model's native maximum output allowance; there is no additional harness
+output-token cap (the legacy `maxOutputTokens` setting is ignored). If a response
+reaches the model's limit, it is journalled without executing any commands and
+the next step asks for a smaller complete response under the same run limits.
+All model calls, including delegated briefs, share
 the host ledger. Before every request the host reserves the most expensive
 full-window input/cache price and maximum output price from the pinned model
 registry, including long-context tiers. Successful usage refunds the unused
@@ -74,6 +78,9 @@ the nominal dollar limit when its remaining balance cannot fund the next
 reservation. This is a local provider-cost limit based on configured prices,
 not an invoice guarantee or a limit on unrelated paid services reached by curl.
 Provider-account limits can provide an additional external ceiling.
+
+Crash recovery names the interrupted run's journal so the agent can recover
+accepted messages and command outcomes even when TASK has not yet been updated.
 
 Caps create a durable alert visible in `bot-next status`, the journal and systemd
 logs. Set root-owned `notifyCommand: ["/path/to/host-notifier", "arg"]` for push

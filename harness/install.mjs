@@ -78,7 +78,7 @@ export async function install(action, options) {
   const provider = options.provider || 'anthropic', model = options.model || 'claude-haiku-5-5';
   let environment = '';
   if (fresh) {
-    createModel({ provider, model, maxOutputTokens: 4096 });
+    createModel({ provider, model });
     // Preflight credential import before allocating any managed path/account.
     if (options['credential-file']) {
       const key = { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GEMINI_API_KEY' }[provider];
@@ -112,7 +112,7 @@ export async function install(action, options) {
     await symlink(`${STATE}/journal`, `${HOME}/journal`); await chown(HOME, uid, gid);
     const config = validateConfig({ home: HOME, state: STATE, user: 'bot-next', uid, gid, service: 'bot-next.service',
       provider, model,
-      maxSteps: 100, maxRunUsd: 2, maxDayUsd: 10, maxOutputTokens: 4096,
+      maxSteps: 100, maxRunUsd: 2, maxDayUsd: 10,
       clipBytes: 16000, maxOutputBytes: 67108864, inboxBytes: 262144 });
     await atomic(`${ETC}/config.json`, config);
     await atomic(`${ETC}/environment`, environment);

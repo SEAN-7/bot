@@ -68,7 +68,7 @@ test('installed host: isolated UID, protected journal/control, no secrets, full 
   assert.match(capped.error, /incomplete/); assert.ok((await readFile(capped.fullOutput)).length <= 1024);
   // Boot the real entrypoint in a paused temporary home. No API credential and
   // no model request: this exercises recovery, startup readiness and the flock.
-  Object.assign(config, { provider: 'anthropic', model: 'claude-haiku-5-5', maxOutputTokens: 4096, maxSteps: 10, maxRunUsd: 2, maxDayUsd: 10 });
+  Object.assign(config, { provider: 'anthropic', model: 'claude-haiku-5-5', maxSteps: 10, maxRunUsd: 2, maxDayUsd: 10 });
   const configPath = `${base}/config.json`; await writeFile(configPath, JSON.stringify(config));
   await writeFile(`${state}/PAUSE`, 'isolated fixture');
   await host.save({ active: { id: 'isolated-recovery', steps: 3, spent: .5 } });
