@@ -7,6 +7,7 @@ import { appManifest, APP_ID } from './app-package.mjs';
 
 export const CORE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 export const API_VERSION = 3;
+export const CONTROLLER_PROTOCOL = 2;
 export async function readJSON(path) { return JSON.parse(await readFile(path,'utf8')); }
 export async function atomicJSON(path,data) { await mkdir(dirname(path),{recursive:true,mode:0o700}); const temp=`${path}.${randomUUID()}.tmp`; await writeFile(temp,JSON.stringify(data,null,2)+'\n',{mode:0o600}); await rename(temp,path); }
 export const metadataPath = home => join(home,'control','releases.json');
@@ -40,7 +41,7 @@ export async function readCurrent(home) {
   const config=await readJSON(join(home,'revisions',revision,'config.json'));
   const recoveryRevision=meta.trial?.from||meta.previous;
   const recoveryConfig=recoveryRevision?await readJSON(join(home,'revisions',recoveryRevision,'config.json')):null;
-  return { ...meta, revision, config, compatibleRecovery: recoveryConfig?.apiVersion===API_VERSION, coreRoot:config.coreRoot||CORE_ROOT };
+  return { ...meta, revision, config, compatibleRecovery: recoveryConfig?.apiVersion===API_VERSION&&(recoveryConfig.controllerProtocol??1)===CONTROLLER_PROTOCOL, coreRoot:config.coreRoot||CORE_ROOT };
 }
 export async function initialize(home,config,{appsDir=join(CORE_ROOT,'apps'),fixedCoreRoot}={}) {
   home=resolve(home);
@@ -64,6 +65,7 @@ export async function initialize(home,config,{appsDir=join(CORE_ROOT,'apps'),fix
 }
 async function createBundle(home,config) {
   if(config.apiVersion!==API_VERSION) throw new Error('Unsupported configuration API');
+  if(config.controllerProtocol!==CONTROLLER_PROTOCOL)throw new Error('Adopt a controller using protocol 2 before staging this core; see docs/app-adoption.md');
   const id=`${Date.now()}-${randomUUID().slice(0,8)}`;
   const dest=join(home,'revisions',id);
   await mkdir(join(dest,'apps'),{recursive:true});
@@ -129,7 +131,7 @@ export async function beginTrial(home,store) {
   const before=await readJSON(join(home,'revisions',meta.active,'config.json'));
   const after=await readJSON(join(home,'revisions',meta.pending,'config.json'));
   const namespaces=[...new Set([before,after].filter(config=>config.apiVersion===API_VERSION).map(config=>config.apps[config.controller].stateNamespace||`app:${config.controller}`))];
-  await atomicJSON(join(home,'revisions',meta.pending,'before-state.json'),before.apiVersion===API_VERSION?{namespaces,state:store.snapshot().filter(row=>namespaces.includes(row.module))}:store.snapshot());
+  await atomicJSON(join(home,'revisions',meta.pending,'before-state.json'),before.apiVersion===API_VERSION&&before.controllerProtocol===CONTROLLER_PROTOCOL?{namespaces,state:store.snapshot().filter(row=>namespaces.includes(row.module))}:store.snapshot());
   const trial={from:meta.active,to:meta.pending,startedAt:Date.now(),kind:before.coreRoot===after.coreRoot?'controller':'core'};
   await atomicJSON(metadataPath(home),{...meta,active:meta.pending,pending:null,trial});
   store.record('update.trial',trial);
@@ -145,7 +147,7 @@ export async function assertCompatibleRecovery(home) {
   const target=meta.trial?.from||meta.previous;
   if(!target)throw new Error('No previous working version is available');
   const config=await readJSON(join(home,'revisions',target,'config.json'));
-  if(config.apiVersion!==API_VERSION)throw new Error('Previous revision uses a different application API; the operator must restore its retained executable release. The current conversation and state are unchanged.');
+  if(config.apiVersion!==API_VERSION||(config.controllerProtocol??1)!==CONTROLLER_PROTOCOL)throw new Error('Previous revision uses a different application API or controller protocol; the operator must restore its retained executable release. The current conversation and state are unchanged.');
 }
 export async function rollback(home,existingStore) {
   await assertCompatibleRecovery(home);

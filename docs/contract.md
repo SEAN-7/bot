@@ -46,11 +46,11 @@ Ordinary app settings and enabled flags are read from drafts/config.json on each
 
 `BOT_APPS`, `BOT_WORKSPACE`, `BOT_DRAFTS`, `BOT_UPSTREAM_ROOT`, `BOT_NODE`, `BOT_CORE_CLI`, `BOT_APP_URL` and `BOT_APP_TOKEN` describe the active environment. `BOT_CALL_ID` identifies the active shell action. Communication apps use it to record delivery receipts in their own storage; the generic publish primitive remains available for other applications. Send in a separate shell call and await completion. Durable receipts survive a later crash; an unknown external action must be inspected before retrying.
 
-## Controller process protocol 1
+## Controller process protocol 2
 
 `config.controller` selects one enabled app. The runtime launches its command with `--serve` and exchanges newline-delimited JSON on stdin/stdout, bounded to 20 MB. Stdout is exclusively protocol data; diagnostics go to stderr. The controller may use any implementation language. Core requests and supervisor RPC arguments remain bounded separately.
 
-The core sends `{type:"init",protocol:1,config,tools}`. `tools` contains exactly the fixed shell schema. The controller replies `{type:"ready",protocol:1}` only after validating its configuration. The core then sends `{type:"turn",event}`, one at a time. Apps deliver future work by enqueueing notifications; the core has no idle tick protocol. `{type:"stop"}` asks the controller to stop. Core shutdown kills all owned descendants and separately tracked shell process groups.
+The core sends `{type:"init",protocol:2,config,tools}`. `tools` contains exactly the fixed shell schema. The controller replies `{type:"ready",protocol:2}` only after validating its configuration. The core then sends `{type:"turn",event}`, one at a time. Apps deliver future work by enqueueing notifications; the core has no idle tick protocol. `{type:"stop"}` asks the controller to stop. Core shutdown kills all owned descendants and separately tracked shell process groups.
 
 A controller requests `{type:"request",id,method,args}`; the core replies `{type:"result",id,result}` or `{type:"result",id,error:{message,retryable,blocked}}`.
 
@@ -97,7 +97,7 @@ Run `bot-app updates apply '{}'` only to replace the running controller or its s
 
 The core is operator-owned. `bot apps install DIR` installs an app for its next invocation (controller installations queue controller replacement); there is no module installation command. `bot apply`, `bot recover` and `bot core install DIR` are operator commands for source installations. Managed Linux updates use the administrator installer, retain the old executable, and preserve conversation and credentials. API 2 to API 3 migration verifies exact legacy package hashes before replacement, retains all drafts and the prior contract, and preserves state namespaces. Edited or custom legacy packages require explicit conversion and are never overwritten automatically.
 
-Cross-API recovery requires the retained matching executable. The current runtime rejects incompatible recovery before stopping a healthy worker. The managed installer restores the old executable and exact draft backup if its candidate fails. State rollback cannot undo external effects. Unknown actions remain durably recorded.
+Cross-API or cross-controller-protocol recovery requires the retained matching executable. The current runtime rejects incompatible recovery before stopping a healthy worker. The managed installer restores the old executable and exact draft backup if its candidate fails. State rollback cannot undo external effects. Unknown actions remain durably recorded.
 
 ## Protection
 

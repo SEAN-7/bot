@@ -28,7 +28,7 @@ export function createConfig(options, env = process.env) {
   const port = Number(options.port || 4317);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port must be an integer from 1 to 65535.');
   return {
-    apiVersion: 3, appUpdates: 'direct', controller: 'agent', apps, preset:provider==='demo'?'demo':'custom', clients:{chat:['node','apps/terminal-chat/main.mjs','chat'],acp:['node','apps/terminal-chat/main.mjs','acp']},
+    apiVersion: 3, appUpdates: 'direct', controller: 'agent', controllerProtocol: 2, apps, preset:provider==='demo'?'demo':'custom', clients:{chat:['node','apps/terminal-chat/main.mjs','chat'],acp:['node','apps/terminal-chat/main.mjs','acp']},
     runtime: { port, startupTimeoutMs: 10000, heartbeatTimeoutMs: 10000, operationTimeoutMs: 120000, trialMs: 3000, maxRestarts: 2, retryMs: 3000, sandbox: 'auto' },
   };
 }

@@ -376,7 +376,8 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       await systemctl('stop', 'bot.service').catch(() => {});
       if (candidate) {
         try {
-          const rollbackCore=(await json(join(previous,'app/package.json'))).botCoreApi===(await json(join(release,'app/package.json'))).botCoreApi?release:previous;
+          const oldPackage=await json(join(previous,'app/package.json')),newPackage=await json(join(release,'app/package.json'));
+          const rollbackCore=oldPackage.botCoreApi===newPackage.botCoreApi&&(oldPackage.botControllerProtocol??1)===(newPackage.botControllerProtocol??1)?release:previous;
           await asBot(nodeAt(rollbackCore), [join(release, 'install/update-state.mjs'), 'restore', state, join(rollbackCore, 'app'), candidate], credentials);
         } catch {
           throw new Error('Update failed and exact candidate state restoration failed; the service is stopped. Preserve state and inspect it before restarting.');

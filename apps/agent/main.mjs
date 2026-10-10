@@ -25,7 +25,7 @@ if (mode === '--preflight' || mode === '--help') {
     const options=snapshot.config.apps[snapshot.config.controller];
     if(!Array.isArray(options.hooks?.complete)||!options.hooks.complete.length)throw new Error('Controller needs a completion hook');
   }
-  console.log(JSON.stringify({protocol:1,usage:'agent --serve',description:'Replaceable serialized conversation controller'}));
+  console.log(JSON.stringify({protocol:2,usage:'agent --serve',description:'Replaceable serialized conversation controller'}));
 } else if (mode !== '--serve') throw new Error('Use --serve or --help');
 else {
   let config, tools, options, active=false, closing=false, sequence=0, stopServices;
@@ -89,11 +89,11 @@ else {
         const request=pending.get(message.id);if(!request)return;pending.delete(message.id);
         if(message.error)request.reject(Object.assign(new Error(message.error.message),message.error));else request.resolve(message.result);
       } else if(message.type==='init') {
-        if(config||message.protocol!==1)throw new Error('Invalid controller initialization');
+        if(config||message.protocol!==2)throw new Error('Invalid controller initialization');
         config=message.config;tools=message.tools;options=config.apps[config.controller];
         if(!Array.isArray(options.hooks?.complete)||!options.hooks.complete.length)throw new Error('Controller needs a completion hook');
         stopServices=startServices(options.services||[]);
-        send({type:'ready',protocol:1});
+        send({type:'ready',protocol:2});
       } else if(message.type==='turn')run(message.event).catch(fatal);
       else if(message.type==='stop'){closing=true;stopServices?.();process.exit(0);}
       else throw new Error('Unknown controller input');

@@ -3,7 +3,7 @@ name: agent
 description: The replaceable conversation controller and tool-only agent loop.
 ---
 
-The protected runtime launches this self-contained executable with `--serve`. It exchanges bounded JSON lines using controller protocol 1; see BOT-API.md. Its only behavior dependencies are command hooks in `config.apps.agent`:
+The protected runtime launches this self-contained executable with `--serve`. It exchanges bounded JSON lines using controller protocol 2; see BOT-API.md. Its only behavior dependencies are command hooks in `config.apps.agent`:
 
 - `hooks.prepare`: optional argv command. Receives `{messages,tools}` as JSON on stdin and returns a model request. It may include `append` records for the controller to journal.
 - `hooks.complete`: required argv command. Receives that request and returns `{text,toolCalls,metadata?,usage?}` as JSON.

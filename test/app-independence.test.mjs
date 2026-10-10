@@ -63,3 +63,17 @@ test('scheduler transactions retain concurrent CLI writes and import legacy stat
   const second=start('two');await Promise.all([first.done,second.done]);
   await transaction(api,async locked=>assert.deepEqual(await locked.state.get(),[{id:'legacy'},{id:'one'},{id:'two'}]));
 });
+
+test('legacy controller recovery requires the retained executable and keeps its legacy checkpoint format',async t=>{
+  const {readFile}=await import('node:fs/promises');
+  const {assertCompatibleRecovery}=await import('../src/releases.mjs');
+  const home=await mkdtemp(join(tmpdir(),'bot-protocol-recovery-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  const {revision}=await initialize(home,createConfig({}),{fixedCoreRoot:CORE_ROOT});
+  const file=join(home,'revisions',revision,'config.json'),legacy=JSON.parse(await readFile(file));delete legacy.controllerProtocol;await writeFile(file,JSON.stringify(legacy));
+  const store=new Store(home);t.after(()=>store.close());store.setState('app:memory','retained','value');
+  const candidate=await stageDrafts(home);await beginTrial(home,store);
+  assert.ok(Array.isArray(JSON.parse(await readFile(join(home,'revisions',candidate,'before-state.json')))));
+  assert.equal((await readCurrent(home)).compatibleRecovery,false);
+  await assert.rejects(assertCompatibleRecovery(home),/retained executable/);
+  assert.equal(store.getState('app:memory','retained'),'value');
+});

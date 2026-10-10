@@ -2,6 +2,7 @@
   "name": "self-building-bot",
   "version": "0.6.0",
   "botCoreApi": 3,
+  "botControllerProtocol": 2,
   "private": true,
   "type": "module",
   "description": "A durable conversation kernel with replaceable process applications.",

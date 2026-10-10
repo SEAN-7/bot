@@ -1,6 +1,7 @@
 {
   "appUpdates": "direct",
   "controller": "agent",
+  "controllerProtocol": 2,
   "apps": {
     "agent": {
       "enabled": true,

@@ -1,6 +1,6 @@
 # Adopting the 0.6 app layout
 
-The 0.6 defaults use executable command hooks and self-contained controller
+The 0.6 defaults use controller protocol 2 and executable command hooks and self-contained controller
 revisions. Ordinary apps keep their own code and state through controller rollback.
 Core updates still preserve editable app copies. Existing installations need an
 explicit adoption of the related default apps before staging this release.
@@ -25,7 +25,7 @@ This command changes configuration only. It translates the default controller's
 model/context selection into `hooks.prepare` and `hooks.complete` argv commands,
 moves contributors and projections to the context app, and turns service/tick
 app IDs into supervised watch commands. It preserves custom provider and context
-settings and can be repeated safely. Custom controllers retain their own contracts.
+settings and can be repeated safely. Custom controllers must adopt protocol 2 and declare `controllerProtocol:2` in startup configuration; protocol 2 removes core-driven ticks. Their other command conventions remain their own.
 
 The operator must review and install the resulting `clients` mapping as
 `control/clients.json`. Client selection is protected operator configuration;
@@ -46,5 +46,5 @@ Build and validate a Linux bundle, then use its managed `update --yes` command.
 Validate conversation behavior only in a temporary isolated bot home. Production
 verification checks service health, pending/error/trial state, retained history,
 credentials and the previous release without injecting conversation messages.
-If adoption or startup fails, restore the previous release and the backed-up
+An older protocol-1 controller requires its retained old executable; the new core rejects a controller-only rollback across that boundary. If adoption or startup fails, restore the previous release and the backed-up
 editable configuration/programs; retain all durable conversation and app data.

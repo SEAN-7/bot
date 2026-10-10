@@ -2,6 +2,7 @@
 export function migrateConfig(config) {
   if(config.controller!=='agent'||config.apps.agent.hooks)return config;
   const result=structuredClone(config),agent=result.apps.agent;
+  result.controllerProtocol=2;
   const model=agent.modelApp,context=agent.contextApp||'context';
   const prepare=agent.contextApp||agent.contributors?.length||agent.projections?.length;
   result.apps[model]={...result.model,...result.apps[model]};

@@ -9,7 +9,7 @@ import { appManifest, commandAt } from './app-package.mjs';
 
 const [home,revision,mode='run']=process.argv.slice(2), revisionDir=join(home,'revisions',revision);
 const config=JSON.parse(await readFile(join(revisionDir,'config.json'),'utf8'));
-if(config.apiVersion!==3||config.modules)throw new Error('Only process applications are supported');
+if(config.apiVersion!==3||config.controllerProtocol!==2||config.modules)throw new Error('Only process applications are supported');
 const pending=new Map();let serial=0,closing=false,activeEvent=null,committed=false,actionBusy=false,controllerReady=false,controller,inputPending=false;
 const send=message=>{if(process.connected)process.send(message);};
 function rpc(method,args={}) {
@@ -106,7 +106,7 @@ try {
           const message=JSON.parse(line);
           if(message.type==='request')request(message).catch(fatal);
           else if(message.type==='ready'){
-            if(controllerReady||message.protocol!==1)throw new Error('Invalid controller protocol');controllerReady=true;progress('idle');send({type:'ready',apiVersion:1,tools});
+            if(controllerReady||message.protocol!==2)throw new Error('Invalid controller protocol');controllerReady=true;progress('idle');send({type:'ready',apiVersion:1,tools});
           } else if(message.type==='progress')progress(String(message.phase));
           else if(message.type==='turnDone'||message.type==='turnError'){
             if(!activeEvent||message.eventId!==activeEvent||actionBusy||(message.type==='turnDone'&&!committed)||(message.type==='turnError'&&committed))throw new Error('Invalid event completion');
@@ -116,6 +116,6 @@ try {
         }catch(error){fatal(error);}
       }
     });
-    write({type:'init',protocol:1,config,tools});
+    write({type:'init',protocol:2,config,tools});
   }
 } catch(error){fatal(error);}

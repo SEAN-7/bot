@@ -56,7 +56,7 @@ if(process.argv[2]==='--preflight') {
   createInterface({input:process.stdin}).on('line',line=>{
     const message=JSON.parse(line);
     if(message.type==='result'){const request=pending.get(message.id);pending.delete(message.id);if(message.error)request.reject(Object.assign(new Error(message.error.message),message.error));else request.resolve(message.result);}
-    else if(message.type==='init'){config=message.config;options=config.apps[config.controller];tools=message.tools;send({type:'ready',protocol:1});}
+    else if(message.type==='init'){config=message.config;options=config.apps[config.controller];tools=message.tools;send({type:'ready',protocol:2});}
     else if(message.type==='turn')void run(message.event);
     else if(message.type==='stop')process.exit(0);
   });
