@@ -1,7 +1,9 @@
+import { applyReset, resetHistory, resetNotice } from './reset.mjs';
+
 // Request preparation belongs to the context app, including memory refresh policy.
 export async function prepareSnapshot({ options, tools, settings, rpc, invoke, state, prepare }) {
   // Admit pending notifications before invoking apps, then read again afterward.
-  await rpc('history');
+  const reset = await applyReset(state, await rpc('history'));
   let snapshot = await state.get('promptSnapshot', null);
   const collected = new Map();
   for (const app of options.contributors || []) {
@@ -18,7 +20,7 @@ export async function prepareSnapshot({ options, tools, settings, rpc, invoke, s
     collected.set(app, items.filter(item => item.placement === 'system'));
     for (const item of items.filter(item => item.placement !== 'system')) await rpc('contribute', { module: app, ...item });
   }
-  let messages = await rpc('history');
+  let messages = resetHistory(await rpc('history'), reset);
   const latest = messages.findLast(m => m.role === 'user' || m.metadata?.resumedInput);
   // Preserve legacy memory records on disk without replaying obsolete snapshots.
   const promptApps = new Set([...collected].filter(([, items]) => items.length).map(([app]) => app));
@@ -42,7 +44,7 @@ export async function prepareSnapshot({ options, tools, settings, rpc, invoke, s
     snapshot = { boundary, contributors };
     await state.set('promptSnapshot', snapshot);
   }
-  messages = prepared.messages;
+  messages = reset ? [resetNotice(reset), ...prepared.messages] : prepared.messages;
 
   if (!Array.isArray(messages) || messages.some(m => typeof m.content !== 'string')) throw new Error('Invalid prepared context');
   if (latest && !messages.some(m => m.id === latest.id)) throw new Error('Context removed the current input');

@@ -1,5 +1,15 @@
+import { randomUUID } from 'node:crypto';
+
 export function commands(api) {
   return {
+    "reset": {
+      description: 'Start fresh before the next model response: discard the summary and older working history, refresh saved memory, and retain the current request with its complete tool activity. Does not summarize or delete the journal, saved memory, or channel messages. Older evidence remains searchable.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      execute: async () => {
+        await api.state.set('resetRequest', { id: randomUUID() });
+        return { status: 'requested', message: 'Working context will reset before the next model response. The current request and its tool activity stay intact; older records remain searchable.' };
+      },
+    },
     "compact": {
     description: 'Request a summary of older conversation before the next model response, even below the automatic threshold. Preserves the current user request and its tool activity, plus recent groups. Full history remains on disk. Cannot shrink the current turn itself.',
     inputSchema: { type: 'object', properties: {

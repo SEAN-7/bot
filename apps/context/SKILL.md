@@ -1,7 +1,11 @@
 ---
 name: context
-description: Prepare model requests, memory and channel context; compact history without losing the current turn.
+description: Reset or compact working context; prepare memory and channel context without losing the current turn.
 ---
+
+Run `bot-app context reset '{}'` when the working context is confused or a summary is unreliable and you want a fresh start without another summarization call. Before the next model response it discards the generated summary, pending compaction and partial summary work, omits older working history, and refreshes the frozen saved-memory block. It retains the latest input and all its tool activity, extending that boundary when needed to keep tool calls and results together. Reset cannot shrink that retained turn. Saved memory, the complete journal, channel messages, credentials and external work remain intact. A reset does not revoke permissions or undo actions. Recover needed evidence using the memory or communication apps before repeating work or asking for an approval already given.
+
+The reset boundary survives retries and restarts. Later compaction, including `compact '{"rebuild":true}'`, only processes working history after that boundary, so discarded context does not silently return. Journal search and exact reads still cover the entire conversation. Reset also works when automatic compaction is disabled. It does not erase incorrect saved memory; inspect and correct that separately with the memory app when needed.
 
 Run `bot-app context compact '{"keepRecentGroups":1}'` to request compaction before the next model response. It preserves the current input and complete tool call/results. The journal is never deleted. Compaction cannot shrink the active turn alone; reduce shell output or choose a larger model when that turn exceeds the input budget. A request survives provider failure and is retried on the next context preparation.
 
