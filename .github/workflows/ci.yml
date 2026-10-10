@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      - name: Privilege-separation tests (root)
+        run: |
+          sudo useradd --system --no-create-home agent-test
+          sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
