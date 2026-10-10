@@ -103,6 +103,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	}
 	messages := []proto.Message{{Role: "user", Content: encodeRecords(records)}}
 	runID := strings.TrimSuffix(filepath.Base(j.Path()), ".jsonl")
+	warned, warnNext := false, false
 	for n := 1; ; n++ {
 		resp, err := a.complete(ctx, cfg, system, messages)
 		if err != nil {
@@ -115,6 +116,26 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		}
 		messages = append(messages, msg)
 		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
+		if used := resp.Usage.Total(); contextTokens > 0 && msg.Command != nil {
+			switch {
+			case used*100 >= 95*contextTokens && n == 1:
+				// A fresh run is already too big: a reset note would loop forever.
+				text := fmt.Sprintf(MsgGuardFmt, used, contextTokens)
+				a.logf("%s", text)
+				a.setError(text)
+				return "context-guard"
+			case used*100 >= 95*contextTokens:
+				if err := d.writeNote(a.dir, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
+					a.logf("reset note: %v", err)
+				}
+				return "context"
+			case used*100 >= 80*contextTokens && !warned:
+				warned, warnNext = true, true
+			}
+		}
+		if n == 1 {
+			a.clearError(errGuardPrefix)
+		}
 		if msg.Command == nil {
 			return "done"
 		}
@@ -131,27 +152,72 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		if err != nil {
 			a.logf("inbox: %v", err)
 		}
+		var parts []string
+		if warnNext {
+			parts, warnNext = append(parts, MsgWarn80), false
+		}
 		if len(more) > 0 {
-			messages = append(messages, proto.Message{Role: "user", Content: encodeRecords(more)})
+			parts = append(parts, encodeRecords(more))
+		}
+		if len(parts) > 0 {
+			messages = append(messages, proto.Message{Role: "user", Content: strings.Join(parts, "\n")})
 		}
 	}
 }
 
-// complete calls the provider, retrying the same request until it succeeds
-// or the agent is stopped.
+// complete calls the provider, retrying the same request with doubling
+// delays until it succeeds or the agent is stopped. Persistent failures are
+// reported in ~/ERROR and the log, never in the inbox.
 func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.Segment, messages []proto.Message) (proto.CompleteResponse, error) {
 	req := proto.CompleteRequest{Model: cfg.Model, Options: cfg.Options, System: system, Tools: []proto.Tool{proto.ShTool()}, Messages: messages}
-	for {
+	delay := a.d.cfg.RetryBase
+	var since time.Time
+	for failures := 0; ; failures++ {
 		resp, err := a.d.runner.Complete(ctx, cfg.Provider, req)
 		if err == nil {
+			if failures >= a.d.cfg.ErrorAfter {
+				a.clearError(errProviderPrefix)
+			}
 			return resp, nil
 		}
+		if ctx.Err() != nil {
+			return resp, ctx.Err()
+		}
+		if failures == 0 {
+			since = time.Now().UTC()
+		}
 		a.logf("provider: %v", err)
+		if failures+1 >= a.d.cfg.ErrorAfter {
+			text := fmt.Sprintf(MsgProviderFmt, since.Format(time.RFC3339), err)
+			a.logf("%s", text)
+			a.setError(text)
+		}
 		select {
 		case <-ctx.Done():
 			return resp, ctx.Err()
-		case <-time.After(a.d.cfg.RetryBase):
+		case <-time.After(delay):
 		}
+		delay = min(delay*2, a.d.cfg.RetryMax)
+	}
+}
+
+const (
+	errProviderPrefix = "Provider failing since"
+	errGuardPrefix    = "Context is over 95%"
+)
+
+func (a *agent) setError(text string) {
+	if err := a.d.fs.Write(filepath.Join(a.dir, "ERROR"), []byte(text+"\n")); err != nil {
+		a.logf("write ERROR: %v", err)
+	}
+}
+
+// clearError removes ~/ERROR if it holds an error of the given kind.
+func (a *agent) clearError(prefix string) {
+	path := filepath.Join(a.dir, "ERROR")
+	data, _, err := a.d.fs.Read(path, 4096)
+	if err == nil && strings.HasPrefix(string(data), prefix) {
+		a.d.fs.Remove(path)
 	}
 }
 
