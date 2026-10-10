@@ -459,7 +459,7 @@ test('cancelling queued input preserves active work and cancelling active tools 
       api.registerModel({ async complete({ messages }) {
         const latest = messages.findLast(message => message.role === 'user');
         if (latest.content === 'active cancelled input') return { text: '', toolCalls: [{ id: 'cancelled-effect', name: 'shell', arguments: {command: "printf 'effect\\n' >> cancel-effects; sleep 100"} }] };
-        const outcome = messages.findLast(message => message.role === 'tool');
+        const outcome = messages.findLast(message => message.metadata?.shellSessionUnknown || message.role === 'tool');
         return { text: 'next input:' + latest.content + '; outcome=' + (outcome?.content || 'none'), toolCalls: [] };
       }});
     };

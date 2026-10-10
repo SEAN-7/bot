@@ -69,6 +69,11 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   const status=()=>({state,revision:current.revision,coreRoot:installedCore||current.coreRoot,pending:store.pending(),error,model:current.config.model,protected:protectedMode,tools,canRecover:!!((current.previous||current.trial)&&current.compatibleRecovery),trial:current.trial||null});
   const diagnose=(kind,payload)=>store.record(kind,payload);
   function reply(child,id,result,failure) {if(child.connected)child.send({type:'rpc.result',id,result,error:failure});}
+  function enqueue(event) {
+    const result=store.enqueue(event);
+    if(!result.duplicate&&worker?.connected&&activeEvent)worker.send({type:'inputAvailable'});
+    return result;
+  }
 
   async function handleRpc(child,message,{preflight=false,scratch,allowedApps=current.config.apps,appConfig=current.config}={}) {
     const {id,method,args={}}=message;
@@ -97,7 +102,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
         } else if(operation==='history')result=preflight?[]:store.history();
         else if(preflight)throw new Error('External app action prohibited during preflight');
         else if(operation==='publish')result=store.publish(app,callId,input.content,activeEvent);
-        else if(operation==='enqueue')result=store.enqueue({...input.event,id:input.event.id?`${app}:${input.event.id}`:undefined,metadata:{...input.event.metadata,source:app}});
+        else if(operation==='enqueue')result=enqueue({...input.event,id:input.event.id?`${app}:${input.event.id}`:undefined,metadata:{...input.event.metadata,source:app}});
         else if(operation==='update.request'){updateRequested=true;result={queued:true,message:'Controller replacement will be checked after this turn. Ordinary app edits already take effect on their next invocation.'};}
         else throw new Error('Unsupported app operation');
         if(!preflight&&operation!=='config'&&operation!=='state.get'&&operation!=='history')diagnose('app.operation',{app,operation,callId});
@@ -121,6 +126,10 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
       }
       else if(method==='tool.start') {if(args.eventId!==activeEvent)throw new Error('Tool belongs to inactive event');store.startAction(args.id,args.eventId,args.name,args.args);}
       else if(method==='tool.finish')result=store.finishAction(args.id,args.result,args.isError);
+      else if(method==='shell.completed') {
+        if(typeof args.sessionId!=='string'||!/^[-a-f0-9]{36}$/.test(args.sessionId))throw new Error('Invalid shell session completion');
+        result=enqueue({id:`shell:${args.sessionId}`,text:args.text,metadata:{source:'shell',sessionId:args.sessionId}});
+      }
       else if(method==='update.request') {updateRequested=true;result={queued:true,message:'Controller replacement will be checked after this turn. Ordinary app edits already take effect on their next invocation.'};}
       else if(method==='process.track') {
         const hostPid=await runtimeProcessGroup(child,args.pid);
@@ -294,7 +303,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
         }
         if(request.method!=='POST'){respond(405,{error:'Method not allowed'});return;}
         const body=await bodyOf(request);
-        if(url.pathname==='/api/messages'){respond(202,store.enqueue({...body,metadata:{source:'chat'}}));return;}
+        if(url.pathname==='/api/messages'){respond(202,enqueue({...body,metadata:{source:'chat'}}));return;}
         if(url.pathname==='/api/cancel') {
           const result=await serialize(async()=>{
             const cancelled=store.cancel(body.id);

@@ -47,7 +47,7 @@ test('isolated conversation uses shell apps and shared durable state without nat
       "bot-app scheduler list '{}'", "bot-app context compact '{}'", "bot-app chat read '{}'", "bot-app chat send '{\\\"text\\\":\\\"isolated app success\\\"}'"
     ];
     if(results.some(m=>m.isError||JSON.parse(m.content).exitCode!==0))throw new Error('App failed: '+JSON.stringify(results));
-    return results.length<steps.length?{text:'',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:steps[results.length]}}]}:{text:'',toolCalls:[]};
+    return results.length<steps.length?{text:'',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:steps[results.length],yieldTimeMs:30000}}]}:{text:'',toolCalls:[]};
   }});`);
   await stageDrafts(home);const server=await startSupervisor({home,port:0,unsafe:true});t.after(()=>server.stop());
   const api=async(path,body)=>fetch(server.url+path,{method:body?'POST':'GET',headers:{authorization:'Bearer '+server.token,'content-type':'application/json'},body:body?JSON.stringify(body):undefined}).then(r=>r.json());

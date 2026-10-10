@@ -12,7 +12,7 @@ async function add(home,id,command,source,file){const folder=join(home,'drafts',
 test('an ordinary shell app uses botctl without a JavaScript factory or command schema',async t=>{
   const bot=await fixture(t);await add(bot.home,'plain',['/bin/sh','main.sh'],`if [ "$1" = --preflight ]; then exit 0; fi\nbotctl plain state.set '{"key":"proof","value":"ordinary-cli"}' >/dev/null\nbotctl plain state.get '{"key":"proof"}'\n`,'main.sh');
   const path=join(bot.home,'drafts','config.json'),config=JSON.parse(await readFile(path));config.apps.plain={enabled:true};await writeFile(path,JSON.stringify(config));
-  await writeFile(join(bot.home,'drafts','apps','demo-model','behavior.mjs'),`export const createModel=()=>({async complete({messages}){return messages.some(m=>m.role==='tool')?{text:'',toolCalls:[]}:{text:'',toolCalls:[{id:'plain-action',name:'shell',arguments:{command:'bot-app plain run'}}]};}});`);
+  await writeFile(join(bot.home,'drafts','apps','demo-model','behavior.mjs'),`export const createModel=()=>({async complete({messages}){return messages.some(m=>m.role==='tool')?{text:'',toolCalls:[]}:{text:'',toolCalls:[{id:'plain-action',name:'shell',arguments:{command:'bot-app plain run',yieldTimeMs:30000}}]};}});`);
   await stageDrafts(bot.home);const api=await bot.start();await api('/api/messages',{text:'isolated app execution'});
   await until(async()=>(await api('/api/status')).pending===0);
   const history=(await api('/api/messages')).messages;assert.ok(history.some(m=>m.role==='tool'&&m.content.includes('ordinary-cli')));assert.deepEqual((await api('/api/status')).tools.map(t=>t.name),['shell']);

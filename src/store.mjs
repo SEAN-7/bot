@@ -158,6 +158,24 @@ export class Store {
     return this.transaction(() => {
       const unresolved = [];
       const history = this.history();
+      const calls = new Map(history.flatMap(message => (message.toolCalls || []).map(call => [call.id, call])));
+      const sessions = new Map();
+      const settledSessions = new Set(history.map(message => message.metadata?.shellSessionUnknown).filter(Boolean));
+      // A completion may be durable in the inbox before the controller admits
+      // it to history. Do not report that already-finished session as unknown.
+      for (const row of this.db.prepare("SELECT metadata FROM inbox WHERE json_extract(metadata,'$.source')='shell'").all()) settledSessions.add(JSON.parse(row.metadata).sessionId);
+      for (const message of history) if (message.role === 'tool' && message.toolName === 'shell') {
+        let result; try { result = JSON.parse(message.content); } catch { continue; }
+        const sessionId = result?.sessionId || calls.get(message.toolCallId)?.arguments?.sessionId;
+        if (!sessionId) continue;
+        if (result?.outcome === 'running') sessions.set(sessionId, sessions.get(sessionId) || message.toolCallId);
+        else sessions.delete(sessionId);
+      }
+      for (const [sessionId, callId] of sessions) if (!settledSessions.has(sessionId)) {
+        this.db.prepare("UPDATE actions SET status='unknown' WHERE id=?").run(callId);
+        this.append({ role:'context', content:`Recovery: outcome UNKNOWN. Shell session ${sessionId} was interrupted by runtime shutdown. Its effects may already have happened; inspect external state before repeating the command.`, metadata:{recovery:true,shellSessionUnknown:sessionId} });
+        unresolved.push({id:callId,name:'shell',sessionId,outcome:'unknown'});
+      }
       const results = new Set(history.filter(m => m.role === 'tool').map(m => m.toolCallId));
       for (const message of history) for (const call of message.toolCalls || []) {
         if (results.has(call.id)) continue;

@@ -51,7 +51,7 @@ test('supervised shells inspect the running core snapshot while forked app copie
   const original=await readFile(source,'utf8'),working=join(home,'drafts/apps/telegram/commands.mjs');
   await writeFile(working,original+'\n// bot-owned reaction customization\n');
   await writeFile(join(home,'drafts/apps/demo-model/behavior.mjs'),`export const createModel=()=>({async complete({messages}){
-    return messages.some(m=>m.role==='tool')?{text:'',toolCalls:[]}:{text:'',toolCalls:[{id:'inspect-upstream',name:'shell',arguments:{command:'bot-app --upstream telegram'}}]};
+    return messages.some(m=>m.role==='tool')?{text:'',toolCalls:[]}:{text:'',toolCalls:[{id:'inspect-upstream',name:'shell',arguments:{command:'bot-app --upstream telegram',yieldTimeMs:30000}}]};
   }});`);
   const previous=process.env.BOT_UPSTREAM_ROOT;process.env.BOT_UPSTREAM_ROOT='/ignored-inherited-source';
   try{server=await startSupervisor({home,port:0,unsafe:true});}finally{if(previous===undefined)delete process.env.BOT_UPSTREAM_ROOT;else process.env.BOT_UPSTREAM_ROOT=previous;}

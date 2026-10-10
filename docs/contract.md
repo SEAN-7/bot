@@ -2,6 +2,8 @@
 
 The bot has one durable conversation and one model-facing tool, `shell`. The protected supervisor owns the journal, serial event queue, process cleanup, action outcomes and installation recovery. A protected runtime supervises one replaceable controller process. No core process imports app code. There is no plugin loader, hook registration, model/context registration or tool registration API.
 
+Shell calls wait up to 1000 ms by default (explicit `yieldTimeMs` up to 30000 ms), then return a truthful `running` receipt and session ID while the supervised command continues. New input interrupts launch or polling waits without cancelling the command, so the controller can incorporate it at the next context boundary. A yielded command that finishes without a waiting caller enqueues one durable `shell` notification with final status and output since the last read. The final result remains available for an optional poll; notification output is bounded to 80000 characters, independently of the configured per-read output limit. These notifications are reference data, not human channel messages. Continue independent work or stay idle until completion instead of repeatedly polling. No unresolved model tool call is carried into the next model request. Runtime restart stops sessions; never replay a missing session automatically, and inspect external effects before retrying interrupted work.
+
 ## Executable apps and skills
 
 An app is a directory containing `app.json`, a `SKILL.md` guide, and its ordinary executable files. For example:
