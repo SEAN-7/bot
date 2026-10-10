@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
+	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
@@ -65,10 +66,11 @@ type daemon struct {
 	agentName string
 	agentUID  int
 
-	mu      sync.Mutex
-	agents  map[string]*agent
-	limited map[string]bool // agents held back by max_agents, already reported
-	wg      sync.WaitGroup
+	mu        sync.Mutex
+	agents    map[string]*agent
+	delivered *delivered
+	limited   map[string]bool // agents held back by max_agents, already reported
+	wg        sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -91,6 +93,9 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer d.fs.Close()
+	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
+		return err
+	}
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
 	d.recover()
 	ticker := time.NewTicker(cfg.Poll)
@@ -187,9 +192,29 @@ func (d *daemon) clearLimited(dirs []string) {
 	}
 }
 
-func (d *daemon) recover() {}
-
-func (d *daemon) deliverOwner() {}
+// recover tells every agent whose newest run never ended that it was
+// interrupted, then marks that run ended so the note is sent once.
+func (d *daemon) recover() {
+	dirs, err := d.fs.Scan(d.cfg.Home)
+	if err != nil {
+		d.cfg.Logger.Printf("recovery scan: %v", err)
+		return
+	}
+	for _, dir := range dirs {
+		path, clean, err := journal.Latest(d.cfg.JournalDir(dir))
+		if err != nil || path == "" || clean {
+			continue
+		}
+		if err := d.writeNote(dir, "interrupted", MsgInterrupted); err != nil {
+			d.cfg.Logger.Printf("%s: interrupted note: %v", d.rel(dir), err)
+			continue
+		}
+		if err := journal.MarkInterrupted(path); err != nil {
+			d.cfg.Logger.Printf("%s: %v", d.rel(dir), err)
+		}
+		d.cfg.Logger.Printf("%s: resumed after interruption (%s)", d.rel(dir), path)
+	}
+}
 
 // rel names an agent for logs and notes, relative to the main agent.
 func (d *daemon) rel(dir string) string {

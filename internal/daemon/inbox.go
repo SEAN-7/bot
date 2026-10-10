@@ -107,4 +107,9 @@ func (a *agent) collectInbox(j recorder) ([]inboxRecord, error) {
 }
 
 // label is "owner" only for messages the daemon delivered from the owner spool.
-func (a *agent) label(name, sum string) string { return "data" }
+func (a *agent) label(name, sum string) string {
+	if a.d.delivered.take(a.dir, name, sum) {
+		return "owner"
+	}
+	return "data"
+}
