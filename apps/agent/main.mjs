@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { invoke } from '../_lib/invoke.mjs';
 import { appClient } from '../_lib/client.mjs';
 import { startServices } from './services.mjs';
+import { prepareSnapshot as prepareContextSnapshot } from './context.mjs';
 
 const mode = process.argv[2];
 if (mode === '--preflight' || mode === '--help') {
@@ -18,26 +19,11 @@ else {
   });
   const progress = phase => send({type:'progress',phase});
   async function prepareSnapshot() {
-    const settings=config.model||{};
-    let messages=await rpc('history');
-    for(const app of options.contributors||[]) {
-      let result;
-      try { result=await invoke(app,'contribute',{}); }
-      catch(error) { console.error(`Contributor ${app} failed: ${error.message}`);continue; }
-      if(!Array.isArray(result))throw new Error('Invalid context contributions from '+app);
-      for(const item of result)await rpc('contribute',{module:app,...item});
-    }
-    messages=await rpc('history');
-    const latest=messages.findLast(m=>m.role==='user'||m.metadata?.resumedInput);
-    for(const app of options.projections||[])messages=await invoke(app,'project',{messages});
-    if(options.contextApp) {
-      const prepared=await invoke(options.contextApp,'prepare',{messages,tools,settings,modelApp:options.modelApp});
-      messages=prepared.messages;
-      for(const message of prepared.append||[])messages.push(await rpc('append',{message}));
-    }
-    if(!Array.isArray(messages)||messages.some(m=>typeof m.content!=='string'))throw new Error('Invalid prepared context');
-    if(latest&&!messages.some(m=>m.id===latest.id))throw new Error('Context removed the current input');
-    return {messages,tools,settings,latestInputId:latest?.id};
+    const client=appClient(config.controller);
+    return prepareContextSnapshot({options,tools,settings:config.model||{},rpc,invoke,state:{
+      get:(key,fallback)=>client('state.get',{key,fallback}),
+      set:(key,value)=>client('state.set',{key,value}),
+    }});
   }
   async function prepare() {
     while(true) {

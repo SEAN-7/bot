@@ -116,11 +116,13 @@ await runCLI({commands,operations:{project:async(_api,input)=>{if(input.messages
   await updates([message(1,'first telegram text')]);
   await until(async()=>(await api('/api/events')).events.some(e=>e.kind==='tool.started'));
   await updates([message(1,'first telegram text'),message(2,'second telegram text')]);
-  await until(async()=>(await api('/api/status')).pending===2);
+  await until(async()=>(await api('/api/events')).events.some(event=>event.kind==='input.accepted'&&event.payload.metadata?.source==='telegram'&&event.payload.metadata.updateId===2));
   await writeFile(join(home,'workspace','continue-tool'),'');
   await until(async()=>{try{await readFile(join(home,'workspace','preparing-context'));return true;}catch{return false;}});
   await updates([message(1,'first telegram text'),message(2,'second telegram text'),message(3,'latest direction')]);
-  await until(async()=>(await api('/api/status')).pending===3);
+  // Shell completion may also be queued while context preparation is paused.
+  // Observe the actual Telegram receipt instead of an unstable total count.
+  await until(async()=>(await api('/api/events')).events.some(event=>event.kind==='input.accepted'&&event.payload.metadata?.source==='telegram'&&event.payload.metadata.updateId===3));
   await writeFile(join(home,'workspace','continue-context'),'');
   await until(async()=>(await api('/api/status')).pending===0);
   let history=(await api('/api/messages')).messages;

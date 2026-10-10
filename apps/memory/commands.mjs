@@ -1,8 +1,9 @@
 const EMPTY = { revision: 0, USER: '', notes: '' };
+import { sectionLimits } from './limits.mjs';
 
 export function commands(api) {
 
-  const maxChars = Math.max(256, Math.min(100_000, api.config.maxChars ?? 8_000));
+  const limits = sectionLimits(api.config);
   const read = () => api.state.get('memory', EMPTY);
   return {
     "get": {
@@ -11,16 +12,17 @@ export function commands(api) {
     execute: read,
   },
     "update": {
-    description: `Replace one durable memory section; read it first to preserve useful facts. Each section holds at most ${maxChars} characters. Use an empty value to clear it.`,
+    description: `Replace one durable memory section; read it first to preserve useful facts. USER holds at most ${limits.USER} characters and notes ${limits.notes}. Consolidate existing entries if full. Use an empty value to clear it.`,
     inputSchema: {
       type: 'object', additionalProperties: false, required: ['section', 'value'],
       properties: {
         section: { type: 'string', enum: ['USER', 'notes'] },
-        value: { type: 'string', maxLength: maxChars },
+        value: { type: 'string' },
       },
+      oneOf: ['USER', 'notes'].map(section => ({ properties: { section: { const: section }, value: { maxLength: limits[section] } } })),
     },
     async execute({ section, value }) {
-      if (!['USER', 'notes'].includes(section) || typeof value !== 'string' || [...value].length > maxChars) {
+      if (!['USER', 'notes'].includes(section) || typeof value !== 'string' || [...value].length > limits[section]) {
         throw new Error('Invalid memory section or value');
       }
       const current = await read();

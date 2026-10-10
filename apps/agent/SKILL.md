@@ -18,3 +18,13 @@ the next model call. Plain assistant text is discarded. With no requested tools
 and no new notifications, acknowledge delivery and stay idle; this does not
 classify the objective as complete. There is no wait tool or tool-step limit.
 Assistant protocol records retain tool calls and reasoning, not human replies.
+
+Contributors normally return `{key,content}` entries to journal. Entries with
+`placement:"system"` instead form a frozen, durable `promptSnapshot` in the
+controller's app state. These are separate reference data passed as
+`systemContext` to the model app. Context preparation returns a `boundary`
+identifier (the last summarized journal ID); when it changes, the controller
+reloads system contributions after compaction and saves the refreshed snapshot.
+The boundary also catches a restart between saving a summary and refreshing
+memory. Old journal snapshots stay searchable but are excluded from prepared
+history for apps supplying system contributions.

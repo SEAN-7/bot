@@ -49,7 +49,7 @@ export function createModel(config, collection = builtinModels()) {
       return { contextWindow: selected.contextWindow, maxOutputTokens: selected.maxTokens };
     },
     listModels: () => collection.getModels().map(({ provider, id, name, contextWindow }) => ({ provider, id, name, contextWindow })),
-    async complete({ messages, tools, settings = {}, signal }) {
+    async complete({ messages, tools, settings = {}, systemContext = '', signal }) {
       const selected = select(settings);
       const options = { signal, maxRetries: 0, cacheRetention: 'short' };
       for (const key of ['temperature', 'reasoning', 'cacheRetention', 'timeoutMs', 'sessionId']) {
@@ -60,7 +60,7 @@ export function createModel(config, collection = builtinModels()) {
       options.onResponse = response => { responseStatus = response.status; };
       try {
         const answer = await collection.completeSimple(selected, {
-          systemPrompt: config.systemPrompt ?? DEFAULT_PROMPT,
+          systemPrompt: [config.systemPrompt ?? DEFAULT_PROMPT, systemContext].filter(Boolean).join('\n\n'),
           messages: toPiMessages(messages, selected),
           tools: tools.map(tool => ({ name: tool.name, description: tool.description, parameters: tool.inputSchema })),
         }, options);

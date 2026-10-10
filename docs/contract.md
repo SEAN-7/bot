@@ -71,6 +71,16 @@ Temporary retries retain input order. Blocked inputs remain durable but allow la
 The bundled `agent` app owns the agent loop and strategy. Its settings select `modelApp`, `contextApp`, `contributors`, `projections`, `tickApps` and `services`. It calls ordinary apps for model completion/description, context preparation, memory/skill contributions, chat projection and scheduling. The loop is driven by notifications and tool results, without a task-completion test or a tool-step limit. Plain model text accompanying tools is discarded; a text-only response is rejected and retried, rather than accepted as task completion. Assistant protocol records contain tool requests and reasoning only. Human replies go through communication tools. With no new notifications or tool results, the loop stays idle and makes no model call. Context preparation returns `messages` and may return `append` records; the controller journals those records and adds their saved copies to the prepared messages before model completion. `services` lists background apps whose `watch` command the controller supervises, including while a turn is active. These command names are conventions of that controller, not core interfaces. Replace the controller to change that policy.
 
 Communication apps own their message storage and delivery state in workspace.
+
+The bundled controller also accepts contributor entries with `placement:"system"`.
+It retains these as a frozen `promptSnapshot` in controller app state and passes
+their text to model completion as `systemContext`, separate from compactable
+messages. Context preparation returns `boundary` (the last summarized journal
+ID); a changed boundary refreshes system contributions after successful
+compaction, including recovery from a restart between the two state writes.
+The bundled model provider appends that reference block to its system prompt.
+These fields are app conventions; the protected core has no memory policy.
+
 Terminal chat and Telegram are independent conversations. Their incoming messages
 generate reference notifications in the core's durable working queue. The bot
 uses the corresponding app's read/send commands to communicate. Legacy journal

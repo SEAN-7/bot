@@ -58,7 +58,7 @@ function harness(config = {}, state = new Map()) {
 test('memory is bounded, persistent, revisioned, and emits a clearing revision', async () => {
   const h = harness({ maxChars: 256 });
   memory(h.api);
-  assert.deepEqual(await h.hooks.get('beforeModel')({}), []);
+  assert.deepEqual(await h.hooks.get('beforeModel')({}), [{ key: 'memory:0', placement: 'system', content: '' }]);
   const update = { section: 'USER', value: 'Prefers plain language.' };
   await h.call('memory_update', update);
   const first = await h.hooks.get('beforeModel')({});
@@ -68,7 +68,7 @@ test('memory is bounded, persistent, revisioned, and emits a clearing revision',
   await h.call('memory_update', { section: 'USER', value: '' });
   const cleared = await h.hooks.get('beforeModel')({});
   assert.notEqual(cleared[0].key, first[0].key);
-  assert.match(cleared[0].content, /"USER":""/);
+  assert.equal(cleared[0].content, '');
   const restarted = harness({}, h.state);
   memory(restarted.api);
   assert.equal((await restarted.call('memory_get')).revision, 2);
@@ -394,7 +394,7 @@ test('context derives compaction budget from a small selected model', async () =
   const h = harness();
   context(h.api);
   const messages = [
-    { id: 1, role: 'user', content: 'x'.repeat(4500) },
+    { id: 1, role: 'user', content: 'x'.repeat(6000) },
     { id: 2, role: 'assistant', content: 'earlier answer' },
     { id: 3, role: 'user', content: 'y'.repeat(3000) },
   ];
