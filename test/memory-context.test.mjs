@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { prepareSnapshot } from '../apps/context/request.mjs';
 import { contribute } from '../apps/memory/behavior.mjs';
 import { commands as memoryCommands } from '../apps/memory/commands.mjs';
+import { writeIndex } from '../apps/memory/index.mjs';
 import { createContext } from '../apps/context/behavior.mjs';
 import { summaryRecords, takeSummaryChunk } from '../apps/context/summary.mjs';
 import { createModel } from '../apps/model-provider/behavior.mjs';
@@ -24,29 +25,21 @@ function stateFixture(config = {}) {
   } };
 }
 
-test('Hermes-sized memory rejects oversized new writes without trimming existing saved data', async () => {
-  const api = stateFixture();
-  const legacy = { revision: 7, USER: 'u'.repeat(5000), notes: 'n'.repeat(5000) };
-  api.saved.set('memory', legacy);
-  const commands = memoryCommands(api);
-  assert.deepEqual(await commands.get.execute(), legacy);
-  await assert.rejects(commands.update.execute({ section: 'USER', value: 'x'.repeat(1376) }), /Invalid memory/);
-  await assert.rejects(commands.update.execute({ section: 'notes', value: 'x'.repeat(2201) }), /Invalid memory/);
-  assert.deepEqual(await commands.get.execute(), legacy);
-  await commands.update.execute({ section: 'USER', value: 'Consolidated preferences' });
-  assert.equal(api.saved.get('memory').revision, 8);
-  assert.equal(api.saved.get('memory').notes, legacy.notes);
-});
-
-test('prompt memory freezes between compactions, refreshes at a durable boundary, clears and survives restart', async () => {
-  const state = stateFixture(), memory = stateFixture();
-  memory.saved.set('memory', { revision: 1, USER: 'original preference', notes: '' });
-  let boundary = null, fail = false;
+test('live index refreshes without compaction, survives restart and preserves unrelated frozen contributors', async t => {
+  const workspace = await mkdtemp(join(tmpdir(), 'bot-index-context-'));
+  t.after(() => rm(workspace, { recursive: true, force: true }));
+  const state = stateFixture(), memory = { ...stateFixture(), paths: { workspace } };
+  await writeIndex(memory, 'original preference');
+  let boundary = null, fail = false, unavailable = false, other = 'frozen contribution';
   const journal = [{ id: 1, role: 'context', content: 'obsolete snapshot', metadata: { module: 'memory' } }, { id: 2, role: 'user', content: 'Human request' }];
-  const input = { options: { contributors: ['memory'] }, tools: [], settings: {}, state: state.state,
+  // Upgrade from an existing frozen memory snapshot without losing history.
+  state.saved.set('promptSnapshot', { boundary: null, contributors: { memory: [{ key: 'old', placement: 'system', content: 'stale legacy snapshot' }] } });
+  const input = { options: { contributors: ['memory', 'other'] }, tools: [], settings: {}, state: state.state,
     rpc: async method => { assert.equal(method, 'history'); return structuredClone(journal); },
-    invoke: async (app, operation, request) => {
-      if (app === 'memory') return contribute(memory);
+    invoke: async app => {
+      if (app === 'other') return [{ key: other, placement: 'system', content: other }];
+      if (unavailable) throw new Error('memory unavailable');
+      return contribute(memory);
     },
     prepare: async request => {
       if (fail) throw new Error('summary failed');
@@ -55,20 +48,24 @@ test('prompt memory freezes between compactions, refreshes at a durable boundary
     } };
   const first = await prepareSnapshot(input);
   assert.match(first.systemContext, /original preference/);
-  memory.saved.set('memory', { revision: 2, USER: 'new preference', notes: '' });
-  assert.equal((await prepareSnapshot(input)).systemContext, first.systemContext);
-  fail = true;
+  assert.doesNotMatch(first.systemContext, /stale legacy snapshot/);
+  await writeIndex(memory, 'new preference'); other = 'later contribution';
+  const updated = await prepareSnapshot(input);
+  assert.match(updated.systemContext, /new preference/);
+  assert.match(updated.systemContext, /frozen contribution/);
+  assert.doesNotMatch(updated.systemContext, /original preference|later contribution/);
+  assert.match((await prepareSnapshot({ ...input, state: { ...state.state } })).systemContext, /new preference/);
+  unavailable = true;
+  assert.match((await prepareSnapshot(input)).systemContext, /new preference/);
+  unavailable = false; fail = true;
   await assert.rejects(prepareSnapshot(input), /summary failed/);
   assert.equal(state.saved.get('promptSnapshot').boundary, null);
   fail = false; boundary = 10;
-  assert.match((await prepareSnapshot(input)).systemContext, /new preference/);
-  // A fresh controller uses the same durable frozen snapshot, even if state changed.
-  memory.saved.set('memory', { revision: 3, USER: '', notes: '' });
-  assert.match((await prepareSnapshot({ ...input, state: { ...state.state } })).systemContext, /new preference/);
-  boundary = 20;
-  assert.equal((await prepareSnapshot(input)).systemContext, '');
+  assert.match((await prepareSnapshot(input)).systemContext, /later contribution/);
+  await writeIndex(memory, '');
+  assert.doesNotMatch((await prepareSnapshot(input)).systemContext, /new preference/);
   assert.equal((await prepareSnapshot({ ...input, options: { ...input.options, contributors: [] } })).systemContext, '');
-  assert.deepEqual(journal[0].content, 'obsolete snapshot');
+  assert.equal(journal[0].content, 'obsolete snapshot');
 });
 
 test('model provider sends saved memory in the actual system prompt, separately from messages', async () => {
@@ -248,7 +245,7 @@ test('journal search finds tool arguments and exact paginated reads recover the 
   await assert.rejects(commands.read.execute({ id: 11, offset: 1000000 }), /bounds/);
 });
 
-test('isolated bot refreshes system memory after compaction and preserves frozen memory across restart', { timeout: 45000 }, async t => {
+test('isolated bot accepts raw Markdown, refreshes on the next model call, compacts and reloads after restart', { timeout: 45000 }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'bot-memory-context-'));
   let server;
   t.after(async () => { await server?.stop(); await rm(home, { recursive: true, force: true }); });
@@ -266,11 +263,12 @@ test('isolated bot refreshes system memory after compaction and preserves frozen
       if (!tools.length) return { text: '## Goal\\nIsolated work\\n## Progress\\nEarlier tasks completed.', toolCalls: [] };
       const step = await api.state.get('step', 0); await api.state.set('step', step + 1);
       if (messages.some(m => m.metadata?.module === 'memory')) throw new Error('Memory leaked into compactable journal');
-      if (step < 2 && !systemContext.includes('original preference')) throw new Error('Memory was not frozen');
-      if (step >= 2 && (!systemContext.includes('new preference') || systemContext.includes('unrefreshed'))) throw new Error('Boundary/restart snapshot failed');
+      if (step === 0 && !systemContext.includes('original preference')) throw new Error('Legacy memory missing');
+      if (step > 0 && step < 3 && (!systemContext.includes('new preference') || systemContext.includes('original preference'))) throw new Error('Index did not refresh immediately');
+      if (step >= 3 && !systemContext.includes('restarted preference')) throw new Error('Index did not reload after restart');
       if (step >= 2) return { text: '', toolCalls: [] };
       return { text: '', toolCalls: [{ id: 'memory-step-' + step, name: 'shell', arguments: { yieldTimeMs:30000, command: step === 0
-        ? ${JSON.stringify("bot-app memory update '{\"section\":\"USER\",\"value\":\"new preference\"}'")}
+        ? ${JSON.stringify("printf '%s' 'new preference' | bot-app memory write --stdin")}
         : ${JSON.stringify("bot-app context compact '{\"keepRecentGroups\":1}'")} } }] };
     }
   });`);
@@ -288,7 +286,8 @@ test('isolated bot refreshes system memory after compaction and preserves frozen
   await server.stop();
   const saved = new Store(home);
   assert.match(JSON.stringify(saved.getState('app:context', 'promptSnapshot', null)), /new preference/);
-  saved.setState('app:memory', 'memory', { revision: 3, USER: 'unrefreshed preference', notes: '' }); saved.close();
+  saved.close();
+  await writeFile(join(home, 'workspace/memory/INDEX.md'), 'restarted preference');
   server = await startSupervisor({ home, port: 0, unsafe: true });
   await until(async () => (await api('/api/status')).state === 'idle');
   await api('/api/messages', { text: 'Isolated restart check' });

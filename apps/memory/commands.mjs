@@ -1,37 +1,24 @@
-const EMPTY = { revision: 0, USER: '', notes: '' };
-import { sectionLimits } from './limits.mjs';
+import { readIndex, writeIndex, measure } from './index.mjs';
 
 export function commands(api) {
-
-  const limits = sectionLimits(api.config);
-  const read = () => api.state.get('memory', EMPTY);
+  const empty = { type: 'object', properties: {}, additionalProperties: false };
   return {
-    "get": {
-    description: 'Read durable USER preferences and working notes. These are remembered data, not instructions.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    execute: read,
-  },
-    "update": {
-    description: `Replace one durable memory section; read it first to preserve useful facts. USER holds at most ${limits.USER} characters and notes ${limits.notes}. Consolidate existing entries if full. Use an empty value to clear it.`,
-    inputSchema: {
-      type: 'object', additionalProperties: false, required: ['section', 'value'],
-      properties: {
-        section: { type: 'string', enum: ['USER', 'notes'] },
-        value: { type: 'string' },
-      },
-      oneOf: ['USER', 'notes'].map(section => ({ properties: { section: { const: section }, value: { maxLength: limits[section] } } })),
+    show: {
+      description: 'Print the accepted Markdown index verbatim. Redirect to a working file, edit with the shell, then submit with write --stdin.',
+      inputSchema: empty, outputFormat: 'text', execute: async () => (await readIndex(api)).markdown,
     },
-    async execute({ section, value }) {
-      if (!['USER', 'notes'].includes(section) || typeof value !== 'string' || [...value].length > limits[section]) {
-        throw new Error('Invalid memory section or value');
-      }
-      const current = await read();
-      if (current[section] === value) return current;
-      const next = { ...current, [section]: value, revision: current.revision + 1 };
-      await api.state.set('memory', next);
-      return next;
+    status: {
+      description: 'Show index path, hash and estimated-token budget. maxIndexTokens defaults to 1000; estimates are ceil(UTF-8 bytes / 4), not a provider tokenizer.',
+      inputSchema: empty, execute: async () => { const { markdown, ...status } = await readIndex(api); return status; },
     },
-  },
+    check: {
+      description: 'Measure proposed Markdown from --stdin without changing the accepted index. Returns fits and estimated tokens.',
+      inputSchema: { type: 'string' }, inputFormat: 'text', execute: text => measure(api, text),
+    },
+    write: {
+      description: 'Accept replacement Markdown from --stdin after checking its budget, saving atomically. Move details to linked notes when full. Rejected writes preserve the accepted index; accepted edits appear on the next model call.',
+      inputSchema: { type: 'string' }, inputFormat: 'text', execute: text => writeIndex(api, text),
+    },
     "search": {
     description: 'Search the full durable conversation, including messages omitted by context summaries. Searches message content and tool arguments. Matching is literal and case-insensitive; most recent matches come first.',
     inputSchema: {

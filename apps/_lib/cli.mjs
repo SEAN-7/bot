@@ -17,15 +17,18 @@ export async function runCLI({commands = () => ({}), operations = {}, preflight}
     for (const entry of Object.values(entries)) entry.validate = ajv.compile(entry.inputSchema || {type:'object'});
     if (command === '--preflight') {await preflight?.(api);return;}
     if (!command || command === '--help') {
-      console.log(JSON.stringify({app:id,commands:Object.fromEntries(Object.entries(entries).map(([key, entry])=>[key,{description:entry.description,arguments:entry.inputSchema}])),operations:Object.keys(operations)},null,2));return;
+      console.log(JSON.stringify({app:id,commands:Object.fromEntries(Object.entries(entries).map(([key, entry])=>[key,{description:entry.description,arguments:entry.inputSchema,...(entry.inputFormat?{inputFormat:entry.inputFormat}:{}),...(entry.outputFormat?{outputFormat:entry.outputFormat}:{})}])),operations:Object.keys(operations)},null,2));return;
     }
     if (extra.length) throw new Error('Pass one JSON object or --stdin');
     let input = argument;
-    if (argument === '--stdin') { input = ''; for await (const chunk of process.stdin) { input += chunk; if (input.length > 20_000_000) throw new Error('Input too large'); } }
-    const data = JSON.parse(input), entry = entries[command];
+    if (argument === '--stdin') { input = ''; process.stdin.setEncoding('utf8'); for await (const chunk of process.stdin) { input += chunk; if (input.length > 20_000_000) throw new Error('Input too large'); } }
+    const entry = entries[command];
+    if (entry?.inputFormat === 'text' && argument !== '--stdin') throw new Error('Pass Markdown through --stdin');
+    const data = entry?.inputFormat === 'text' ? input : JSON.parse(input);
     if (entry && !entry.validate(data)) throw new Error('Invalid arguments: '+ajv.errorsText(entry.validate.errors));
     if (!entry && !operations[command]) throw new Error('Unknown command: '+command);
     const result = entry ? await entry.execute(data,{signal:new AbortController().signal,callId:process.env.BOT_CALL_ID}) : await operations[command](api,data);
-    console.log(JSON.stringify(result ?? null));
+    if (entry?.outputFormat === 'text') process.stdout.write(result);
+    else console.log(JSON.stringify(result ?? null));
   } catch (error) { console.error(JSON.stringify({error:error.message,retryable:!!error.retryable,blocked:!!error.blocked})); process.exitCode = 1; }
 }

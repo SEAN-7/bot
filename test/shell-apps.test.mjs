@@ -42,8 +42,8 @@ test('isolated conversation uses shell apps and shared durable state without nat
     if(tools.length!==1||tools[0].name!=='shell')throw new Error('Unexpected tools');
     const input=messages.findLast(m=>m.metadata?.input);const recent=messages.slice(messages.indexOf(input)+1);
     const results=recent.filter(m=>m.role==='tool');const steps=[
-      "bot-app memory update '{\\\"section\\\":\\\"notes\\\",\\\"value\\\":\\\"persisted through app\\\"}'",
-      "bot-app memory get '{}'", "bot-app skills list '{}'", "bot-app scheduler create '{\\\"text\\\":\\\"future isolated check\\\",\\\"at\\\":\\\"2099-01-01T00:00:00Z\\\"}'",
+      "printf '%s' 'persisted through app' | bot-app memory write --stdin",
+      "bot-app memory show", "bot-app skills list '{}'", "bot-app scheduler create '{\\\"text\\\":\\\"future isolated check\\\",\\\"at\\\":\\\"2099-01-01T00:00:00Z\\\"}'",
       "bot-app scheduler list '{}'", "bot-app context compact '{}'", "bot-app chat read '{}'", "bot-app chat send '{\\\"text\\\":\\\"isolated app success\\\"}'"
     ];
     if(results.some(m=>m.isError||JSON.parse(m.content).exitCode!==0))throw new Error('App failed: '+JSON.stringify(results));

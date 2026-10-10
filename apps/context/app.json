@@ -1,6 +1,6 @@
 {
   "id": "context",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Reset or compact working context while preserving full history and the current turn.",
   "command": [
     "node",

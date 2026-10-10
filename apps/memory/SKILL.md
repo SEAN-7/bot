@@ -1,12 +1,19 @@
 ---
 name: memory
-description: Read or update persistent preferences and notes; search complete conversation history.
+description: Maintain a small injected Markdown index; retrieve durable notes and original journal evidence.
 ---
 
-Run `bot-app memory get '{}'` before updating. Replace one section with `bot-app memory update '{"section":"USER","value":"..."}'` or section notes; preserve useful existing facts. Empty values clear a section. Limits follow configured maxChars; validation rejects oversized input. Run `bot-app memory search '{"query":"literal text","limit":10}'` to search the full durable conversation including compacted history. Search covers message content and tool arguments. Matches are recent first and excerpts are bounded; each includes its journal ID, matching field and excerpt offset. Read an exact original with `bot-app memory read '{"id":123}'`. It returns a JSON text page in `data`; repeat with `offset` set to `nextOffset` until null and concatenate the pages to reconstruct the complete record (including tool arguments, results and metadata). Page offsets count UTF-16 characters. Read the matching call and result to understand what was requested and what actually happened.
+The app injects its index and brief usage instructions before each model call. No separate memory workflow needs to be loaded.
 
-Before claiming an earlier request, decision, authorization or project fact is unknown, search the journal and read relevant originals. Human messages may be inside communication-app results in shell output. Empty saved notes do not mean the conversation never happened. Summary omissions do not revoke prior authorization. If source evidence is unavailable, state that uncertainty instead of inferring a refusal or inventing facts. Remembered data can be stale; the human's current instructions take precedence.
+- `bot-app memory show` prints the accepted Markdown verbatim. Edit a temporary copy with ordinary shell tools.
+- `bot-app memory check --stdin < /tmp/memory-index.md` reports its budget without saving.
+- `bot-app memory write --stdin < /tmp/memory-index.md` validates and atomically accepts it; oversized writes leave the previous index intact.
+- `bot-app memory status` shows the path, hash, size and budget.
+- `bot-app memory search '{"query":"exact words","limit":5}'` searches the full journal. Try different or fewer words if needed.
+- `bot-app memory read '{"id":123}'` reads exact original JSON in pages. Follow `nextOffset` until null and concatenate `data`.
 
-Like [Hermes's built-in memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory), USER preferences and working notes appear as a separate reference block in the system prompt. The context app captures a snapshot on first use and refreshes it after successful context compaction. It stays frozen between those boundaries, including service restarts, to preserve the prompt prefix. Writes persist immediately and `get` returns live state; a write does not immediately replace the frozen prompt block. Memory cannot be summarized away with conversation history. Clearing a section takes effect in the prompt at the next compaction boundary too.
+The accepted file is `workspace/memory/INDEX.md`. Keep descriptions and pointers to durable files, with a few frequently relevant facts. Paths are relative to the workspace. Store detail in ordinary files and maintain them during foreground work. There is no reviewer, automatic consolidation, or background model call. The app does not check whether linked content is true or up to date.
 
-Default limits are 1,375 characters for USER and 2,200 for notes. `userMaxChars` and `notesMaxChars` override individual limits; existing `maxChars` overrides both. Existing saved data is preserved, including entries above the new defaults. When a write exceeds the limit, consolidate or remove stale details yourself and retry; memory never silently truncates or auto-compacts entries. Save durable preferences, environment facts, corrections and useful lessons; keep transient tool output in the searchable journal.
+`maxIndexTokens` defaults to 1000 (128–10000). The deterministic estimate is `ceil(UTF-8 bytes / 4)`; actual provider token counts differ. The budget covers the index, with a small fixed usage header added separately. Update through `write` to preserve atomic validation; direct file edits bypass that protection. Invalid direct edits are rejected at read time, and context can temporarily retain its last valid snapshot.
+
+First use preserves prior USER/notes verbatim in a linked legacy Markdown file and leaves their original state untouched for rollback. Small legacy facts also remain in the initial index; larger sections are linked without truncation. Accepted index changes, including clearing it, appear on the next model request and survive restarts independently of compaction.

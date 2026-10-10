@@ -11,7 +11,7 @@ export async function prepareSnapshot({ options, tools, settings, rpc, invoke, s
     try { items = await invoke(app, 'contribute', {}); }
     catch (error) {
       // A frozen prompt remains usable if its app is temporarily unavailable.
-      if (!snapshot?.contributors[app]) console.error(`Contributor ${app} failed: ${error.message}`);
+      console.error(`Contributor ${app} failed${snapshot?.contributors[app] ? '; retaining its last accepted snapshot' : ''}: ${error.message}`);
       continue;
     }
     if (!Array.isArray(items) || items.some(item => typeof item.key !== 'string' || typeof item.content !== 'string')) {
@@ -28,10 +28,14 @@ export async function prepareSnapshot({ options, tools, settings, rpc, invoke, s
   const legacyPromptApps = new Set([...promptApps, ...Object.keys(snapshot?.contributors || {})]);
   messages = messages.filter(message => !legacyPromptApps.has(message.metadata?.module));
   for (const app of options.projections || []) messages = await invoke(app, 'project', { messages });
+  // Contributors can opt into refreshing every request. Others retain their
+  // existing compaction-boundary policy. This is app policy, not core logic.
+  const current = { ...snapshot?.contributors };
+  for (const [app, items] of collected) if (!current[app] || items.some(item => item.refresh === 'always')) current[app] = items;
   let prepared = { messages, boundary: null };
   if (prepare) prepared = await prepare( { messages, tools, settings, modelApp: options.modelApp,
     // Account for prompt memory in the context budget without summarizing it.
-    promptChars: Object.values(snapshot?.contributors || Object.fromEntries(collected)).flat().reduce((sum, item) => sum + item.content.length, 0) });
+    promptChars: (options.contributors || []).flatMap(app => current[app] || []).reduce((sum, item) => sum + item.content.length, 0) });
   const boundary = prepared.boundary ?? null;
   if (!snapshot || snapshot.boundary !== boundary || [...promptApps].some(app => !snapshot.contributors[app])) {
     const contributors = {};
@@ -42,6 +46,9 @@ export async function prepareSnapshot({ options, tools, settings, rpc, invoke, s
       contributors[app] = items.filter(item => item.placement === 'system');
     }
     snapshot = { boundary, contributors };
+    await state.set('promptSnapshot', snapshot);
+  } else if (JSON.stringify(current) !== JSON.stringify(snapshot.contributors)) {
+    snapshot = { boundary, contributors: current };
     await state.set('promptSnapshot', snapshot);
   }
   messages = reset ? [resetNotice(reset), ...prepared.messages] : prepared.messages;

@@ -21,7 +21,7 @@ const piModel=(api,collection)=>api.registerModel(createModel(api.config,collect
 
 // Exercise the migrated command bodies against the same durable-state fixtures.
 function installCommands(api, entries, names) {
-  for(const [name, entry] of Object.entries(entries)) api.registerCommand({ ...entry, name: names[name] });
+  for(const [name, entry] of Object.entries(entries)) api.registerCommand({ ...entry, name: names[name] || name });
 }
 function memory(api) { memoryModule(api); installCommands(api,memoryCommands(api),{get:'memory_get',update:'memory_update',search:'history_search',read:'history_read'}); }
 function scheduler(api) { schedulerModule(api); installCommands(api,schedulerCommands(api),{create:'schedule_create',list:'schedule_list',cancel:'schedule_cancel'}); }
@@ -55,25 +55,6 @@ function harness(config = {}, state = new Map()) {
     },
   };
 }
-
-test('memory is bounded, persistent, revisioned, and emits a clearing revision', async () => {
-  const h = harness({ maxChars: 256 });
-  memory(h.api);
-  assert.deepEqual(await h.hooks.get('beforeModel')({}), [{ key: 'memory:0', placement: 'system', content: '' }]);
-  const update = { section: 'USER', value: 'Prefers plain language.' };
-  await h.call('memory_update', update);
-  const first = await h.hooks.get('beforeModel')({});
-  await h.call('memory_update', update);
-  assert.deepEqual(await h.hooks.get('beforeModel')({}), first);
-  assert.equal(h.tools.get('memory_update').validate({ section: 'USER', value: 'a'.repeat(257) }), false);
-  await h.call('memory_update', { section: 'USER', value: '' });
-  const cleared = await h.hooks.get('beforeModel')({});
-  assert.notEqual(cleared[0].key, first[0].key);
-  assert.equal(cleared[0].content, '');
-  const restarted = harness({}, h.state);
-  memory(restarted.api);
-  assert.equal((await restarted.call('memory_get')).revision, 2);
-});
 
 test('history search finds archived conversation text with bounded recent matches', async () => {
   const h = harness();
