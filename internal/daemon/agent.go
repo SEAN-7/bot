@@ -9,6 +9,8 @@ type agent struct {
 	d      *daemon
 	dir    string
 	cancel context.CancelCauseFunc
+
+	failedConfig string // hash of a config.json already reported invalid
 }
 
 func newAgent(d *daemon, dir string) *agent { return &agent{d: d, dir: dir} }

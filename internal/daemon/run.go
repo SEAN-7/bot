@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -27,35 +29,75 @@ func (a *agent) logf(format string, args ...any) {
 	a.d.cfg.Logger.Printf("%s: %s", a.d.rel(a.dir), fmt.Sprintf(format, args...))
 }
 
-// gate reads and validates config.json against the provider's describe.
-func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, error) {
+// errConfig marks a problem the agent must fix in config.json, as opposed
+// to a provider failure, which is retried.
+type errConfig struct{ error }
+
+// gate reads config.json and validates it against the provider's describe.
+// A config error is reported once per distinct config.json content and the
+// agent waits until the file changes; provider failures are retried.
+func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
 	var describe proto.DescribeResponse
 	data, _, err := d.fs.Read(filepath.Join(a.dir, "config.json"), 1<<20)
+	sum := sha256.Sum256(data)
+	hash := hex.EncodeToString(sum[:])
 	if err != nil {
-		return plugin.Config{}, describe, err
+		hash = "unreadable: " + err.Error()
 	}
-	cfg, err := plugin.ParseConfig(data)
+	if hash == a.failedConfig {
+		return plugin.Config{}, describe, false
+	}
+	var cfg plugin.Config
+	if err == nil {
+		cfg, err = plugin.ParseConfig(data)
+	}
+	if err == nil {
+		err = a.retry(ctx, func() error {
+			installed, err := d.runner.Installed()
+			if err != nil {
+				return err
+			}
+			if !slices.Contains(installed, cfg.Provider) {
+				return errConfig{plugin.Validate(cfg, installed, describe)}
+			}
+			if describe, err = d.runner.Describe(ctx, cfg.Provider); err != nil {
+				return err
+			}
+			if err := plugin.Validate(cfg, installed, describe); err != nil {
+				return errConfig{err}
+			}
+			return nil
+		})
+		var bad errConfig
+		if errors.As(err, &bad) {
+			err = bad.error
+		} else if err != nil {
+			return cfg, describe, false // stopped while retrying
+		}
+	}
 	if err != nil {
-		return cfg, describe, err
+		a.failedConfig = hash
+		text := MsgConfigPrefix + err.Error()
+		a.logf("not starting: %s", text)
+		a.setError(text)
+		if parent := d.parent(a.dir); parent != "" {
+			if err := d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, d.rel(a.dir), text)); err != nil {
+				a.logf("notify parent: %v", err)
+			}
+		}
+		return cfg, describe, false
 	}
-	installed, err := d.runner.Installed()
-	if err != nil {
-		return cfg, describe, err
+	if a.failedConfig != "" {
+		a.failedConfig = ""
+		a.clearError(MsgConfigPrefix)
 	}
-	if !slices.Contains(installed, cfg.Provider) {
-		return cfg, describe, plugin.Validate(cfg, installed, describe) // reports the unknown provider
-	}
-	if describe, err = d.runner.Describe(ctx, cfg.Provider); err != nil {
-		return cfg, describe, err
-	}
-	return cfg, describe, plugin.Validate(cfg, installed, describe)
+	return cfg, describe, true
 }
 
 func (a *agent) run(ctx context.Context) {
-	cfg, describe, err := a.gate(ctx)
-	if err != nil {
-		a.logf("not starting: %v", err)
+	cfg, describe, ok := a.gate(ctx)
+	if !ok {
 		return
 	}
 	j, err := journal.Create(a.d.cfg.JournalDir(a.dir), time.Now())
@@ -165,23 +207,35 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	}
 }
 
-// complete calls the provider, retrying the same request with doubling
-// delays until it succeeds or the agent is stopped. Persistent failures are
-// reported in ~/ERROR and the log, never in the inbox.
+// complete calls the provider with the same request until it succeeds.
 func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.Segment, messages []proto.Message) (proto.CompleteResponse, error) {
 	req := proto.CompleteRequest{Model: cfg.Model, Options: cfg.Options, System: system, Tools: []proto.Tool{proto.ShTool()}, Messages: messages}
+	var resp proto.CompleteResponse
+	err := a.retry(ctx, func() error {
+		var err error
+		resp, err = a.d.runner.Complete(ctx, cfg.Provider, req)
+		return err
+	})
+	return resp, err
+}
+
+// retry runs call until it succeeds, returns an errConfig, or the agent is
+// stopped, with delays doubling from RetryBase to RetryMax. Persistent
+// provider failures are reported in ~/ERROR and the log, never the inbox.
+func (a *agent) retry(ctx context.Context, call func() error) error {
 	delay := a.d.cfg.RetryBase
 	var since time.Time
 	for failures := 0; ; failures++ {
-		resp, err := a.d.runner.Complete(ctx, cfg.Provider, req)
-		if err == nil {
+		err := call()
+		var bad errConfig
+		if err == nil || errors.As(err, &bad) {
 			if failures >= a.d.cfg.ErrorAfter {
 				a.clearError(errProviderPrefix)
 			}
-			return resp, nil
+			return err
 		}
 		if ctx.Err() != nil {
-			return resp, ctx.Err()
+			return ctx.Err()
 		}
 		if failures == 0 {
 			since = time.Now().UTC()
@@ -194,7 +248,7 @@ func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.
 		}
 		select {
 		case <-ctx.Done():
-			return resp, ctx.Err()
+			return ctx.Err()
 		case <-time.After(delay):
 		}
 		delay = min(delay*2, a.d.cfg.RetryMax)

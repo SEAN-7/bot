@@ -4,6 +4,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/user"
@@ -64,13 +65,14 @@ type daemon struct {
 	agentName string
 	agentUID  int
 
-	mu     sync.Mutex
-	agents map[string]*agent
-	wg     sync.WaitGroup
+	mu      sync.Mutex
+	agents  map[string]*agent
+	limited map[string]bool // agents held back by max_agents, already reported
+	wg      sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}}
 	var err error
 	if d.agentCred, err = osuser.Lookup(cfg.AgentUser); err != nil {
 		return err
@@ -144,8 +146,46 @@ func (d *daemon) reconcile(ctx context.Context) {
 	}
 }
 
-// admit applies max_agents; extra agents are reported and not started.
-func (d *daemon) admit(dirs []string) []string { return dirs }
+// admit applies max_agents in scan order. Each excess agent gets an ERROR
+// and its parent one note; both clear when the agent is admitted later.
+func (d *daemon) admit(dirs []string) []string {
+	settings, err := layout.LoadSettings(d.cfg.SettingsFile())
+	if err != nil {
+		d.cfg.Logger.Printf("settings: %v", err)
+	}
+	if len(dirs) <= settings.MaxAgents {
+		d.clearLimited(dirs)
+		return dirs
+	}
+	admitted, excess := dirs[:settings.MaxAgents], dirs[settings.MaxAgents:]
+	d.clearLimited(admitted)
+	for _, dir := range excess {
+		if d.limited[dir] {
+			continue
+		}
+		d.limited[dir] = true
+		d.cfg.Logger.Printf("%s: not started: agent limit reached (max_agents=%d)", d.rel(dir), settings.MaxAgents)
+		if err := d.fs.Write(filepath.Join(dir, "ERROR"), []byte(fmt.Sprintf(MsgLimitFmt, settings.MaxAgents)+"\n")); err != nil {
+			d.cfg.Logger.Printf("%s: write ERROR: %v", d.rel(dir), err)
+		}
+		if parent := d.parent(dir); parent != "" {
+			d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgLimitParentFmt, d.rel(dir), settings.MaxAgents))
+		}
+	}
+	return admitted
+}
+
+func (d *daemon) clearLimited(dirs []string) {
+	for _, dir := range dirs {
+		if d.limited[dir] {
+			delete(d.limited, dir)
+			path := filepath.Join(dir, "ERROR")
+			if data, _, err := d.fs.Read(path, 4096); err == nil && strings.HasPrefix(string(data), "Agent limit reached") {
+				d.fs.Remove(path)
+			}
+		}
+	}
+}
 
 func (d *daemon) recover() {}
 
