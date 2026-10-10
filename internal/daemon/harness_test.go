@@ -30,6 +30,10 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(0)
 	}
+	// REPLAY_BIN lets a cross-compiled test binary run where Go is absent.
+	if replayBin = os.Getenv("REPLAY_BIN"); replayBin != "" {
+		os.Exit(m.Run())
+	}
 	dir, err := os.MkdirTemp("", "replay")
 	if err != nil {
 		panic(err)
@@ -89,7 +93,8 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	os.WriteFile(filepath.Join(l.Home, "README.md"), []byte("readme"), 0o644)
 	os.WriteFile(filepath.Join(l.Home, "TASK.md"), []byte("task"), 0o644)
 	os.WriteFile(filepath.Join(l.Home, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
-	h.cfg = DefaultConfig(os.Args[0])
+	self, _ := os.Executable()
+	h.cfg = DefaultConfig(self)
 	h.cfg.Layout = l
 	h.cfg.AgentUser, h.cfg.ProviderUser = "", ""
 	h.cfg.Poll = 10 * time.Millisecond

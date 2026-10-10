@@ -47,9 +47,9 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 		}
 		return err
 	})
-	self, _ := os.ReadFile(os.Args[0])
+	binary, _ := os.ReadFile(h.cfg.Self)
 	h.cfg.Self = filepath.Join(h.root, "daemon.test")
-	os.WriteFile(h.cfg.Self, self, 0o755)
+	os.WriteFile(filepath.Join(h.root, "daemon.test"), binary, 0o755)
 	h.cfg.AgentUser, h.cfg.ProviderUser = name, name
 	return h, name
 }
