@@ -466,7 +466,12 @@ test('cancelling queued input preserves active work and cancelling active tools 
   `, { runtime: { startupTimeoutMs: 5000, heartbeatTimeoutMs: 5000, operationTimeoutMs: 10000 } });
   const active = await bot.api('/api/messages', { id: 'active-cancel-test', text: 'active cancelled input' });
   await until(async () => (await bot.api('/api/events')).events.some(event => event.kind === 'tool.started' && event.payload.id === 'cancelled-effect'), 'active tool start');
-  const queued = await bot.api('/api/messages', { id: 'pending-cancel-test', text: 'queued cancelled input' });
+  // Keep this input pending: a delivered notification may already be active by
+  // the time cancellation reaches the supervisor, which correctly restarts it.
+  const pendingStore = new Store(bot.home);
+  const queued = pendingStore.enqueue({ id: 'pending-cancel-test', text: 'queued cancelled input', metadata: { source: 'chat' } });
+  pendingStore.retry(queued.id, 60_000);
+  pendingStore.close();
   const before = (await bot.api('/api/events')).events;
   assert.deepEqual(await bot.api('/api/cancel', { id: queued.id }), { id: queued.id, cancelled: true });
   await delay(150);
