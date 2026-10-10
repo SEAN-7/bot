@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { visibleWidth } from '@earendil-works/pi-tui';
-import { createChatView, plainText } from '../src/terminal-chat.mjs';
+import { createChatView, plainText } from '../apps/terminal-chat/terminal-chat.mjs';
 
 class Terminal {
   columns = 80;

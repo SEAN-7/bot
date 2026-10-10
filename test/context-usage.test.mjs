@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initialize, stageDrafts } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
 const fixture = (config = {}) => {

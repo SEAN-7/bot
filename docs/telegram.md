@@ -13,9 +13,9 @@ on the VM using the app's operator command (the prompt hides the token):
 ssh -t bot 'sudo -u bot /opt/bot/current/runtime/node/bin/node /opt/bot/current/app/apps/telegram/main.mjs configure --home /var/lib/bot/.bot'
 ```
 
-Enable the `telegram` draft app, add `telegram` to the controller's `projections`
-and `services` lists, and apply the controller startup configuration or deploy through the managed
-installer. Keep `chat` in those lists for the terminal app. Configuration returns
+Enable the `telegram` draft app, add `telegram` to `apps.context.projections`
+and `["bot-app","telegram","watch"]` to `apps.agent.services`, and apply the controller startup configuration or deploy through the managed
+installer. Keep the corresponding chat projection and watch command for the terminal app. Configuration returns
 a one-time private pairing link that expires in 24 hours. Open it and press Start
 from the Telegram account that should control the bot. Only that private account
 can wake the bot; group chats and other users are ignored. Re-running configure

@@ -3,12 +3,12 @@ import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
 import { ChatStore, notification } from './database.mjs';
 
-const sessionId = process.env.BOT_CHAT_SESSION;
-const token = process.env.BOT_CHAT_TOKEN;
-const workspace = process.env.BOT_CHAT_WORKSPACE;
+const sessionId = (process.env.BOT_CLIENT_SESSION||process.env.BOT_CHAT_SESSION);
+const token = (process.env.BOT_CLIENT_TOKEN||process.env.BOT_CHAT_TOKEN);
+const workspace = (process.env.BOT_WORKSPACE||process.env.BOT_CHAT_WORKSPACE);
 let base;
 try {
-  base = new URL(process.env.BOT_CHAT_URL);
+  base = new URL((process.env.BOT_CLIENT_URL||process.env.BOT_CHAT_URL));
   if (base.protocol !== 'http:' || !['127.0.0.1', '[::1]'].includes(base.hostname) || base.username || base.password || !sessionId || !token || !workspace) throw new Error('Missing or invalid chat transport configuration');
 } catch {
   process.stderr.write('Missing or invalid chat transport configuration\n');
@@ -143,7 +143,7 @@ async function dispatch(request) {
       if (params.mcpServers.length) throw invalid('This chat transport does not install client MCP servers');
       attaching = true;
       try {
-        const snapshot = await api('/api/chat-snapshot');
+        const snapshot = await api('/api/snapshot');
         if (!Array.isArray(snapshot.messages) || !Number.isSafeInteger(snapshot.after)) throw new Error('Invalid chat snapshot');
         cursor = snapshot.after;
         store.import(snapshot.messages);
@@ -168,7 +168,7 @@ async function dispatch(request) {
       accepted.add(pending.eventId);
       localEcho.add(pending.eventId);
       store.accept(pending.eventId,text);
-      pending.accepted = api('/api/messages', { id: pending.eventId, text: notification(pending.eventId) }).then(result=>{store.notified(pending.eventId);return result;});
+      pending.accepted = api('/api/messages', { id: pending.eventId, text: notification(pending.eventId), metadata:{source:'chat'} }).then(result=>{store.notified(pending.eventId);return result;});
       try { await pending.accepted; }
       catch (error) { accepted.delete(pending.eventId); if (active === pending) active = null; throw error; }
       if (active === pending) active = null;

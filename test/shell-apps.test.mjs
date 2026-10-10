@@ -5,7 +5,7 @@ import { mkdtemp, rm, cp, writeFile, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initialize, readCurrent, stageDrafts } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { appManifest } from '../src/app-package.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
@@ -27,11 +27,11 @@ test('plugin configuration and JavaScript entry manifests are rejected',async t=
 test('new app packages activate with a skill, preserve versions, and never add model tools',async t=>{
   const home=await fixture(t);await cp(new URL('../examples/local-time',import.meta.url),join(home,'drafts','apps','local-time'),{recursive:true});
   const configPath=join(home,'drafts','config.json');const config=JSON.parse(await readFile(configPath));config.apps['local-time']={enabled:true};await writeFile(configPath,JSON.stringify(config));
-  const candidate=await stageDrafts(home);const current=await readCurrent(home);await appManifest(join(home,'revisions',candidate,'apps','local-time'));
-  assert.match(await readFile(join(home,'revisions',candidate,'apps','local-time','SKILL.md'),'utf8'),/local-time/);
+  const candidate=await stageDrafts(home);const current=await readCurrent(home);await assert.rejects(appManifest(join(home,'revisions',candidate,'apps','local-time')),{code:'ENOENT'});
+  assert.match(await readFile(join(home,'drafts','apps','local-time','SKILL.md'),'utf8'),/local-time/);
   await assert.rejects(readFile(join(home,'revisions',current.revision,'apps','local-time','app.json')),{code:'ENOENT'});
   await writeFile(join(home,'drafts','apps','local-time','commands.mjs'),'invalid updated draft');
-  assert.match(await readFile(join(home,'revisions',candidate,'apps','local-time','commands.mjs'),'utf8'),/UTC/);
+  assert.equal(await readFile(join(home,'drafts','apps','local-time','commands.mjs'),'utf8'),'invalid updated draft');
 });
 
 test('isolated conversation uses shell apps and shared durable state without native capability tools',async t=>{

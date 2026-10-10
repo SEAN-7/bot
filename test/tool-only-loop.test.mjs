@@ -4,7 +4,7 @@ import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initialize, stageDrafts } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));

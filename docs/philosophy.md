@@ -36,7 +36,7 @@ programs, build new capabilities, and install or upgrade ordinary CLI tools. Thi
 behavior emerge from actual work without requiring every future capability to
 be designed into the application in advance.
 
-Capabilities are ordinary applications paired with skills and invoked through one supervised shell tool. All replaceable behavior, including the conversation controller, runs in separate application processes. The core has no plugin loader or registration API. Applications and their guides should evolve together.
+Capabilities are ordinary applications paired with skills and invoked through one supervised shell tool. All replaceable behavior, including the conversation controller, runs in separate application processes. Apps communicate with the core through shell commands and with one another through executable hooks. Setup and frontends are replaceable apps too. The core has no plugin loader or registration API. Applications and their guides should evolve together.
 
 The protected core remains outside the bot's editing authority. Operator-managed
 core updates are separate from bot-managed application changes.
@@ -56,7 +56,7 @@ whole-bot update.
 
 Replacing the running conversation controller or its startup configuration is a
 separate operation. Switch it at a turn boundary, check startup and retain the
-previous controller revision for recovery without losing the conversation.
+previous controller revision for recovery without losing the conversation. Snapshot only the controller package and its state; ordinary apps own their separate code, state and migrations.
 
 Recovery must be honest about its limits. Restoring application state cannot undo an
 external action. Record tool starts and outcomes durably, and inspect interrupted

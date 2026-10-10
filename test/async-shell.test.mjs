@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import execution from '../src/execution.mjs';
 import { initialize, stageDrafts } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 import { Store } from '../src/store.mjs';
 import { createModel } from '../apps/demo-model/behavior.mjs';

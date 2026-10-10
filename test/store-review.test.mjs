@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Store } from '../src/store.mjs';
 
-test('restored memory can append its old contribution after failed candidate memory', async t => {
+test('scoped state restoration leaves durable contribution identities intact', async t => {
   const home = await mkdtemp(join(tmpdir(), 'bot-store-review-'));
   const store = new Store(home);
   t.after(async () => { store.close(); await rm(home, { recursive: true, force: true }); });
@@ -17,9 +17,8 @@ test('restored memory can append its old contribution after failed candidate mem
   assert.ok(store.contribute('revision-2', 'candidate memory', 'memory'));
   store.restore(snapshot);
   assert.deepEqual(store.getState('memory', 'notes'), { revision: 1, text: 'trusted memory' });
-  assert.ok(store.contribute('revision-1', 'trusted memory', 'memory'));
   assert.equal(store.contribute('revision-1', 'trusted memory', 'memory'), null);
-  assert.deepEqual(store.history().map(message => message.content), ['trusted memory', 'candidate memory', 'trusted memory']);
+  assert.deepEqual(store.history().map(message => message.content), ['trusted memory', 'candidate memory']);
 });
 
 test('resume makes blocked pending input available after an operator restart', async t => {

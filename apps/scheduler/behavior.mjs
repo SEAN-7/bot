@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { setTimeout } from 'node:timers/promises';
 
 export async function tick(api, { signal } = {}) {
   const read = () => api.state.get('schedules', []);
@@ -16,4 +16,12 @@ export async function tick(api, { signal } = {}) {
       else entry.status = 'completed';
       await api.state.set('schedules', schedules);
     }
+}
+
+export async function watch(api,{signal,run=()=>tick(api,{signal})}={}) {
+  while(!signal?.aborted) {
+    try { await run(); }
+    catch(error) { if(signal?.aborted)break;console.error(`Scheduler: ${error.message}`); }
+    await setTimeout(1000,undefined,{signal}).catch(error=>{if(error.name!=='AbortError')throw error;});
+  }
 }

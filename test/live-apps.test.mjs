@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initialize, readCurrent, installApp, stageDrafts, beginTrial, rollback, CORE_ROOT } from '../src/releases.mjs';
 import { Store } from '../src/store.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 import { migrateLiveApps, markLiveCandidate, restoreLiveApps } from '../install/live-apps.mjs';
 

@@ -8,7 +8,7 @@ import { spawn } from 'node:child_process';
 import { Store } from '../src/store.mjs';
 import { initialize } from '../src/releases.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
-import { ChatSession } from '../src/chat-session.mjs';
+import { ChatSession } from '../apps/terminal-chat/chat-session.mjs';
 import { project } from '../apps/chat/behavior.mjs';
 const chatModule=api=>api.transformHistory(project);
 import {commands as chatCommands} from '../apps/chat/commands.mjs';
@@ -91,12 +91,15 @@ test('isolated chat accepts another message while working, sends only through to
     if(messages.some(m=>m.role==='user'&&m.metadata?.source==='chat'))throw new Error('Chat leaked as user role');
     if(input.content.includes('first human')||input.content.includes('second human'))throw new Error('Raw input bypassed tool');
     const current=messages.slice(messages.indexOf(input)+1);
-    const read=current.findLast(m=>m.role==='tool'&&m.toolName==='shell'&&JSON.parse(m.content).stdout?.includes('messages'));
-    const sent=current.findLast(m=>m.role==='tool'&&m.toolName==='shell'&&/send/.test(current.find(x=>x.toolCalls?.some(c=>c.id===m.toolCallId))?.toolCalls?.[0]?.arguments.command||''));
-    if(sent)return {text:'PRIVATE FINAL OUTPUT',toolCalls:[]};
-    if(!read)return {text:'PRIVATE REASONING',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command:"bot-app chat read '{}'"}}]};
+    const calls=current.flatMap(m=>m.toolCalls||[]);
+    const results=current.filter(m=>m.role==='tool'&&m.toolName==='shell');
+    const pending=results.findLast(m=>JSON.parse(m.content).outcome==='running');
+    if(pending){const {sessionId}=JSON.parse(pending.content);if(!results.some(m=>JSON.parse(m.content).outcome!=='running'&&calls.some(c=>c.id===m.toolCallId&&c.arguments.sessionId===sessionId)))return {text:'PRIVATE POLL',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{sessionId,yieldTimeMs:30000}}]};}
+    const finalFor=prefix=>{const launch=results.findLast(m=>calls.some(c=>c.id===m.toolCallId&&c.arguments.command?.startsWith(prefix)));if(!launch)return;const receipt=JSON.parse(launch.content);return receipt.outcome!=='running'?launch:results.findLast(m=>JSON.parse(m.content).outcome!=='running'&&calls.some(c=>c.id===m.toolCallId&&c.arguments.sessionId===receipt.sessionId));};
+    if(finalFor('bot-app chat send'))return {text:'PRIVATE FINAL OUTPUT',toolCalls:[]};
+    if(!finalFor('bot-app chat read'))return {text:'PRIVATE REASONING',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{yieldTimeMs:30000,command:"bot-app chat read '{}'"}}]};
     await new Promise(resolve=>setTimeout(resolve,500));
-    return {text:'PRIVATE TOOL OUTPUT',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{command: ${JSON.stringify("bot-app chat send '{\"text\":\"explicit reply\"}'")}}}]};
+    return {text:'PRIVATE TOOL OUTPUT',toolCalls:[{id:crypto.randomUUID(),name:'shell',arguments:{yieldTimeMs:30000,command: ${JSON.stringify("bot-app chat send '{\"text\":\"explicit reply\"}'")}}}]};
   }}); }`);
   await initialize(home, fixtureSource({ modules: { chat: { enabled: true }, 'fixture-model': { enabled: true } }, runtime: { port: 0, sandbox: 'off' } }), { appsDir: await fixtureApps(defaults) });
   let server = await startSupervisor({ home, port: 0, unsafe: true });
@@ -113,10 +116,10 @@ test('isolated chat accepts another message while working, sends only through to
   await until(() => chat.entries.filter(message => message.text === 'explicit reply').length === 1);
   assert.ok(!chat.entries.some(message => message.text.includes('PRIVATE')));
   await until(async () => (await fetch(server.url+'/api/status', { headers: { authorization: 'Bearer '+server.token } }).then(r=>r.json())).pending===0);
-  const response = await fetch(server.url+'/api/chat-snapshot', { headers: { authorization: 'Bearer '+server.uiToken } }).then(r=>r.json());
-  assert.ok(!response.messages.some(message => message.content.includes('PRIVATE')));
+  const response = await fetch(server.url+'/api/snapshot', { headers: { authorization: 'Bearer '+server.uiToken } }).then(r=>r.json());
+  assert.ok(response.messages.some(message => message.metadata?.modelOutput)); // Generic journal snapshots retain model records; the app owns its view.
   assert.equal(response.messages.filter(message => message.content === 'explicit reply').length, 0);
-  assert.ok(response.messages.filter(m=>m.role==='user').every(m=>isNotification(m.content)));
+  assert.ok(response.messages.filter(m=>m.role==='user'&&m.metadata?.source==='chat').every(m=>isNotification(m.content)));
   const appStore=new ChatStore(join(home,'workspace'));
   assert.equal(appStore.read().messages.filter(m=>m.text==='explicit reply').length,1);appStore.close();
   await server.stop();

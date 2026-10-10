@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { prepareSnapshot } from '../apps/agent/context.mjs';
+import { prepareSnapshot } from '../apps/context/request.mjs';
 import { contribute } from '../apps/memory/behavior.mjs';
 import { commands as memoryCommands } from '../apps/memory/commands.mjs';
 import { createContext } from '../apps/context/behavior.mjs';
@@ -11,7 +11,7 @@ import { continuityAnchors, sampleForSummary } from '../apps/context/summary.mjs
 import { createModel } from '../apps/model-provider/behavior.mjs';
 import { Store } from '../src/store.mjs';
 import { initialize } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
 function stateFixture(config = {}) {
@@ -42,10 +42,12 @@ test('prompt memory freezes between compactions, refreshes at a durable boundary
   memory.saved.set('memory', { revision: 1, USER: 'original preference', notes: '' });
   let boundary = null, fail = false;
   const journal = [{ id: 1, role: 'context', content: 'obsolete snapshot', metadata: { module: 'memory' } }, { id: 2, role: 'user', content: 'Human request' }];
-  const input = { options: { contributors: ['memory'], contextApp: 'context' }, tools: [], settings: {}, state: state.state,
+  const input = { options: { contributors: ['memory'] }, tools: [], settings: {}, state: state.state,
     rpc: async method => { assert.equal(method, 'history'); return structuredClone(journal); },
     invoke: async (app, operation, request) => {
       if (app === 'memory') return contribute(memory);
+    },
+    prepare: async request => {
       if (fail) throw new Error('summary failed');
       assert.ok(!request.messages.some(message => message.content === 'obsolete snapshot'));
       return { messages: request.messages, boundary };
@@ -180,7 +182,7 @@ test('isolated bot refreshes system memory after compaction and preserves frozen
   assert.ok(history.some(message => message.content.includes('/tmp/retained-source.txt')));
   await server.stop();
   const saved = new Store(home);
-  assert.match(JSON.stringify(saved.getState('app:agent', 'promptSnapshot', null)), /new preference/);
+  assert.match(JSON.stringify(saved.getState('app:context', 'promptSnapshot', null)), /new preference/);
   saved.setState('app:memory', 'memory', { revision: 3, USER: 'unrefreshed preference', notes: '' }); saved.close();
   server = await startSupervisor({ home, port: 0, unsafe: true });
   await until(async () => (await api('/api/status')).state === 'idle');

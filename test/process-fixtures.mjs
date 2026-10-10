@@ -5,7 +5,7 @@ import { join } from 'node:path';
 export function fixtureSource({modules,apiVersion,...config}) {
   const enabled=Object.entries(modules||{}).filter(([,options])=>options.enabled);
   const model=enabled.find(([id])=>!['chat','memory','context','skills','scheduler'].includes(id))?.[0]||'demo-model';
-  return {...config,apps:{...Object.fromEntries(Object.entries(modules||{}).map(([id,options])=>[id,{...options,stateNamespace:id}])),agent:{enabled:true,modelApp:model,contextApp:null,contributors:[],projections:modules?.chat?.enabled?['chat']:[],tickApps:[]}}};
+  return {...config,apps:{...Object.fromEntries(Object.entries(modules||{}).map(([id,options])=>[id,{...options,stateNamespace:id}])),context:{enabled:!!modules?.chat?.enabled,compaction:false,contributors:[],projections:modules?.chat?.enabled?['chat']:[]},agent:{enabled:true,modelApp:model,projections:modules?.chat?.enabled?['chat']:[],hooks:{complete:['bot-app',model,'complete','--stdin'],...(modules?.chat?.enabled?{prepare:['bot-app','context','prepare','--stdin']}: {})},services:[]}}};
 }
 export async function fixtureApps(directory) {
   for(const entry of await readdir(directory,{withFileTypes:true}))if(entry.isDirectory()) {
@@ -25,10 +25,6 @@ await runCLI({operations:{complete:async(api,input)=>{let model,context;const ho
   const agent=join(directory,'agent');await mkdir(agent,{recursive:true});
   await writeFile(join(agent,'app.json'),JSON.stringify({id:'agent',version:'fixture',command:['node','main.mjs'],preflight:['--preflight']}));
   await writeFile(join(agent,'SKILL.md'),'---\nname: agent\ndescription: Legacy response protocol for isolated kernel fixtures.\n---\n');
-  const source=(await readFile(new URL('../apps/agent/main.mjs',import.meta.url),'utf8'))
-    .replace('if(!calls.length&&response.text.trim())','if(false)')
-    .replace("content:'',toolCalls:calls","content:response.text,toolCalls:calls")
-    .replace(/if\(!calls.length\)\{[\s\S]*?\n        \}\n        else await rpc\('append'/,"if(!calls.length){await rpc('turn.commit',{eventId:event.id,message:assistant});committed=true;}\n        else await rpc('append'");
-  await writeFile(join(agent,'main.mjs'),source);
+  await writeFile(join(agent,'main.mjs'),await readFile(new URL('./fixtures/controller.mjs',import.meta.url)));
   return directory;
 }

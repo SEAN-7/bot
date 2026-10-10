@@ -10,29 +10,32 @@ export async function sandboxAvailable() {
   return null;
 }
 export async function launchRuntime({home,revision,coreRoot,unsafe=false,preflight=false,preflightFile}) {
+  return launchProtected({home,unsafe,preflight,command:process.execPath,args:[join(coreRoot,'src','runtime.mjs'),home,revision,preflight?'preflight':'run'],
+    environment:{BOT_PREFLIGHT_FILE:preflightFile||''},stdio:['ignore','pipe','pipe','ipc']});
+}
+export async function launchProtected({home,unsafe=false,preflight=false,command,args,environment={},stdio='inherit',cwd=join(home,'workspace')}) {
   const sandbox=unsafe?null:await sandboxAvailable();
-  if(!sandbox&&!unsafe) throw new Error('Protected execution requires macOS sandbox-exec or Linux bubblewrap. Install it, or explicitly use --unsafe-development for local testing.');
-  const args=[join(coreRoot,'src','runtime.mjs'),home,revision,preflight?'preflight':'run'];
-  let command=process.execPath,argv=args;
+  if(!sandbox&&!unsafe)throw new Error('Protected execution requires macOS sandbox-exec or Linux bubblewrap. Install it, or explicitly use --no-sandbox.');
+  let executable=command,argv=args;
   const temp=join(home,'workspace','.tmp');await mkdir(temp,{recursive:true});
-  const env={...process.env,TMPDIR:temp,TMP:temp,TEMP:temp,NODE_OPTIONS:'',npm_config_cache:join(home,'workspace','.cache','npm'),XDG_CACHE_HOME:join(home,'workspace','.cache')};
+  const env={...process.env,...environment,TMPDIR:temp,TMP:temp,TEMP:temp,NODE_OPTIONS:'',npm_config_cache:join(home,'workspace','.cache','npm'),XDG_CACHE_HOME:join(home,'workspace','.cache')};
   delete env.BOT_CONTROL_TOKEN;
-  if(preflightFile)env.BOT_PREFLIGHT_FILE=preflightFile;else delete env.BOT_PREFLIGHT_FILE;
+  if(!preflight)delete env.BOT_PREFLIGHT_FILE;
   if(sandbox==='seatbelt') {
     const quote=value=>JSON.stringify(value);
     const paths=await Promise.all([home,join(home,'workspace'),join(home,'drafts')].map(p=>realpath(p)));
     const policy=`(version 1)\n(allow default)\n(deny file-write*)\n(deny signal)\n(allow signal (target same-sandbox))\n(deny file-read* (subpath ${quote(join(paths[0],'control'))}))\n${preflight?'(deny network*)':paths.slice(1).map(p=>`(allow file-write* (subpath ${quote(p)}))`).join('\n')}\n(allow file-write* (literal "/dev/null"))\n`;
-    command='/usr/bin/sandbox-exec';argv=['-p',policy,process.execPath,...args];
+    executable='/usr/bin/sandbox-exec';argv=['-p',policy,command,...args];
   } else if(sandbox==='bwrap') {
     const [workspace,drafts,control]=await Promise.all(['workspace','drafts','control'].map(p=>realpath(join(home,p))));
     // A private PID namespace prevents modules from seeing or signalling the guardian.
     // Bubblewrap passes inherited descriptors, including Node's fd 3 IPC socket.
-    command='bwrap';argv=['--die-with-parent','--unshare-pid','--ro-bind','/','/','--proc','/proc','--dev','/dev','--tmpfs',control];
+    executable='bwrap';argv=['--die-with-parent','--unshare-pid','--ro-bind','/','/','--proc','/proc','--dev','/dev','--tmpfs',control];
     if(preflight) argv.push('--unshare-net');
     else argv.push('--bind',workspace,workspace,'--bind',drafts,drafts);
-    argv.push('--',process.execPath,...args);
+    argv.push('--',command,...args);
   }
-  const child=spawn(command,argv,{cwd:join(home,'workspace'),env,detached:true,stdio:['ignore','pipe','pipe','ipc']});
+  const child=spawn(executable,argv,{cwd,env,detached:true,stdio});
   child.pidNamespace=sandbox==='bwrap';
   return {child,protected:!!sandbox};
 }

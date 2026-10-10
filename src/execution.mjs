@@ -3,8 +3,6 @@ import { randomUUID } from 'node:crypto';
 import { StringDecoder } from 'node:string_decoder';
 
 export default function execution(api) {
-  const tools = new Map();
-  const register = tool => tools.set(tool.name, tool);
   const maxTimeoutMs = Math.max(1, Math.min(2_147_483_647, api.config.maxTimeoutMs ?? 2_147_483_647));
   const maxSessions = Math.max(1, Math.min(128, api.config.maxSessions ?? 32));
   const sessions = new Map();
@@ -123,7 +121,7 @@ export default function execution(api) {
     await Promise.all([...sessions.values()].map(session => session.done));
     sessions.clear();
   });
-  register({
+  const launch = {
     name: 'shell',
     description: `Run a shell command from the workspace (${api.paths.workspace}). Wait up to yieldTimeMs (default 1000, maximum 30000), then return a sessionId if still running. Incoming notifications end the wait without stopping the command. Completion of a yielded session wakes the conversation with its final status and unread output; you can continue independent work or remain idle until notified instead of polling repeatedly. Poll or send input with shell({sessionId, ...}). There is no default execution timeout; timeoutMs explicitly stops the command. Output per call is limited to ${outputBytes} bytes. Sessions are supervised until exit, cancellation, or runtime restart. Do not detach background services.`,
     inputSchema: {
@@ -144,8 +142,8 @@ export default function execution(api) {
       if (sessions.size >= maxSessions) throw new Error('Shell session limit reached; finish or terminate an existing session with shell({sessionId, ...}).');
       return read(start(command, timeoutMs, signal, callId), yieldTimeMs, signal);
     },
-  });
-  register({
+  };
+  const resume = {
     name: 'write_stdin',
     description: 'Poll a running shell session or send text to its stdin. Returns only new output, plus sessionId while running or exitCode when finished. yieldTimeMs defaults to 1000, maximum 30000; 0 checks immediately. Use endInput to close stdin (EOF), or terminate to stop the command and descendants. Sessions do not survive runtime restart; never automatically replay a missing session.',
     inputSchema: {
@@ -170,9 +168,7 @@ export default function execution(api) {
       }
       return read(session, yieldTimeMs, signal);
     },
-  });
-
-  const launch = tools.get('shell'), resume = tools.get('write_stdin');
+  };
   return {
     name: 'shell', description: launch.description + ' Poll/send input/EOF/cancel through this same shell tool using sessionId and optional chars, endInput, terminate, yieldTimeMs. Session IDs do not survive restart. Apps and skills: run bot-app --help, then read the matching SKILL.md.',
     inputSchema: { type: 'object', properties: { ...launch.inputSchema.properties, ...resume.inputSchema.properties }, additionalProperties: false, oneOf: [launch.inputSchema, resume.inputSchema] },

@@ -9,8 +9,8 @@ import { contribute } from '../apps/skills/behavior.mjs';
 const skills=api=>api.on('beforeModel',()=>contribute(api));
 import { commands as skillCommands } from '../apps/skills/commands.mjs';
 import { readUsage, summarizeUsage } from '../apps/skills/usage.mjs';
-import { createConfig } from '../src/cli.mjs';
-import { setupChoices } from '../install/manage.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
+import { setupChoices } from '../apps/setup/choices.mjs';
 import { initialize, readCurrent } from '../src/releases.mjs';
 
 async function fixture(t) {
@@ -130,6 +130,6 @@ test('skills are enabled by default for source and managed installations', async
 test('disabled skills have no controller contribution or active package',async t=>{
   const home=await mkdtemp(join(tmpdir(),'bot-no-skills-'));t.after(()=>rm(home,{recursive:true,force:true}));
   await initialize(home,createConfig({disable:'chat,memory,context,scheduler,skills,web-search'}));
-  const current=await readCurrent(home);assert.deepEqual(current.config.apps.agent.contributors,[]);
+  const current=await readCurrent(home);assert.deepEqual(current.config.apps.context.contributors,[]);
   await assert.rejects(import('node:fs/promises').then(fs=>fs.access(join(home,'revisions',current.revision,'apps','skills'))),{code:'ENOENT'});
 });

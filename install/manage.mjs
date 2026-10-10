@@ -5,13 +5,10 @@ import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { randomUUID, createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { createInterface } from 'node:readline/promises';
 import { tmpdir } from 'node:os';
 
 export const DEFAULT_PATHS = { app: '/opt/bot', data: '/var/lib/bot', config: '/etc/bot', service: '/etc/systemd/system/bot.service', launcher: '/usr/local/bin/bot', osRelease: '/etc/os-release', apparmor: '/etc/apparmor.d/bot-bwrap', usernsRestriction: '/proc/sys/kernel/apparmor_restrict_unprivileged_userns' };
 const MANAGED = 'Managed by self-building-bot installer';
-const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'skills', 'web-search'];
-const KEYS = { openai: 'OPENAI_API_KEY', anthropic: 'ANTHROPIC_API_KEY', google: 'GEMINI_API_KEY', groq: 'GROQ_API_KEY', openrouter: 'OPENROUTER_API_KEY', mistral: 'MISTRAL_API_KEY', deepseek: 'DEEPSEEK_API_KEY', xai: 'XAI_API_KEY', cerebras: 'CEREBRAS_API_KEY' };
 const inside = (parent, child) => { const path = relative(parent, child); return path === '' || (!path.startsWith('..') && !isAbsolute(path)); };
 const exists = path => lstat(path).then(() => true, error => { if (error.code === 'ENOENT') return false; throw error; });
 const json = async path => JSON.parse(await readFile(path, 'utf8'));
@@ -43,7 +40,7 @@ export async function validateBundle(path, arch = process.arch) {
   const root = await realpath(resolve(path));
   const manifest = await json(join(root, 'bundle.json'));
   if (manifest.format !== 1 || manifest.platform !== 'linux' || manifest.arch !== arch || !['x64', 'arm64'].includes(arch) || typeof manifest.version !== 'string' || !/^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(manifest.version)) throw new Error('Unsupported bundle format, platform, architecture, or version');
-  for (const item of ['app/src/cli.mjs', 'app/src/releases.mjs', 'app/package.json', 'app/apps', 'app/node_modules', 'runtime/node/bin/node', 'app/src/terminal-chat.mjs', 'app/src/chat-session.mjs', 'app/node_modules/@earendil-works/pi-tui/package.json', 'install/manage.mjs', 'install/update-state.mjs', 'install/materialize-state.mjs', 'install/templates/bot', 'install/templates/bot.service']) {
+  for (const item of ['app/src/cli.mjs', 'app/src/releases.mjs', 'app/package.json', 'app/apps', 'app/node_modules', 'runtime/node/bin/node', 'install/manage.mjs', 'install/update-state.mjs', 'install/materialize-state.mjs', 'install/templates/bot', 'install/templates/bot.service']) {
     if (!inside(root, await realpath(join(root, item)))) throw new Error(`Bundle path escapes release: ${item}`);
   }
   const inspect = async directory => {
@@ -75,9 +72,9 @@ export function parseEnvironment(text) {
   }
   return result;
 }
-export function runCommand(command, args = [], { env = process.env, inherit = false, allowFailure = false } = {}) {
+export function runCommand(command, args = [], { env = process.env, inherit = false, allowFailure = false, cwd } = {}) {
   return new Promise((resolveResult, reject) => {
-    const child = spawn(command, args, { env, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { env, cwd, stdio: inherit ? 'inherit' : ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     if (!inherit) { child.stdout.on('data', chunk => { stdout = (stdout + chunk).slice(-2_000_000); }); child.stderr.resume(); }
     child.once('error', () => reject(new Error(`Could not run ${command}`)));
@@ -87,70 +84,6 @@ export function runCommand(command, args = [], { env = process.env, inherit = fa
     });
   });
 }
-async function ask(question) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try { return (await rl.question(question)).trim(); } finally { rl.close(); }
-}
-async function secret(question) {
-  if (!process.stdin.isTTY) throw new Error('Provide credentials in the environment for noninteractive setup');
-  process.stdout.write(question);
-  const prior = process.stdin.isRaw;
-  process.stdin.setRawMode(true); process.stdin.resume();
-  return new Promise((resolveSecret, reject) => {
-    let text = '';
-    const finish = (error) => {
-      process.stdin.removeListener('data', onData); process.stdin.setRawMode(prior); process.stdin.pause(); process.stdout.write('\n');
-      if (error) reject(error); else resolveSecret(text);
-    };
-    const onData = chunk => {
-      for (const char of chunk.toString()) {
-        if (char === '\u0003') { finish(new Error('Setup cancelled')); return; }
-        if (char === '\r' || char === '\n') { finish(); return; }
-        if (char === '\u007f' || char === '\b') text = text.slice(0, -1);
-        else if (char >= ' ') text += char;
-      }
-    };
-    process.stdin.on('data', onData);
-  });
-}
-export async function setupChoices(options, { env = process.env, question = ask, password = secret, interactive = process.stdin.isTTY, print = console.log, catalogue = [] } = {}) {
-  let provider = options.provider, model = options.model;
-  const disabled = new Set([ ...(options.disable || '').split(',').filter(Boolean)]);
-  for (const feature of disabled) if (!FEATURES.includes(feature)) throw new Error(`Unknown feature ${feature}`);
-  for (const feature of (options.enable || '').split(',').filter(Boolean)) {
-    if (!FEATURES.includes(feature)) throw new Error(`Unknown feature ${feature}`);
-    disabled.delete(feature);
-  }
-  if (!provider && !options.yes && interactive) {
-    print('Providers: demo (no paid calls), ' + [...new Set(catalogue.map(item => item.provider))].join(', '));
-    provider = await question('Provider [demo]: ') || 'demo';
-  }
-  provider ||= 'demo';
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(provider)) throw new Error('Invalid provider');
-  if (provider !== 'demo' && !model && interactive && !options.yes) {
-    const available = catalogue.filter(item => item.provider === provider);
-    print(available.map((item, index) => `${index + 1}. ${item.id}${item.name ? ' — ' + item.name : ''}`).join('\n'));
-    const selection = await question('Model ID or number: ');
-    model = available[Number(selection) - 1]?.id || selection;
-  }
-  if (provider !== 'demo' && catalogue.length && !catalogue.some(item => item.provider === provider && item.id === model)) throw new Error('Provider/model combination is not in the bundled registry');
-  if (provider !== 'demo' && (!model || /[\r\n\0]/.test(model))) throw new Error('A real provider requires --model or an interactive model selection');
-  if (!options.yes && interactive) for (const feature of FEATURES) {
-    const answer = await question(`Enable ${feature}? ${disabled.has(feature) ? '[y/N]' : '[Y/n]'}: `);
-    if (/^n(?:o)?$/i.test(answer)) disabled.add(feature);
-    if (/^y(?:es)?$/i.test(answer)) disabled.delete(feature);
-  }
-  const credentials = {};
-  if (provider !== 'demo') {
-    const key = options['credential-env'] || KEYS[provider];
-    if (!key || !/^[A-Z][A-Z0-9_]{0,63}$/.test(key) || ['GH_TOKEN', 'GITHUB_TOKEN', 'BOT_CONTROL_TOKEN', 'NODE_OPTIONS'].includes(key)) throw new Error('For this provider specify --credential-env with its API-key variable name');
-    const value = env[key] || (interactive && !options.yes ? await password(`${key} (hidden): `) : '');
-    if (!value) throw new Error(`Provide ${key} in the environment`);
-    credentials[key] = value;
-  }
-  environmentText(credentials);
-  return { provider, model: provider === 'demo' ? 'deterministic-demo' : model, disabled: [...disabled], credentials };
-}
 function substitute(template, paths) {
   for (const [key, value] of [['APP_ROOT', paths.app], ['DATA_ROOT', paths.data], ['CONFIG_ROOT', paths.config]]) {
     if (!/^\/[a-zA-Z0-9_./-]+$/.test(value)) throw new Error('Installation paths must be absolute paths without shell or systemd metacharacters');
@@ -158,7 +91,7 @@ function substitute(template, paths) {
   }
   return template;
 }
-export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platform = process.platform, arch = process.arch, uid = process.getuid?.(), env = process.env, print = console.log, choices = setupChoices, health, stage, ownerUid = uid, interactive = process.stdin.isTTY } = {}) {
+export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platform = process.platform, arch = process.arch, uid = process.getuid?.(), env = process.env, print = console.log, choices, health, stage, ownerUid = uid, interactive = process.stdin.isTTY } = {}) {
   const recordPath = join(paths.config, 'installation.json');
   const appMarker = join(paths.app, '.managed-by-bot.json');
   const environmentPath = join(paths.config, 'environment');
@@ -171,7 +104,13 @@ export function createManager({ paths = DEFAULT_PATHS, run = runCommand, platfor
   const nodeAt = release => join(release, 'runtime/node/bin/node');
   const cliAt = release => join(release, 'app/src/cli.mjs');
   const safeEnv = credentials => ({ PATH: `${current}/runtime/node/bin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, HOME: paths.data, LANG: env.LANG || 'C.UTF-8', ...(env.TERM ? { TERM: env.TERM } : {}), ...(env.COLORTERM ? { COLORTERM: env.COLORTERM } : {}), ...credentials });
-  const asBot = (command, args, credentials = {}, inherit = false) => run('runuser', ['-u', 'bot', '--', command, ...args], { env: safeEnv(credentials), inherit });
+  const asBot = (command, args, credentials = {}, inherit = false, cwd) => run('runuser', ['-u', 'bot', '--', command, ...args], { env: safeEnv(credentials), inherit, cwd });
+  async function setupCommand(release,args,{credentials,inherit=false}={}) {
+    const argv=(await json(join(release,'app/package.json'))).botSetup;
+    if(!Array.isArray(argv)||!argv.length||argv.some(value=>typeof value!=='string'||!value))throw new Error('Missing setup command');
+    const executable=argv[0]==='node'?nodeAt(release):argv[0],params=[...argv.slice(1),...args],cwd=join(release,'app');
+    return credentials?asBot(executable,params,credentials,inherit,cwd):run(executable,params,{env,inherit,cwd});
+  }
   const systemctl = (...args) => run('systemctl', args);
   async function platformCheck() {
     if (platform !== 'linux' || uid !== 0) throw new Error('Installation management requires root on Linux; use sudo');
@@ -331,37 +270,24 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
   }
   async function configure(known, release, options) {
     if (!interactive && !options.yes) throw new Error('First launch needs an interactive terminal. SSH in and run bot start.');
-    let catalogue = [];
-    if (choices === setupChoices) {
-      const registry = pathToFileURL(join(release, 'app/node_modules/@earendil-works/pi-ai/dist/providers/all.js')).href;
-      const result = await run(nodeAt(release), ['--input-type=module', '-e', `import {builtinModels} from ${JSON.stringify(registry)}; console.log(JSON.stringify(builtinModels().getModels().map(({provider,id,name})=>({provider,id,name}))));`], { env: safeEnv({}) });
-      catalogue = JSON.parse(result.stdout);
+    let selections;
+    if(known.setupPending)selections={...known.setup,credentials:await readCredentials()};
+    else if(choices)selections=await choices(options,{env,print,interactive});
+    else {
+      const temporary=await mkdtemp(join(tmpdir(),'bot-setup-'));
+      try {
+        const output=join(temporary,'selection.json');
+        await setupCommand(release,['choices',JSON.stringify(options),output],{inherit:true});
+        selections=await json(output);
+      } finally {await rm(temporary,{recursive:true,force:true});}
     }
-    print('Welcome to bot. Choose your model and features.');
-    const selections = known.setupPending
-      ? { ...known.setup, credentials: await readCredentials() }
-      : await choices(options, { env, print, catalogue, interactive });
     const setup = { provider: selections.provider, model: selections.model, disabled: selections.disabled };
     if (!known.setupPending && !await exists(join(state, 'control/releases.json')) && (await readdir(state)).length) throw new Error('Refusing unrelated incomplete state; preserve it before retrying setup');
     await atomic(environmentPath, environmentText(selections.credentials));
     await atomicJSON(recordPath, { ...known, setupPending: true, setup });
     if (await exists(join(state, 'control/releases.json'))) {
       // Also recovers interrupted setup and the old installer's unstarted demo.
-      const configPath = join(state, 'drafts/config.json');
-      const config = await json(configPath);
-      config.apps ||= {};
-      for (const feature of FEATURES) {
-        if(config.modules&&feature!=='web-search')config.modules[feature] = { ...config.modules[feature], enabled: !selections.disabled.includes(feature) };
-        config.apps[feature]={...config.apps[feature],enabled:!selections.disabled.includes(feature)};
-      }
-      if(config.modules)config.modules['pi-model'] = { enabled: selections.provider !== 'demo', provider: selections.provider, model: selections.model };
-      if(config.modules)config.modules['demo-model'] = { enabled: selections.provider === 'demo' };
-      config.apps['model-provider']={enabled:selections.provider!=='demo',provider:selections.provider,model:selections.model};
-      config.apps['demo-model']={enabled:selections.provider==='demo'};
-      config.controller='agent';config.apps.agent={...config.apps.agent,enabled:true,modelApp:selections.provider==='demo'?'demo-model':'model-provider',contextApp:config.apps.context?.enabled?'context':null,contributors:['memory','skills'].filter(id=>config.apps[id]?.enabled),projections:config.apps.chat?.enabled?['chat']:[],tickApps:config.apps.scheduler?.enabled?['scheduler']:[],services:config.apps.chat?.enabled?['chat']:[]};
-      config.model = { provider: selections.provider, model: selections.model };
-      await atomicJSON(configPath, config);
-      await run('chown', ['bot:bot', configPath]);
+      await setupCommand(release,['configure',JSON.stringify(setup),state],{credentials:selections.credentials});
       const metadata = await json(join(state, 'control/releases.json'));
       if (!metadata.pending) await asBot(nodeAt(release), [cliAt(release), 'apply', '--home', state], selections.credentials);
     } else {
@@ -420,7 +346,7 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
     let candidate;
     // Migrate the running service's chat credential before its endpoint is
     // removed on shutdown. Open chat apps keep this scoped credential.
-    const chatCredentials = join(state, 'control/chat-credentials.json');
+    const chatCredentials = join(state, 'control/client-credentials.json');
     const endpointPath = join(state, 'control/endpoint.json');
     if (!await exists(chatCredentials) && await exists(endpointPath)) {
       const endpoint = await json(endpointPath);
@@ -450,7 +376,8 @@ profile bot-bwrap /usr/bin/bwrap flags=(unconfined) {
       await systemctl('stop', 'bot.service').catch(() => {});
       if (candidate) {
         try {
-          await asBot(nodeAt(previous), [join(release, 'install/update-state.mjs'), 'restore', state, join(previous, 'app'), candidate], credentials);
+          const rollbackCore=(await json(join(previous,'app/package.json'))).botCoreApi===(await json(join(release,'app/package.json'))).botCoreApi?release:previous;
+          await asBot(nodeAt(rollbackCore), [join(release, 'install/update-state.mjs'), 'restore', state, join(rollbackCore, 'app'), candidate], credentials);
         } catch {
           throw new Error('Update failed and exact candidate state restoration failed; the service is stopped. Preserve state and inspect it before restarting.');
         }

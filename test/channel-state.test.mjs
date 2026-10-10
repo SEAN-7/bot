@@ -11,7 +11,7 @@ import { commands as chatCommands } from '../apps/chat/commands.mjs';
 import { commands as telegramCommands } from '../apps/telegram/commands.mjs';
 import { watch as chatWatch } from '../apps/chat/behavior.mjs';
 import { initialize, stageDrafts } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 
 async function folder(t) {const dir=await mkdtemp(join(tmpdir(),'bot-channel-state-'));t.after(()=>rm(dir,{recursive:true,force:true}));return dir;}
@@ -105,7 +105,7 @@ test('background Telegram notifications steer the next model call during active 
   await writeFile(join(draft,'main.mjs'),`import {runCLI} from '../_lib/cli.mjs';import {commands} from './commands.mjs';import {receive,project} from './behavior.mjs';import {TelegramStore} from './database.mjs';import {readFile} from 'node:fs/promises';import {join} from 'node:path';
 await runCLI({commands,operations:{project:async(_api,input)=>{if(input.messages.some(m=>m.role==='tool')){await import('node:fs/promises').then(fs=>fs.writeFile(join(process.env.BOT_WORKSPACE,'preparing-context'),''));while(true){try{await readFile(join(process.env.BOT_WORKSPACE,'continue-context'));break;}catch{await new Promise(r=>setTimeout(r,20));}}}return project(input.messages);},watch:async api=>{const store=new TelegramStore(join(api.paths.workspace,'telegram'));while(true){const updates=JSON.parse(await readFile(join(api.paths.workspace,'updates.json')));await receive(store,async()=>updates.filter(u=>u.update_id>=store.get('offset',0)),event=>api.enqueue(event));await new Promise(r=>setTimeout(r,50));}}}});`);
   const configPath=join(home,'drafts','config.json'),config=JSON.parse(await readFile(configPath));
-  config.apps.telegram={enabled:true};config.apps.agent.services=['telegram'];config.apps.agent.projections=['telegram'];await writeFile(configPath,JSON.stringify(config));
+  config.apps.telegram={enabled:true};config.apps.agent.services=[['bot-app','telegram','watch']];config.apps.context={enabled:true,compaction:false,contributors:[],projections:['telegram']};config.apps.agent.hooks.prepare=['bot-app','context','prepare','--stdin'];await writeFile(configPath,JSON.stringify(config));
   await writeFile(join(home,'workspace','updates.json'),'[]');
   const store=new TelegramStore(join(home,'workspace','telegram'));store.set('identity',{id:123});store.set('binding',{chatId:42,userId:42});store.close();
   await writeFile(join(home,'drafts','apps','demo-model','behavior.mjs'),`export const createModel=()=>({async complete({messages}){if(messages.some(m=>m.role==='tool')){const inputs=messages.filter(m=>m.metadata?.input);if(inputs.length!==3)throw new Error('Follow-up notification missing from next model call');return {text:'',toolCalls:[]};}return {text:'',toolCalls:[{id:'read-after-followup',name:'shell',arguments:{command:"touch tool-running; while [ ! -f continue-tool ]; do sleep 0.02; done; bot-app telegram read '{}'",yieldTimeMs:30000}}]};}});`);

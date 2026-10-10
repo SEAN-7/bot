@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 // A worker-local bridge exposes durable primitives, never operator/core control.
 export async function startAppServer({ workspace, rpc }) {
   const token = randomBytes(32).toString('hex');
-  const allowed = new Set(['config', 'state.get', 'state.set', 'state.delete', 'history', 'publish', 'enqueue', 'update.request']);
+  const allowed = new Set(['config', 'state.get', 'state.set', 'state.delete', 'history', 'contribute', 'publish', 'enqueue', 'update.request']);
   const server = createServer((request, response) => {
     const respond = (code, data) => { response.writeHead(code, { 'content-type': 'application/json' }); response.end(JSON.stringify(data)); };
     (async () => {

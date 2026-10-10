@@ -8,9 +8,5 @@
   ],
   "preflight": [
     "--preflight"
-  ],
-  "acp": [
-    "node",
-    "acp.mjs"
   ]
 }

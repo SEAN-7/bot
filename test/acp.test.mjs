@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
-import { ChatSession } from '../src/chat-session.mjs';
+import { ChatSession } from '../apps/terminal-chat/chat-session.mjs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,7 +38,7 @@ async function fixture(t, { frontend = false, history = [{ id: 1, role: 'user', 
     if (request.headers.authorization !== 'Bearer scoped-chat-token') { response.statusCode = 401; response.end('{}'); return; }
     const url = new URL(request.url, 'http://127.0.0.1');
     let value;
-    if (url.pathname === '/api/chat-snapshot') value = { after: 2, messages: history };
+    if (url.pathname === '/api/snapshot') value = { after: 2, messages: history };
     else if (url.pathname === '/api/events') value = { events: events.filter(event => event.seq > Number(url.searchParams.get('after'))).slice(0, 500) };
     else if (url.pathname === '/api/status') value = { state, error: state === 'blocked' ? 'Credentials missing' : null };
     else if (url.pathname === '/api/messages' && accepted.has(body.id)) value = { id: body.id, duplicate: true };

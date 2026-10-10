@@ -1,13 +1,30 @@
 import { createInterface } from 'node:readline';
 import { randomUUID } from 'node:crypto';
-import { invoke } from '../_lib/invoke.mjs';
-import { appClient } from '../_lib/client.mjs';
+import { spawn } from 'node:child_process';
 import { startServices } from './services.mjs';
-import { prepareSnapshot as prepareContextSnapshot } from './context.mjs';
+
+function invoke(argv,input={}) {
+  if(!Array.isArray(argv)||!argv.length||argv.some(arg=>typeof arg!=='string'||!arg))throw new Error('Hook must be a nonempty argv array');
+  return new Promise((resolve,reject)=>{
+    const child=spawn(argv[0],argv.slice(1),{stdio:['pipe','pipe','pipe']});let stdout='',stderr='';
+    child.once('error',reject);child.stdin.on('error',error=>{if(error.code!=='EPIPE')reject(error);});
+    child.stdout.on('data',chunk=>{stdout+=chunk;if(stdout.length>20_000_000)child.kill('SIGKILL');});
+    child.stderr.on('data',chunk=>{stderr=(stderr+chunk).slice(-100000);});
+    child.once('close',code=>{try{
+      if(code!==0){let detail;try{detail=JSON.parse(stderr.trim().split('\n').at(-1));}catch{}throw Object.assign(new Error(detail?.error||stderr||`Hook exited (${code})`),{retryable:!!detail?.retryable,blocked:!!detail?.blocked});}
+      resolve(JSON.parse(stdout));
+    }catch(error){reject(error);}});
+    child.stdin.end(JSON.stringify(input));
+  });
+}
 
 const mode = process.argv[2];
 if (mode === '--preflight' || mode === '--help') {
-  if(mode==='--preflight'){const options=await appClient('agent')('config');if(!options.modelApp)throw new Error('Controller needs a model app');for(const app of [options.modelApp,options.contextApp,...options.contributors||[],...options.projections||[],...options.tickApps||[],...options.services||[]].filter(Boolean))await appClient(app)('config');}
+  if(mode==='--preflight') {
+    const snapshot=JSON.parse(await (await import('node:fs/promises')).readFile(process.env.BOT_PREFLIGHT_FILE,'utf8'));
+    const options=snapshot.config.apps[snapshot.config.controller];
+    if(!Array.isArray(options.hooks?.complete)||!options.hooks.complete.length)throw new Error('Controller needs a completion hook');
+  }
   console.log(JSON.stringify({protocol:1,usage:'agent --serve',description:'Replaceable serialized conversation controller'}));
 } else if (mode !== '--serve') throw new Error('Use --serve or --help');
 else {
@@ -18,16 +35,13 @@ else {
     const id=++sequence;pending.set(id,{resolve,reject});send({type:'request',id,method,args});
   });
   const progress = phase => send({type:'progress',phase});
-  async function prepareSnapshot() {
-    const client=appClient(config.controller);
-    return prepareContextSnapshot({options,tools,settings:config.model||{},rpc,invoke,state:{
-      get:(key,fallback)=>client('state.get',{key,fallback}),
-      set:(key,value)=>client('state.set',{key,value}),
-    }});
-  }
   async function prepare() {
     while(true) {
-      const {latestInputId,...request}=await prepareSnapshot();
+      const initial=await rpc('history');
+      const prepared=options.hooks.prepare?await invoke(options.hooks.prepare,{messages:initial,tools}):{messages:initial,tools};
+      const latestInputId=initial.findLast(m=>m.role==='user'||m.metadata?.resumedInput)?.id;
+      const {append=[],latestInputId:ignored,...request}=prepared;
+      for(const message of append)request.messages.push(await rpc('append',{message}));
       // Contributions, projections and compaction can take time. Incorporate
       // notifications received during that work before starting a model call.
       const history=await rpc('history');
@@ -39,7 +53,7 @@ else {
     try {
       while(!closing) {
         progress('context');const request=await prepare();progress('model');
-        const response=await invoke(options.modelApp,'complete',request);
+        const response=await invoke(options.hooks.complete,request);
         if(!response||typeof response.text!=='string'||!Array.isArray(response.toolCalls||[]))throw new Error('Invalid model result');
         const calls=response.toolCalls||[], ids=new Set();
         if(!calls.length&&response.usage)await rpc('append',{message:{role:'context',content:'',metadata:{modelObservation:true},usage:response.usage}});
@@ -77,15 +91,11 @@ else {
       } else if(message.type==='init') {
         if(config||message.protocol!==1)throw new Error('Invalid controller initialization');
         config=message.config;tools=message.tools;options=config.apps[config.controller];
-        for(const app of [options.modelApp,options.contextApp,...options.contributors||[],...options.projections||[],...options.tickApps||[],...options.services||[]].filter(Boolean))if(!config.apps[app]?.enabled)throw new Error('Disabled behavior app: '+app);
-        if(!options.modelApp)throw new Error('Controller needs a model app');
+        if(!Array.isArray(options.hooks?.complete)||!options.hooks.complete.length)throw new Error('Controller needs a completion hook');
         stopServices=startServices(options.services||[]);
         send({type:'ready',protocol:1});
       } else if(message.type==='turn')run(message.event).catch(fatal);
-      else if(message.type==='tick') {
-        if(active||closing)throw new Error('Concurrent idle work');active=true;progress('tick');
-        Promise.allSettled((options.tickApps||[]).map(app=>invoke(app,'tick',{}))).then(results=>{for(const result of results)if(result.status==='rejected')console.error(`Idle app failed: ${result.reason.message}`);send({type:'tickDone'});}).catch(fatal).finally(()=>{active=false;progress('idle');});
-      } else if(message.type==='stop'){closing=true;stopServices?.();process.exit(0);}
+      else if(message.type==='stop'){closing=true;stopServices?.();process.exit(0);}
       else throw new Error('Unknown controller input');
     } catch(error){fatal(error);}
   });

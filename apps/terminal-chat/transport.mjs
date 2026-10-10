@@ -1,14 +1,4 @@
-import { mkdir, realpath } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
-import { readJSON } from './releases.mjs';
-import { appManifest, commandAt } from './app-package.mjs';
-import { sandboxAvailable } from './sandbox.mjs';
-
-const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-
 // ACP clients may offer unsandboxed filesystem/terminal operations. An editable
 // transport must never use them to bypass the bot's protected core boundary.
 export function filterACPOutput(message, outstanding) {
@@ -65,21 +55,6 @@ function jsonLines(stream, onMessage, onError) {
   return () => stream.removeListener('data', onData);
 }
 
-async function adapterFor(home) {
-  const config = await readJSON(join(home,'drafts','config.json'));
-  const adapters = [];
-  for (const [id, settings] of Object.entries(config.apps)) {
-    if (!settings.enabled) continue;
-    const folder = join(home, 'drafts', 'apps', id);
-    let manifest;
-    try { manifest=await appManifest(folder); }
-    catch(error) { console.error(`App ${id} is unavailable: ${error.message}`);continue; }
-    if (manifest.acp) adapters.push(commandAt(folder,manifest.acp));
-  }
-  if (adapters.length !== 1) throw new Error('Enable exactly one chat app with an ACP command to open chat. Use serve for headless operation.');
-  return adapters[0];
-}
-
 function waitFor(child, label) {
   return new Promise((resolve, reject) => {
     const onSignal = signal => { try { child.kill(signal); } catch {} };
@@ -92,35 +67,8 @@ function waitFor(child, label) {
   });
 }
 
-// Only the fixed operator bridge reads control credentials. Editable adapters
-// receive the narrower chat token and run behind the filesystem boundary.
-export async function runACP({ home, endpoint, unsafe = false }) {
-  home = await realpath(home);
-  const adapter = await adapterFor(home);
-  if (!endpoint?.uiToken) throw new Error('Restart the supervisor to obtain a scoped chat credential.');
-  const url = new URL(endpoint.url);
-  if (url.protocol !== 'http:' || url.hostname !== '127.0.0.1') throw new Error('Chat requires a loopback endpoint.');
-  const sandbox = unsafe ? null : await sandboxAvailable();
-  if (!sandbox && !unsafe) throw new Error('Chat adapters require macOS sandbox-exec or Linux bubblewrap.');
-  const workspace = join(home, 'workspace'), drafts = join(home, 'drafts'), control = join(home, 'control');
-  const temp = join(workspace, '.tmp');
-  await mkdir(temp, { recursive: true });
-  const env = {
-    ...process.env, NODE_OPTIONS: '', TMPDIR: temp, TMP: temp, TEMP: temp,
-    BOT_CHAT_URL: url.origin, BOT_CHAT_TOKEN: endpoint.uiToken,
-    BOT_CHAT_SESSION: createHash('sha256').update(home).digest('hex').slice(0, 24),
-    BOT_CHAT_WORKSPACE: workspace,
-    XDG_CACHE_HOME: join(workspace, '.cache'), npm_config_cache: join(workspace, '.cache', 'npm'),
-  };
-  delete env.BOT_CONTROL_TOKEN;
-  let command=adapter.command,args=adapter.args;
-  if (sandbox === 'seatbelt') {
-    const policy = `(version 1)\n(allow default)\n(deny file-write*)\n(deny signal)\n(allow signal (target same-sandbox))\n(deny file-read* (subpath ${JSON.stringify(control)}))\n${[workspace, drafts].map(p => `(allow file-write* (subpath ${JSON.stringify(p)}))`).join('\n')}\n(allow file-write* (literal "/dev/null"))\n`;
-    command = '/usr/bin/sandbox-exec'; args = ['-p', policy, adapter.command, ...adapter.args];
-  } else if (sandbox === 'bwrap') {
-    command = 'bwrap'; args = ['--die-with-parent', '--unshare-pid', '--ro-bind', '/', '/', '--proc', '/proc', '--dev', '/dev', '--tmpfs', control, '--bind', workspace, workspace, '--bind', drafts, drafts, '--', adapter.command, ...adapter.args];
-  }
-  const child = spawn(command, args, { cwd: adapter.cwd, env, stdio: ['pipe', 'pipe', 'inherit'] });
+export async function runACP(adapter) {
+  const child = spawn(adapter[0],adapter.slice(1),{env:process.env,stdio:['pipe','pipe','inherit']});
   const outstanding = new Map();
   const abort = () => { process.stderr.write('Invalid or oversized ACP transport data\n'); child.kill('SIGTERM'); };
   const removeInput = jsonLines(process.stdin, message => {
@@ -136,16 +84,4 @@ export async function runACP({ home, endpoint, unsafe = false }) {
   child.stdin.on('error', () => {});
   try { return await waitFor(child, 'Chat adapter'); }
   finally { removeInput(); removeOutput(); process.stdin.removeListener('end', eof); process.stdin.pause(); }
-}
-
-export async function launchChat({ home, endpoint, unsafe = false }) {
-  home = await realpath(home);
-  await adapterFor(home);
-  if (!endpoint?.uiToken) throw new Error('Restart the supervisor to obtain a scoped chat credential.');
-  const args = [join(ROOT, 'src', 'cli.mjs'), 'acp', '--home', home];
-  if (unsafe) args.push('--no-sandbox');
-  const env = { ...process.env, NODE_OPTIONS: '' };
-  delete env.BOT_CONTROL_TOKEN;
-  const { runTerminalChat } = await import('./terminal-chat.mjs');
-  return runTerminalChat({ command: process.execPath, args, cwd: join(home, 'workspace'), env });
 }

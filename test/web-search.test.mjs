@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Ajv from 'ajv';
 import { commands, parseResults } from '../apps/web-search/commands.mjs';
-import { createConfig } from '../src/cli.mjs';
-import { setupChoices } from '../install/manage.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
+import { setupChoices } from '../apps/setup/choices.mjs';
 import { initialize, readCurrent } from '../src/releases.mjs';
 
 // DuckDuckGo Lite's result-link/result-snippet structure, including its redirect URLs.
@@ -95,7 +95,7 @@ test('new source and managed setups enable the bundled search plugin and honor o
   t.after(() => rm(home, { recursive: true, force: true }));
   await initialize(home, createConfig({}));
   const current = await readCurrent(home), revisionDir = join(home, 'revisions', current.revision);
-  assert.equal(JSON.parse(await readFile(join(revisionDir, 'apps/web-search/app.json'))).id, 'web-search');
+  assert.equal(JSON.parse(await readFile(join(home, 'drafts/apps/web-search/app.json'))).id, 'web-search');
   assert.equal(current.config.modules,undefined);
   assert.equal(current.config.controller,'agent');
 });

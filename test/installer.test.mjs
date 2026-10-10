@@ -1,3 +1,5 @@
+import { configure } from '../apps/setup/config.mjs';
+import { setupChoices } from '../apps/setup/choices.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, cp, realpath, stat, access, rm, symlink, lstat, readlink } from 'node:fs/promises';
@@ -5,7 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { materializeState } from '../install/materialize-state.mjs';
-import { createManager, validateBundle, setupChoices, environmentText, parseEnvironment, parseArgs } from '../install/manage.mjs';
+import { createManager, validateBundle, environmentText, parseEnvironment, parseArgs } from '../install/manage.mjs';
 
 async function fixture(t) {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'bot-installer-test-')));
@@ -15,7 +17,7 @@ async function fixture(t) {
   const bundle = join(root, 'bundle');
   for (const path of ['app/src', 'app/apps', 'app/node_modules', 'runtime/node/bin', 'app/node_modules/@earendil-works/pi-tui', 'install/templates']) await mkdir(join(bundle, path), { recursive: true });
   await writeFile(join(bundle, 'bundle.json'), JSON.stringify({ format: 1, version: '0.2.0', platform: 'linux', arch: 'x64', repository: 'SEAN-7/bot' }));
-  await writeFile(join(bundle, 'app/package.json'), JSON.stringify({ botCoreApi: 3 }));
+  await writeFile(join(bundle, 'app/package.json'), JSON.stringify({ botCoreApi: 3, botSetup:['node','apps/setup/main.mjs'] }));
   for (const path of ['app/src/cli.mjs', 'app/src/releases.mjs', 'runtime/node/bin/node', 'app/src/terminal-chat.mjs', 'app/src/chat-session.mjs', 'app/node_modules/@earendil-works/pi-tui/package.json', 'install/manage.mjs', 'install/update-state.mjs', 'install/materialize-state.mjs']) await writeFile(join(bundle, path), '// fixture\n');
   await cp(new URL('../install/templates/bot', import.meta.url), join(bundle, 'install/templates/bot'));
   await cp(new URL('../install/templates/bot.service', import.meta.url), join(bundle, 'install/templates/bot.service'));
@@ -31,6 +33,10 @@ async function fixture(t) {
       if (['enable', 'start'].includes(args[0])) serviceState = 'active';
       if (['disable', 'stop'].includes(args[0])) serviceState = 'inactive';
       if (args[0] === 'is-active') return { code: serviceState === 'active' ? 0 : 3, stdout: serviceState + '\n' };
+    }
+    if(command==='runuser'&&args.includes('configure')) {
+      const index=args.indexOf('configure'),selections=JSON.parse(args[index+1]),home=args[index+2],file=join(home,'drafts/config.json');
+      await writeFile(file,JSON.stringify(configure(JSON.parse(await readFile(file,'utf8')),{...selections,credentials:options.env})));
     }
     if (command === 'runuser' && args.includes('setup')) {
       const control = join(paths.data, '.bot/control');
@@ -374,11 +380,11 @@ test('unconfigured initialized demo migrates provider and features through apply
   await writeFile(join(state, 'drafts/config.json'), JSON.stringify({ model: { provider: 'demo', model: 'deterministic-demo' }, modules: { 'demo-model': { enabled: true } } }));
   await manager.dispatch('start');
   const config = JSON.parse(await readFile(join(state, 'drafts/config.json'), 'utf8'));
-  assert.deepEqual(config.model, { provider: 'openai', model: 'test-model' });
-  assert.equal(config.modules.memory.enabled, false);
-  assert.equal(config.modules.chat.enabled, true);
-  assert.equal(config.modules['demo-model'].enabled, false);
-  assert.equal(config.modules['pi-model'].enabled, true);
+  assert.equal(config.apps['model-provider'].provider,'openai');assert.equal(config.apps['model-provider'].model,'test-model');assert.equal(config.model,undefined);
+  assert.equal(config.apps.memory.enabled, false);
+  assert.equal(config.apps.chat.enabled, true);
+  assert.equal(config.apps['demo-model'].enabled, false);
+  assert.equal(config.apps['model-provider'].enabled, true);
   assert.equal(f.commands.filter(({ command, args }) => command === 'runuser' && args.includes('apply')).length, 1);
   assert.equal(f.commands.some(({ command, args }) => command === 'runuser' && args.includes('setup')), false);
 });
@@ -455,18 +461,18 @@ test('managed updates migrate the live chat credential before stopping the old s
   const run = async (command, args, options) => {
     if (command === 'systemctl' && args[0] === 'stop') {
       sawMigration = true;
-      assert.deepEqual(JSON.parse(await readFile(join(control, 'chat-credentials.json'), 'utf8')), { token, legacyTokens: [] });
+      assert.deepEqual(JSON.parse(await readFile(join(control, 'client-credentials.json'), 'utf8')), { token, legacyTokens: [] });
     }
     return f.run(command, args, options);
   };
   await f.make({ run }).update({ bundle: f.bundle });
   assert.equal(sawMigration, true);
-  assert.equal((await stat(join(control, 'chat-credentials.json'))).mode & 0o777, 0o600);
-  assert.ok(f.commands.some(({ command, args }) => command === 'chown' && args.includes(join(control, 'chat-credentials.json'))));
+  assert.equal((await stat(join(control, 'client-credentials.json'))).mode & 0o777, 0o600);
+  assert.ok(f.commands.some(({ command, args }) => command === 'chown' && args.includes(join(control, 'client-credentials.json'))));
   const existing = { token, legacyTokens: ['d'.repeat(64)] };
-  await writeFile(join(control, 'chat-credentials.json'), JSON.stringify(existing));
+  await writeFile(join(control, 'client-credentials.json'), JSON.stringify(existing));
   await manager.update({ bundle: f.bundle });
-  assert.deepEqual(JSON.parse(await readFile(join(control, 'chat-credentials.json'), 'utf8')), existing);
+  assert.deepEqual(JSON.parse(await readFile(join(control, 'client-credentials.json'), 'utf8')), existing);
 });
 
 test('invalid legacy chat credentials prevent updates before service interruption', async t => {

@@ -63,12 +63,14 @@ async function fixture(t, source = workingModel, options = {}) {
       sandbox: options.protected ? 'auto' : 'off', ...options.runtime
     }
   }), { appsDir: await fixtureApps(defaultsDir) });
-  // This custom controller deliberately owns a pinned model dependency. Recovery
-  // tests exercise controller replacement, while ordinary CLI apps remain live.
+  // This fixture controller owns its model code and state inside its package.
   const meta=JSON.parse(await readFile(join(home,'control/releases.json'),'utf8'));
-  const controllerPath=join(home,'revisions',meta.active,'apps','agent','main.mjs');
-  const pinned="process.env.BOT_APPS=process.env.BOT_CONTROLLER_APPS;\nif(process.argv[2]==='--preflight')await import('../test-model/main.mjs');\n"+await readFile(controllerPath,'utf8');
-  await writeFile(controllerPath,pinned);await writeFile(join(home,'drafts/apps/agent/main.mjs'),pinned);
+  for(const root of [join(home,'drafts'),join(home,'revisions',meta.active)]) {
+    await writeFile(join(root,'apps/agent/model.mjs'),source);
+    const path=join(root,'config.json'),config=JSON.parse(await readFile(path,'utf8'));
+    config.apps.agent.fixtureOwnedModel=true;config.apps.agent.crashAfterCommit=!!options.crashAfterCommit;
+    await writeFile(path,JSON.stringify(config));
+  }
   if(options.controllerPatch){const meta=JSON.parse(await readFile(join(home,'control','releases.json'),'utf8'));const path=join(home,'revisions',meta.active,'apps','agent','main.mjs');await writeFile(path,options.controllerPatch(await readFile(path,'utf8')));}
   let server;
   const launch = async () => {
@@ -97,7 +99,7 @@ async function fixture(t, source = workingModel, options = {}) {
   }, `assistant reply containing ${content}`);
   const send = text => api('/api/messages', { text });
   const replace = async source => {
-    await writeFile(join(home, 'drafts', 'apps', 'test-model', 'index.mjs'), source);
+    await writeFile(join(home, 'drafts', 'apps', 'agent', 'model.mjs'), source);
     await api('/api/update', {});
   };
   const request = (path, body, browser = false) => fetch(new URL(path, server.url), {
@@ -322,7 +324,7 @@ test('temporary model failure during context preparation retries without restart
 });
 
 test('a controller crash after committing the final response does not repeat completed input',{timeout:20000},async t=>{
-  const bot=await fixture(t,`export default api=>api.registerModel({async complete({messages}){return {text:'done:'+messages.findLast(m=>m.role==='user').content,toolCalls:[]};}});`,{controllerPatch:source=>"import {existsSync,writeFileSync} from 'node:fs';\n"+source.replace("committed=true;}\n        else await rpc('append'", "committed=true;if(!existsSync(process.env.BOT_WORKSPACE+'/committed-crash')){writeFileSync(process.env.BOT_WORKSPACE+'/committed-crash','yes');process.exit(63);}}\n        else await rpc('append'")});
+  const bot=await fixture(t,`export default api=>api.registerModel({async complete({messages}){return {text:'done:'+messages.findLast(m=>m.role==='user').content,toolCalls:[]};}});`,{crashAfterCommit:true});
   await bot.send('first');await bot.reply('done:first');await bot.send('second');await bot.reply('done:second');
   assert.deepEqual(messagesOf(await bot.api('/api/messages')).filter(m=>m.role==='assistant').map(m=>m.content),['done:first','done:second']);
 });
@@ -560,7 +562,7 @@ test('chat credentials survive service restart while operator credentials rotate
 
 test('migrated open-chat credentials retain chat-only access, and invalid credentials fail startup cleanly', { timeout: 20_000 }, async t => {
   const bot = await fixture(t);
-  const path = join(bot.home, 'control/chat-credentials.json');
+  const path = join(bot.home, 'control/client-credentials.json');
   const original = JSON.parse(await readFile(path, 'utf8'));
   await bot.stop();
   await writeFile(path, JSON.stringify({ token: 'a'.repeat(64), legacyTokens: [original.token] }));
@@ -573,7 +575,7 @@ test('migrated open-chat credentials retain chat-only access, and invalid creden
   assert.equal((await request('POST', '/api/update')).status, 403);
   await bot.stop();
   await writeFile(path, JSON.stringify({ token: 'invalid', legacyTokens: [] }));
-  await assert.rejects(bot.launch(), /Invalid persistent chat credentials/);
+  await assert.rejects(bot.launch(), /Invalid persistent client credentials/);
   await writeFile(path, JSON.stringify(original));
   await bot.launch();
   assert.equal((await bot.api('/api/status')).error, null);

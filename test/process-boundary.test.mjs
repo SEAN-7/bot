@@ -4,7 +4,7 @@ import { mkdtemp,mkdir,readFile,writeFile,rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initialize,stageDrafts,readCurrent } from '../src/releases.mjs';
-import { createConfig } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
 async function until(check){const end=Date.now()+15000;while(Date.now()<end){const value=await check();if(value)return value;await new Promise(r=>setTimeout(r,30));}assert.fail('Process boundary check timed out');}
 async function fixture(t){const home=await mkdtemp(join(tmpdir(),'bot-process-boundary-'));let server;t.after(async()=>{await server?.stop();await rm(home,{recursive:true,force:true});});await initialize(home,createConfig({disable:'chat,memory,context,scheduler,skills,web-search'}));return {home,async start(){server=await startSupervisor({home,port:0,unsafe:true});const api=async(path,body)=>fetch(server.url+path,{method:body?'POST':'GET',headers:{authorization:'Bearer '+server.token,'content-type':'application/json'},body:body?JSON.stringify(body):undefined}).then(r=>r.json());await until(async()=>(await api('/api/status')).state==='idle');return api;}};}

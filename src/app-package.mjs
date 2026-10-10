@@ -14,7 +14,6 @@ export async function appManifest(folder) {
     if (!Array.isArray(manifest.preflight)) throw new Error('App preflight must be an argv array');
     commandAt(folder, ['check', ...manifest.preflight]);
   }
-  if (manifest.acp !== undefined) commandAt(folder, manifest.acp);
   const skill = await realpath(join(folder, 'SKILL.md'));
   if (isAbsolute(relative(await realpath(folder), skill)) || relative(await realpath(folder), skill).startsWith('..')) throw new Error('Skill escapes its app');
   await access(skill);

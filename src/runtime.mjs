@@ -1,11 +1,11 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import Ajv from 'ajv';
 import execution from './execution.mjs';
 import { startAppServer } from './app-server.mjs';
-import { appManifest, commandAt, APP_ID } from './app-package.mjs';
+import { appManifest, commandAt } from './app-package.mjs';
 
 const [home,revision,mode='run']=process.argv.slice(2), revisionDir=join(home,'revisions',revision);
 const config=JSON.parse(await readFile(join(revisionDir,'config.json'),'utf8'));
@@ -74,11 +74,8 @@ process.on('message',message=>{
   } else if(message.type==='stop') {
     closing=true;write({type:'stop'});stopShell?.().catch(()=>{}).then(()=>bridge?.close()).finally(()=>process.exit(0));
   } else if(message.type==='turn') {
-    if(!controllerReady||activeEvent||phase==='tick')return fatal(new Error('Concurrent or premature turn'));
+    if(!controllerReady||activeEvent)return fatal(new Error('Concurrent or premature turn'));
     activeEvent=message.event.id;committed=false;write(message);
-  } else if(message.type==='tick') {
-    if(!controllerReady||activeEvent||phase==='tick')return fatal(new Error('Concurrent or premature tick'));
-    progress('tick');write(message);
   }
 });
 try {
@@ -114,8 +111,6 @@ try {
           else if(message.type==='turnDone'||message.type==='turnError'){
             if(!activeEvent||message.eventId!==activeEvent||actionBusy||(message.type==='turnDone'&&!committed)||(message.type==='turnError'&&committed))throw new Error('Invalid event completion');
             activeEvent=null;progress('idle');send(message);
-          } else if(message.type==='tickDone'){
-            if(activeEvent||phase!=='tick')throw new Error('Invalid idle completion');progress('idle');send(message);
           } else if(message.type==='fatal')throw new Error(message.error);
           else throw new Error('Unsupported controller message');
         }catch(error){fatal(error);}

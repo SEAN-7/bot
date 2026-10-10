@@ -6,7 +6,8 @@ import { join } from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { promisify } from 'node:util';
-import { createConfig, parseArgs, resolveHome } from '../src/cli.mjs';
+import { createConfig } from '../apps/setup/config.mjs';
+import { parseArgs, resolveHome } from '../src/cli.mjs';
 import { createModel } from '../apps/demo-model/behavior.mjs';
 const demoModel=api=>api.registerModel(createModel(api));
 import { initialize } from '../src/releases.mjs';
@@ -24,7 +25,7 @@ test('home choice is consistent and explicit paths override BOT_HOME', () => {
 test('setup defaults to a no-cost model and applies feature choices without secrets', () => {
   const { options } = parseArgs(['setup', '--disable=memory,scheduler', '--enable', 'scheduler']);
   const config = createConfig(options, { OPENAI_API_KEY: 'must-not-be-written' });
-  assert.equal(config.model.provider, 'demo');
+  assert.equal(config.preset, 'demo');
   assert.equal(config.apps['demo-model'].enabled, true);
   assert.equal(config.apps['model-provider'].enabled, false);
   assert.equal(config.apps.memory.enabled, false);
@@ -54,7 +55,7 @@ test('setup preserves an existing installation instead of overwriting it', async
     await exec(process.execPath, [cli, 'setup', '--home', home, '--yes'], { env: { ...process.env, BOT_HOME: join(root, 'wrong-home') } });
     const before = await readFile(join(home, 'control', 'releases.json'), 'utf8');
     const config = JSON.parse(await readFile(join(home, 'drafts', 'config.json'), 'utf8'));
-    assert.equal(config.model.provider, 'demo');
+    assert.equal(config.preset, 'demo');
     await assert.rejects(exec(process.execPath, [cli, 'setup', '--home', home, '--yes']), error => /will not overwrite/.test(error.stderr));
     assert.equal(await readFile(join(home, 'control', 'releases.json'), 'utf8'), before);
   } finally { await rm(root, { recursive: true, force: true }); }

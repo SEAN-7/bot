@@ -1,6 +1,6 @@
 {
   "name": "self-building-bot",
-  "version": "0.5.11",
+  "version": "0.6.0",
   "botCoreApi": 3,
   "private": true,
   "type": "module",
@@ -14,12 +14,16 @@
   "scripts": {
     "setup": "node src/cli.mjs setup",
     "start": "node src/cli.mjs start",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-concurrency=2 test/*.test.mjs",
     "demo": "node src/cli.mjs demo"
   },
   "dependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-tui": "1.1.0",
     "ajv": "8.17.1"
-  }
+  },
+  "botSetup": [
+    "node",
+    "apps/setup/main.mjs"
+  ]
 }

@@ -20,11 +20,11 @@ test('process migration preserves the journal, state namespaces, credentials and
   const history=store.history(),state=store.snapshot();store.close();await writeFile(join(home,'control','credentials-fixture'),'unchanged credential');
   const original=await readFile(join(home,'drafts','config.json'),'utf8');
   assert.equal(await migrateApps(home,CORE_ROOT),true);await markCandidate(home,'candidate');
-  const config=JSON.parse(await readFile(join(home,'drafts','config.json')));assert.equal(config.apiVersion,3);assert.equal(config.modules,undefined);assert.equal(config.apps.updates.enabled,true);assert.equal(config.apps.memory.stateNamespace,'memory');assert.equal(config.apps.agent.modelApp,'demo-model');assert.equal(config.shell.outputBytes,2048);
+  const config=JSON.parse(await readFile(join(home,'drafts','config.json')));assert.equal(config.apiVersion,3);assert.equal(config.modules,undefined);assert.equal(config.apps.updates.enabled,true);assert.equal(config.apps.memory.stateNamespace,'memory');assert.equal(config.apps.agent.hooks.complete[1],'demo-model');assert.equal(config.shell.outputBytes,2048);assert.deepEqual(JSON.parse(await readFile(join(home,'control/clients.json'))),config.clients);
   const unchanged=new Store(home);assert.deepEqual(unchanged.history(),history);assert.deepEqual(unchanged.snapshot(),state);unchanged.close();assert.equal(await readFile(join(home,'control','credentials-fixture'),'utf8'),'unchanged credential');
   await assert.rejects(readFile(join(home,'drafts','memory','module.json')),{code:'ENOENT'});
   await restoreApps(home,'another-candidate');assert.equal(JSON.parse(await readFile(join(home,'drafts','config.json'))).apiVersion,3);
-  await restoreApps(home,'candidate');assert.equal(await readFile(join(home,'drafts','config.json'),'utf8'),original);assert.equal(await readFile(join(home,'workspace','BOT-API.md'),'utf8'),'legacy reference');assert.ok(await readFile(join(home,'drafts','memory','module.json')));
+  await restoreApps(home,'candidate');assert.equal(await readFile(join(home,'drafts','config.json'),'utf8'),original);assert.equal(await readFile(join(home,'workspace','BOT-API.md'),'utf8'),'legacy reference');assert.ok(await readFile(join(home,'drafts','memory','module.json')));await assert.rejects(readFile(join(home,'control/clients.json')),{code:'ENOENT'});
 });
 test('edited behavior and app packages block migration before any drafts are replaced',async t=>{
   const home=await legacy(t),path=join(home,'drafts','memory','index.mjs');await writeFile(path,'custom behavior');
@@ -42,7 +42,7 @@ test('legacy real model migrates directly to the neutral app name with its setti
   await writeFile(path,JSON.stringify(config));
   await migrateApps(home,CORE_ROOT);
   const after=JSON.parse(await readFile(path));
-  assert.equal(after.apps.agent.modelApp,'model-provider');assert.equal(after.apps['pi-model'],undefined);
+  assert.equal(after.apps.agent.hooks.complete[1],'model-provider');assert.equal(after.apps['pi-model'],undefined);
   assert.deepEqual(after.apps['model-provider'],{enabled:true,provider:'anthropic',model:'retained-model',stateNamespace:'pi-model'});
   assert.equal(JSON.parse(await readFile(join(home,'drafts/apps/model-provider/app.json'))).id,'model-provider');
 });

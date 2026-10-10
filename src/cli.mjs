@@ -2,12 +2,11 @@
 import { access, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createInterface } from 'node:readline/promises';
+import { spawn } from 'node:child_process';
+import { commandAt } from './app-package.mjs';
 
-const FEATURES = ['chat', 'memory', 'context', 'scheduler', 'skills', 'web-search'];
 const VALUES = new Set(['home', 'provider', 'model', 'enable', 'disable', 'port']);
 const FLAGS = new Set(['help', 'yes', 'unsafe-development', 'no-sandbox', 'installed-core']);
-const CREDENTIALS = { openai: ['OPENAI_API_KEY'], anthropic: ['ANTHROPIC_API_KEY'], google: ['GEMINI_API_KEY'] };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export function parseArgs(args) {
@@ -36,53 +35,18 @@ export function resolveHome(options, { cwd = process.cwd(), env = process.env, d
   return path.resolve(cwd, options.home || env.BOT_HOME || (demo ? '.bot-demo' : '.bot'));
 }
 
-export function createConfig(options, env = process.env) {
-  const provider = options.provider || 'demo';
-  const model = provider === 'demo' ? 'deterministic-demo' : options.model;
-  if (!model) throw new Error('Choose an explicit model with --model MODEL when using a real provider.');
-  const credentialNames = CREDENTIALS[provider];
-  if (credentialNames && !credentialNames.some(name => env[name])) {
-    throw new Error(`Provider ${provider} requires ${credentialNames.join(' or ')} in your environment. Setup never stores API keys.`);
-  }
-  const apps = Object.fromEntries(FEATURES.map(id => [id, { enabled: true }]));
-  for (const [flag, enabled] of [['disable', false], ['enable', true]]) {
-    for (const id of (options[flag] || '').split(',').filter(Boolean)) {
-      if (!FEATURES.includes(id)) throw new Error(`Unknown feature ${id}. Choose ${FEATURES.join(', ')}.`);
-      apps[id] = { enabled };
-    }
-  }
-  apps.updates={enabled:true};
-  apps['model-provider']={enabled:provider!=='demo',...(provider!=='demo'?{provider,model}:{})};
-  apps['demo-model']={enabled:provider==='demo'};
-  apps.agent={enabled:true,modelApp:provider==='demo'?'demo-model':'model-provider',contextApp:apps.context.enabled?'context':null,contributors:['memory','skills'].filter(id=>apps[id].enabled),projections:apps.chat.enabled?['chat']:[],tickApps:apps.scheduler.enabled?['scheduler']:[],services:apps.chat.enabled?['chat']:[]};
-  const port = Number(options.port || 4317);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('--port must be an integer from 1 to 65535.');
-  return {
-    apiVersion: 3, appUpdates: 'direct', controller: 'agent', apps, model: { provider, model },
-    runtime: { port, startupTimeoutMs: 10000, heartbeatTimeoutMs: 10000, operationTimeoutMs: 120000, trialMs: 3000, maxRestarts: 2, retryMs: 3000, sandbox: 'auto' },
-  };
+async function setupConfig(options) {
+  const manifest=JSON.parse(await readFile(path.join(ROOT,'package.json'),'utf8'));
+  const launch=commandAt(ROOT,manifest.botSetup);
+  return new Promise((resolve,reject)=>{
+    const child=spawn(launch.command,[...launch.args,'config',JSON.stringify(options)],{cwd:ROOT,stdio:['inherit','pipe','inherit']});let output='';
+    child.stdout.on('data',chunk=>{output+=chunk;if(output.length>150000)child.kill('SIGKILL');});
+    child.once('error',reject);child.once('close',code=>{try{if(code!==0)throw new Error('Setup app failed');resolve(JSON.parse(output));}catch(error){reject(error);}});
+  });
 }
 
 async function exists(location) {
   try { await access(location); return true; } catch (error) { if (error.code === 'ENOENT') return false; throw error; }
-}
-
-async function setupOptions(options) {
-  if (options.yes || !process.stdin.isTTY || options.provider) return options;
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  try {
-    console.log('Set up one conversation. You can change the editable app configuration later.');
-    const provider = (await rl.question('Model provider [demo, openai, anthropic, google, or another supported provider] (demo): ')).trim() || 'demo';
-    const model = provider === 'demo' ? undefined : (await rl.question('Model ID: ')).trim();
-    const disabled = new Set([...(options.disable || '').split(',').filter(Boolean)]);
-    for (const id of (options.enable || '').split(',').filter(Boolean)) disabled.delete(id);
-    for (const id of FEATURES) {
-      const answer = (await rl.question(`Enable ${id}? ${disabled.has(id) ? '[y/N]' : '[Y/n]'}: `)).trim().toLowerCase();
-      if (answer === 'n' || answer === 'no') disabled.add(id);
-      if (answer === 'y' || answer === 'yes') disabled.delete(id);
-    }
-    return { ...options, provider, model, disable: [...disabled].join(','), enable: FEATURES.filter(id => !disabled.has(id)).join(',') };
-  } finally { rl.close(); }
 }
 
 export async function readEndpoint(home) {
@@ -157,29 +121,28 @@ export async function main(argv = process.argv.slice(2)) {
   const releases = () => import('./releases.mjs');
   if (command === 'setup') {
     if ((await readdir(home).catch(error => { if (error.code === 'ENOENT') return []; throw error; })).length) throw new Error(`Setup will not overwrite ${home}. Choose a new --home directory.`);
-    const config = createConfig(await setupOptions(options));
+    const config = await setupConfig(options);
     const { initialize } = await releases();
     const result = await initialize(home, config, { appsDir: path.join(ROOT, 'apps'), fixedCoreRoot: options['installed-core'] ? ROOT : undefined });
-    print(`Created ${home}\nModel: ${config.model.provider} / ${config.model.model}\nRevision: ${result.revision}\nStart: node src/cli.mjs start --home ${JSON.stringify(home)}`);
+    print(`Created ${home}\nRevision: ${result.revision}\nStart: node src/cli.mjs start --home ${JSON.stringify(home)}`);
     return;
   }
   if (command === 'demo') {
     const { initialize } = await releases();
-    if (!await exists(home)) await initialize(home, createConfig({ ...options, provider: 'demo' }), { appsDir: path.join(ROOT, 'apps'), fixedCoreRoot: options['installed-core'] ? ROOT : undefined });
+    if (!await exists(home)) await initialize(home, await setupConfig({ ...options, provider: 'demo' }), { appsDir: path.join(ROOT, 'apps'), fixedCoreRoot: options['installed-core'] ? ROOT : undefined });
     else {
       // Never silently repurpose an existing real installation as a demo.
       const { readCurrent } = await releases();
       const installation = await readCurrent(home);
-      if (installation.config?.model?.provider !== 'demo') throw new Error(`Refusing to start a non-demo installation with demo: ${home}.`);
+      if (installation.config?.preset !== 'demo') throw new Error(`Refusing to start a non-demo installation with demo: ${home}.`);
     }
   }
-  if (command === 'acp' || command === 'chat') {
-    const endpoint = await runningEndpoint(home);
-    if (!endpoint) throw new Error('The supervisor is stopped. Run bot start, or bot serve in another terminal.');
-    if (!endpoint.uiToken) throw new Error('The endpoint has no scoped chat token. Restart the supervisor with this version.');
-    const { launchChat, runACP } = await import('./chat-client.mjs');
-    const result = await (command === 'chat' ? launchChat : runACP)({ home, endpoint, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
-    if (typeof result === 'number') process.exitCode = result;
+  const clientConfig=await readFile(path.join(home,'control','clients.json'),'utf8').then(JSON.parse).catch(error=>{if(error.code!=='ENOENT')throw error;return {};});
+  if (clientConfig[command]) {
+    const endpoint=await runningEndpoint(home);
+    if(!endpoint)throw new Error('The supervisor is stopped. Run bot start, or bot serve in another terminal.');
+    const {launchClient}=await import('./client.mjs');
+    process.exitCode=await launchClient({home,endpoint,command,unsafe:!!(options['no-sandbox']||options['unsafe-development'])});
     return;
   }
   if (command === 'start' || command === 'demo' || command === 'serve') {
@@ -187,7 +150,6 @@ export async function main(argv = process.argv.slice(2)) {
     const port = options.port === undefined ? undefined : Number(options.port);
     if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) throw new Error('--port must be an integer from 1 to 65535.');
     const supervisor = await startSupervisor({ home, port, fixedCoreRoot: options['installed-core'] ? ROOT : undefined, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
-    if (!supervisor.uiToken) { await supervisor.stop(); throw new Error('Supervisor did not provide a scoped chat token.'); }
     print(`${command === 'demo' ? 'Demo mode — no AI or paid calls.\n' : ''}Home: ${home}\n${command !== 'demo' ? `Local API: ${supervisor.url}\nAttach with bot chat --home ${JSON.stringify(home)}\nKeep this terminal open. Ctrl+C stops the bot.` : 'Starting full-screen terminal chat.'}`);
     let stopping = false;
     const stop = async () => {
@@ -200,9 +162,9 @@ export async function main(argv = process.argv.slice(2)) {
     process.once('SIGTERM', stop);
     if (command === 'demo') {
       try {
-        const { launchChat } = await import('./chat-client.mjs');
+        const { launchClient } = await import('./client.mjs');
         const endpoint = await readEndpoint(home);
-        const code = await launchChat({ home, endpoint, unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
+        const code = await launchClient({ home, endpoint, command:'chat', unsafe: !!(options['no-sandbox'] || options['unsafe-development']) });
         if (typeof code === 'number') process.exitCode = code;
       } finally { await supervisor.stop(); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); }
     }

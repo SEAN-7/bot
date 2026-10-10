@@ -89,7 +89,7 @@ node src/cli.mjs setup --provider openai --model YOUR_MODEL_ID --disable schedul
 node src/cli.mjs serve
 ```
 
-Setup creates a new installation and refuses to overwrite a nonempty home. It never calls a paid model. Once a real provider is running, user messages and scheduled work may incur provider charges. To switch an existing demo to a provider, edit `drafts/config.json`: set `apps.agent.modelApp` to `model-provider`, enable `apps.model-provider`, disable `apps.demo-model`, and set `provider`/`model` inside `apps.model-provider` and the top-level `model` object; then run `apply`.
+Setup creates a new installation and refuses to overwrite a nonempty home. It never calls a paid model. Once a real provider is running, user messages and scheduled work may incur provider charges. To switch an existing demo to a provider, edit `drafts/config.json`: set `apps.agent.hooks.complete` to `["bot-app","model-provider","complete","--stdin"]`, set `apps.context.modelApp` to `model-provider`, enable `apps.model-provider`, disable `apps.demo-model`, and set `provider`/`model` inside `apps.model-provider`; then run `apply`.
 
 `--disable` and `--enable` accept comma-separated `chat,memory,context,scheduler,skills,web-search`. Skills and web search start enabled. The bot always has one supervised shell tool. Capabilities run as ordinary app commands paired with skills; there is no plugin loader or registration API. Disabling scheduler stops future wake-up delivery.
 
@@ -111,11 +111,11 @@ The home contains:
 | --- | --- |
 | `workspace/` | Files the bot works on |
 | `drafts/` | Editable behavior apps, apps/ packages and config.json |
-| `revisions/` | Versioned app and behavior app bundles |
+| `revisions/` | Saved self-contained controller packages and startup configuration |
 | `cores/` | Protected runtime-engine snapshots used by revisions |
 | `control/` | Parent-owned journal, release pointers, state, and local control credentials |
 
-The protected runtime can write only to its workspace and drafts. Its state API writes through the parent. Keep `control/` private. Chat launches a protected ACP adapter with a scoped chat token; the adapter cannot install apps or update the core. The separate operator token remains in `control/`. The local control server binds to `127.0.0.1`.
+The protected runtime can write only to its workspace and drafts. Its state API writes through the parent. Keep `control/` private. The core launches commands from operator-owned `control/clients.json` with a scoped client token; the terminal app hosts the ACP adapter without access to the operator API. The separate operator token remains in `control/`. The local control server binds to `127.0.0.1`.
 
 For a supervisor that continues running independently of the frontend:
 
@@ -131,7 +131,7 @@ Chat reconnects to its own durable app history. Terminal chat and Telegram are s
 
 Clean service restarts stay quiet in chat. Genuine recovery events appear as System notices, including interrupted tool actions whose outcomes need checking. Routine restart notices from older versions are hidden from chat while remaining in the journal.
 
-The fixed core bridge filters ACP traffic and rejects adapter requests for frontend filesystem, terminal, and permission operations. Editable adapter code receives only scoped chat access.
+The operator-selected terminal app filters ACP traffic and rejects adapter requests for frontend filesystem, terminal, and permission operations. Editable adapter code receives only scoped chat access.
 
 ## Telegram
 
@@ -143,9 +143,11 @@ Create ordinary programs paired with skills, or copy the local-time app example 
 
 Apps have app.json with an executable argv command, SKILL.md, and their own program files. They execute as ordinary shell child processes, validate their CLI arguments and print JSON. Apps do not register model tools. Existing system commands and workspace scripts also work directly through shell.
 
-The replaceable controller, model, context, memory, scheduler, skills and chat all run in separate processes. The core imports no app code and has no plugin registration API. List or install packages with `node src/cli.mjs apps` and `node src/cli.mjs apps install DIR`. Read [the API contract](docs/contract.md).
+The replaceable controller, model, context, memory, scheduler, skills and chat all run in separate processes. The core imports no app code and has no plugin registration API. List or install packages with `node src/cli.mjs apps` and `node src/cli.mjs apps install DIR`. Read [the API contract](docs/contract.md). Setup is also an app: the distribution selects its executable through `package.json` → `botSetup`. The core and managed installer share that command instead of maintaining separate feature graphs.
 
 ## Recovery and updates
+
+For the 0.6 command-hook layout, see [app adoption](docs/app-adoption.md). Existing editable apps are not silently replaced by a core release.
 
 Core releases include upstream app sources separately from the bot's editable
 copies. In the supervised shell, `bot-app --upstream [APP]` reports their paths
@@ -153,7 +155,7 @@ and versions; `BOT_UPSTREAM_ROOT` identifies the bundled source tree. The bot
 decides whether and when to adopt changes and performs its own merges. Core
 updates do not automatically replace its app copies.
 
-The parent owns the journal and single event queue. It saves incoming work notifications before processing them and records tool starts before execution. Communication apps own their message history and delivery state. A started tool whose outcome is unknown after interruption is not automatically executed again. Recovery keeps the conversation; controller rollback can restore app state from a controller change boundary while preserving independently edited ordinary app files. It cannot undo external side effects such as a file already written or a request already sent.
+The parent owns the journal and single event queue. It saves incoming work notifications before processing them and records tool starts before execution. Communication apps own their message history and delivery state. A started tool whose outcome is unknown after interruption is not automatically executed again. Recovery keeps the conversation; controller rollback restores only controller state while preserving ordinary app state, contributions and independently edited files. It cannot undo external side effects such as a file already written or a request already sent.
 
 Use `bot-app updates apply '{}'` only for replacing the running controller or its startup configuration. After the current turn finishes, controller replacement runs its declared preflight with scratch state. Unrelated apps are not validated. A passing controller starts in probation. It becomes the working revision only after a real conversation turn completes successfully and `runtime.trialMs` has elapsed (3 seconds by default). Startup errors or crashes during probation restore the previous working revision. If attention is needed, the supervisor reports the error. The operator can also use:
 

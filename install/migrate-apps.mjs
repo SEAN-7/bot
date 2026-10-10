@@ -2,6 +2,8 @@
 // Back up all drafts and reject unrecognized edits before replacing any code.
 import { readFile, writeFile, mkdir, cp, rm, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createHash, randomUUID } from 'node:crypto';
 const read=async path=>JSON.parse(await readFile(path,'utf8'));
 const write=async(path,value)=>writeFile(path,JSON.stringify(value,null,2)+'\n',{mode:0o600});
@@ -28,7 +30,8 @@ export async function migrateApps(home,core) {
   await mkdir(backup,{mode:0o700});
   await cp(join(home,'drafts'),join(backup,'drafts'),{recursive:true});
   await cp(join(home,'workspace','BOT-API.md'),join(backup,'BOT-API.md'));
-  await write(marker(home),{backup,candidate:null});
+  const clients=await read(join(home,'control','clients.json')).catch(error=>{if(error.code!=='ENOENT')throw error;return null;});
+  await write(marker(home),{backup,candidate:null,clients});
   try {
     const starter=await read(join(core,'apps','config.json'));
     const apps={...starter.apps};
@@ -48,6 +51,8 @@ export async function migrateApps(home,core) {
     for(const item of folders.filter(item=>item.isDirectory()&&item.name!=='apps'))await rm(join(home,'drafts',item.name),{recursive:true});
     await cp(join(core,'apps'),join(home,'drafts','apps'),{recursive:true});
     await write(configPath,next);
+    await promisify(execFile)(process.execPath,[join(core,'apps/setup/main.mjs'),'migrate','{}',home]);
+    await write(join(home,'control','clients.json'),(await read(configPath)).clients||{});
     await cp(join(core,'docs','contract.md'),join(home,'workspace','BOT-API.md'));
     return true;
   }catch(error){await restoreApps(home);throw error;}
@@ -57,5 +62,10 @@ export async function restoreApps(home,candidate){
   let record;try{record=await read(marker(home));}catch(error){if(error.code==='ENOENT')return;throw error;}
   if(candidate&&record.candidate!==candidate)return;
   await rm(join(home,'drafts'),{recursive:true});await cp(join(record.backup,'drafts'),join(home,'drafts'),{recursive:true});
-  await cp(join(record.backup,'BOT-API.md'),join(home,'workspace','BOT-API.md'));await rm(marker(home));
+  await cp(join(record.backup,'BOT-API.md'),join(home,'workspace','BOT-API.md'));
+  if(Object.hasOwn(record,'clients')) {
+    if(record.clients)await write(join(home,'control','clients.json'),record.clients);
+    else await rm(join(home,'control','clients.json'),{force:true});
+  }
+  await rm(marker(home));
 }

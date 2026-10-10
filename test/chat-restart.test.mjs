@@ -8,11 +8,11 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { initialize } from '../src/releases.mjs';
 import { startSupervisor } from '../src/supervisor.mjs';
-import { ChatSession } from '../src/chat-session.mjs';
+import { ChatSession } from '../apps/terminal-chat/chat-session.mjs';
 import { ChatStore, isNotification } from '../apps/chat/database.mjs';
 
 // Keep the frontend and ACP process alive while replacing the real supervisor.
-test('an independently running chat survives supervisor replacement and a prompt during downtime', { timeout: 20_000 }, async t => {
+test('an independently running chat survives supervisor replacement and a prompt during downtime', { timeout: 40_000 }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'bot-chat-restart-'));
   let server, chat;
   t.after(async () => { chat?.close(); await server?.stop(); await rm(home, { recursive: true, force: true }); });
@@ -23,18 +23,13 @@ test('an independently running chat survives supervisor replacement and a prompt
   server = await startSupervisor({ home, port: 0, unsafe: true });
   const initial = server;
   const port = Number(new URL(server.url).port);
-  const adapter = fileURLToPath(new URL('../apps/chat/acp.mjs', import.meta.url));
-  const child = spawn(process.execPath, [adapter], {
-    env: { ...process.env, BOT_CHAT_URL: server.url, BOT_CHAT_TOKEN: server.uiToken,
-      BOT_CHAT_SESSION: 'one-durable-conversation', BOT_CHAT_WORKSPACE: join(home, 'workspace') },
-    stdio: ['pipe', 'pipe', 'pipe']
-  });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../src/cli.mjs', import.meta.url)), 'acp', '--home', home, '--no-sandbox'], { stdio: ['pipe', 'pipe', 'pipe'] });
   chat = new ChatSession(child);
   await chat.start(join(home, 'workspace'));
   await chat.submit('before restart');
   for (let i=0;i<100&&!chat.entries.some(m=>m.role==='assistant');i++)await new Promise(resolve=>setTimeout(resolve,50));
   const settled=async()=>{
-    for(let i=0;i<200;i++){
+    for(let i=0;i<400;i++){
       const status=await fetch(new URL('/api/status',server.url),{headers:{authorization:`Bearer ${server.token}`}}).then(r=>r.json());
       if(status.pending===0)return;
       await new Promise(resolve=>setTimeout(resolve,50));

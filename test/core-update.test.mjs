@@ -86,7 +86,7 @@ test('cross-API recovery requires the retained operator executable and leaves th
   const {startSupervisor}=await import('../src/supervisor.mjs');
   const home=await mkdtemp(join(tmpdir(),'bot-api-recovery-'));let server;
   t.after(async()=>{await server?.stop();await rm(home,{recursive:true,force:true});});
-  const {createConfig}=await import('../src/cli.mjs');await initialize(home,createConfig({}));
+  const {createConfig}=await import('../apps/setup/config.mjs');await initialize(home,createConfig({}));
   const current=await readCurrent(home);await mkdir(join(home,'revisions','legacy-api1'));
   await writeFile(join(home,'revisions','legacy-api1','config.json'),JSON.stringify({...current.config,apiVersion:1}));
   await writeFile(metadataPath(home),JSON.stringify({...await readJSON(metadataPath(home)),previous:'legacy-api1'}));

@@ -4,19 +4,32 @@
   "apps": {
     "agent": {
       "enabled": true,
-      "modelApp": "demo-model",
-      "contextApp": "context",
-      "contributors": [
-        "memory",
-        "skills"
-      ],
-      "projections": [
-        "chat"
-      ],
-      "tickApps": [
-        "scheduler"
-      ],
-      "services": ["chat"]
+      "hooks": {
+        "prepare": [
+          "bot-app",
+          "context",
+          "prepare",
+          "--stdin"
+        ],
+        "complete": [
+          "bot-app",
+          "demo-model",
+          "complete",
+          "--stdin"
+        ]
+      },
+      "services": [
+        [
+          "bot-app",
+          "chat",
+          "watch"
+        ],
+        [
+          "bot-app",
+          "scheduler",
+          "watch"
+        ]
+      ]
     },
     "chat": {
       "enabled": true
@@ -28,7 +41,15 @@
       "enabled": true
     },
     "context": {
-      "enabled": true
+      "enabled": true,
+      "modelApp": "demo-model",
+      "contributors": [
+        "memory",
+        "skills"
+      ],
+      "projections": [
+        "chat"
+      ]
     },
     "scheduler": {
       "enabled": true
@@ -47,6 +68,26 @@
     },
     "model-provider": {
       "enabled": false
+    },
+    "terminal-chat": {
+      "enabled": true,
+      "adapter": [
+        "bot-app",
+        "chat",
+        "acp"
+      ]
     }
+  },
+  "clients": {
+    "chat": [
+      "node",
+      "apps/terminal-chat/main.mjs",
+      "chat"
+    ],
+    "acp": [
+      "node",
+      "apps/terminal-chat/main.mjs",
+      "acp"
+    ]
   }
 }

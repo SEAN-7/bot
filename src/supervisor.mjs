@@ -35,18 +35,18 @@ async function claim(home) {
   throw new Error('Could not claim supervisor lock');
 }
 
-// Chat is a separate, long-lived client. Its scoped credential belongs to the
-// bot home, while the operator credential continues to rotate on every boot.
-async function chatCredentials(home) {
-  const path=join(home,'control','chat-credentials.json');
+// Persistent scoped clients survive supervisor replacement.
+async function clientCredentials(home) {
+  const path=join(home,'control','client-credentials.json');
   let auth;
   try {auth=await readJSON(path);}
   catch(error) {
     if(error.code!=='ENOENT')throw error;
-    auth={token:randomBytes(32).toString('hex'),legacyTokens:[]};
+    auth=await readJSON(join(home,'control','chat-credentials.json')).catch(error=>{if(error.code!=='ENOENT')throw error;return null;});
+    auth||={token:randomBytes(32).toString('hex'),legacyTokens:[]};
     await atomicJSON(path,auth);
   }
-  if(typeof auth?.token!=='string'||!/^[a-f0-9]{64}$/.test(auth.token)||!Array.isArray(auth.legacyTokens)||auth.legacyTokens.length>32||auth.legacyTokens.some(token=>typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)))throw new Error('Invalid persistent chat credentials');
+  if(typeof auth?.token!=='string'||!/^[a-f0-9]{64}$/.test(auth.token)||!Array.isArray(auth.legacyTokens)||auth.legacyTokens.length>32||auth.legacyTokens.some(token=>typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)))throw new Error('Invalid persistent client credentials');
   return auth;
 }
 
@@ -55,18 +55,18 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   const installedCore=fixedCoreRoot ? await realpath(resolve(fixedCoreRoot)) : null;
   let current=await readCurrent(home),settings=limits(current.config);
   const unlock=await claim(home);
-  let chatAuth;
-  try {chatAuth=await chatCredentials(home);} catch(error) {await unlock();throw error;}
+  let clientAuth;
+  try {clientAuth=await clientCredentials(home);} catch(error) {await unlock();throw error;}
   const store=new Store(home);
-  const token=randomBytes(32).toString('hex'),uiToken=chatAuth.token;
-  const chatTokens=[uiToken,...chatAuth.legacyTokens];
+  const token=randomBytes(32).toString('hex'),uiToken=clientAuth.token;
+  const clientTokens=[uiToken,...clientAuth.legacyTokens];
   let worker=null,ready=false,busy=false,stopped=false,transitioning=false,restarts=0;
   let state='starting',error=null,lastHeartbeat=0,phaseStarted=0,workerStarted=0;
-  let tools=[],groups=new Map(),activeEvent=null,activeInputs=new Set(),completedTrialTurn=false,tickAt=0;
+  let tools=[],groups=new Map(),activeEvent=null,activeInputs=new Set(),completedTrialTurn=false;
   let updateRequested=false,protectedMode=!unsafe,queue=Promise.resolve();
   const retryCounts=new Map();
   const serialize=fn=>{const result=queue.then(fn);queue=result.catch(()=>{});return result;};
-  const status=()=>({state,revision:current.revision,coreRoot:installedCore||current.coreRoot,pending:store.pending(),error,model:current.config.model,protected:protectedMode,tools,canRecover:!!((current.previous||current.trial)&&current.compatibleRecovery),trial:current.trial||null});
+  const status=()=>({state,revision:current.revision,coreRoot:installedCore||current.coreRoot,pending:store.pending(),error,protected:protectedMode,tools,canRecover:!!((current.previous||current.trial)&&current.compatibleRecovery),trial:current.trial||null});
   const diagnose=(kind,payload)=>store.record(kind,payload);
   function reply(child,id,result,failure) {if(child.connected)child.send({type:'rpc.result',id,result,error:failure});}
   function enqueue(event) {
@@ -101,6 +101,10 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
           else throw new Error('Unknown app state operation');
         } else if(operation==='history')result=preflight?[]:store.history();
         else if(preflight)throw new Error('External app action prohibited during preflight');
+        else if(operation==='contribute') {
+          if(typeof input.key!=='string'||typeof input.content!=='string'||input.content.length>100000)throw new Error('Invalid app contribution');
+          result=store.contribute(input.key,input.content,app);
+        }
         else if(operation==='publish')result=store.publish(app,callId,input.content,activeEvent);
         else if(operation==='enqueue')result=enqueue({...input.event,id:input.event.id?`${app}:${input.event.id}`:undefined,metadata:{...input.event.metadata,source:app}});
         else if(operation==='update.request'){updateRequested=true;result={queued:true,message:'Controller replacement will be checked after this turn. Ordinary app edits already take effect on their next invocation.'};}
@@ -234,8 +238,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
           tools=message.tools;
           if(tools?.length!==1||tools[0].name!=='shell'){await fail('Runtime must expose exactly one shell tool');return;}
           ready=true;state='idle';diagnose('runtime.ready',{revision:current.revision});
-        } else if(message.type==='tickDone'){busy=false;if(state==='working')state='idle';}
-        else if(message.type==='turnDone') {
+        } else if(message.type==='turnDone') {
           if(message.eventId!==activeEvent)throw new Error('Mismatched completed event');
           for(const id of activeInputs)retryCounts.delete(id);
           activeEvent=null;activeInputs.clear();busy=false;state='idle';error=null;restarts=0;
@@ -272,17 +275,8 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
     if(!ready)return;
     const event=store.next();
     if(event) {busy=true;activeEvent=event.id;activeInputs=new Set([event.id]);state='working';phaseStarted=now;worker.send({type:'turn',event});}
-    else if(now-tickAt>=1000){busy=true;tickAt=phaseStarted=now;worker.send({type:'tick'});}
   }
 
-  // Keep existing ACP clients usable across updates. Private model output is
-  // absent from the chat view; channel publications use its existing wire roles.
-  const chatMessage=message=> {
-    if(message.role==='assistant'&&message.metadata?.modelOutput)return {...message,content:'',metadata:{modelOutput:true}};
-    if(message.role==='channel'&&message.metadata?.module==='chat')return {...message,role:'assistant'};
-    if(message.role==='user'&&message.metadata?.source&&message.metadata.source!=='chat')return {...message,role:'context'};
-    return message;
-  };
   const server=createServer((request,response)=>{
     const respond=(code,data)=>{response.writeHead(code,{'Content-Type':'application/json','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});response.end(JSON.stringify(data));};
     (async()=>{
@@ -290,20 +284,20 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
       if(request.headers.origin&&request.headers.origin!==`http://${request.headers.host}`){respond(403,{error:'Cross-origin requests are not allowed'});return;}
       if(url.pathname.startsWith('/api/')) {
         const credential=(request.headers.authorization||'').replace(/^Bearer /,'');
-        const operator=equalToken(credential,token),browser=chatTokens.some(value=>equalToken(credential,value));
-        if(!operator&&!browser){respond(401,{error:'Authentication required'});return;}
+        const operator=equalToken(credential,token),client=clientTokens.some(value=>equalToken(credential,value));
+        if(!operator&&!client){respond(401,{error:'Authentication required'});return;}
         if(request.method==='GET') {
           if(url.pathname==='/api/status')respond(200,status());
-          else if(url.pathname==='/api/messages')respond(200,{messages:store.history().map(browser?chatMessage:message=>message)});
-          else if(url.pathname==='/api/chat-snapshot'){const snapshot=store.chatSnapshot();respond(200,{...snapshot,messages:snapshot.messages.map(chatMessage)});}
-          else if(url.pathname==='/api/events')respond(200,{events:store.events(Number(url.searchParams.get('after'))||0).map(entry=>browser&&entry.kind==='message'?{...entry,payload:chatMessage(entry.payload)}:entry)});
+          else if(url.pathname==='/api/messages')respond(200,{messages:store.history()});
+          else if(['/api/snapshot','/api/chat-snapshot'].includes(url.pathname))respond(200,store.snapshotWithCursor());
+          else if(url.pathname==='/api/events')respond(200,{events:store.events(Number(url.searchParams.get('after'))||0)});
           else if(url.pathname==='/api/apps')respond(200,{apps:(await readJSON(join(home,'drafts','config.json'))).apps,controller:current.config.controller});
           else respond(404,{error:'Unknown endpoint'});
           return;
         }
         if(request.method!=='POST'){respond(405,{error:'Method not allowed'});return;}
         const body=await bodyOf(request);
-        if(url.pathname==='/api/messages'){respond(202,enqueue({...body,metadata:{source:'chat'}}));return;}
+        if(url.pathname==='/api/messages'){respond(202,enqueue(body));return;}
         if(url.pathname==='/api/cancel') {
           const result=await serialize(async()=>{
             const cancelled=store.cancel(body.id);
@@ -353,7 +347,7 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
   try {
     await new Promise((accept,reject)=>{server.once('error',reject);server.listen(port??settings.port,'127.0.0.1',accept);});
     const url=`http://127.0.0.1:${server.address().port}`;
-    await atomicJSON(join(home,'control','endpoint.json'),{url,token,uiToken,pid:process.pid});
+    await atomicJSON(join(home,'control','endpoint.json'),{url,token,clientToken:uiToken,uiToken,pid:process.pid});
     // A supervisor interrupted during a trial must restore, never bless the unproven candidate.
     if(current.trial){await rollback(home,store);current=await readCurrent(home);store.recover('Supervisor restarted during an unproven update; restored checkpoint');}
     else store.recover(store.get('hasStarted') && !store.get('cleanShutdown') ? 'Supervisor interrupted; resumed the durable conversation' : null);
@@ -363,6 +357,6 @@ export async function startSupervisor({home,port,unsafe=false,fixedCoreRoot}) {
     if(current.pending)await activatePending();
     if(!worker)await boot();
     interval=setInterval(()=>serialize(pump).catch(e=>serialize(()=>fail(e.message))),100);
-    return {url,token,uiToken,stop};
+    return {url,token,clientToken:uiToken,uiToken,stop};
   } catch(e) {await stop();throw e;}
 }

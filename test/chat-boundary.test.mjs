@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { filterACPOutput } from '../src/chat-client.mjs';
+import { filterACPOutput } from '../apps/terminal-chat/transport.mjs';
 
 test('ACP requests cannot use a pending reply ID to invoke host filesystem or terminals', () => {
   const outstanding = new Map([[1, 'initialize']]);

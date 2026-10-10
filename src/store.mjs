@@ -33,7 +33,7 @@ export class Store {
     return { ...data, id: entry.seq };
   }
   history() { return this.db.prepare('SELECT id,data FROM messages ORDER BY id').all().map(row => ({ ...JSON.parse(row.data), id: row.id })); }
-  chatSnapshot() { return { messages: this.history(), after: this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM journal').get().seq }; }
+  snapshotWithCursor() { return { messages: this.history(), after: this.db.prepare('SELECT COALESCE(MAX(seq),0) AS seq FROM journal').get().seq }; }
   cancel(id) {
     if(typeof id!=='string'||!id)throw new Error('Input ID is required');
     return this.transaction(()=>{
@@ -199,7 +199,12 @@ export class Store {
   setState(module,key,value) { this.db.prepare('INSERT INTO state(module,key,value) VALUES(?,?,?) ON CONFLICT(module,key) DO UPDATE SET value=excluded.value').run(module,key,JSON.stringify(value)); }
   deleteState(module,key) { this.db.prepare('DELETE FROM state WHERE module=? AND key=?').run(module,key); }
   snapshot() { return this.db.prepare('SELECT * FROM state').all(); }
-  restore(snapshot) { this.transaction(() => { this.db.exec('DELETE FROM state; DELETE FROM contributions'); for(const row of snapshot) this.db.prepare('INSERT INTO state(module,key,value) VALUES(?,?,?)').run(row.module,row.key,row.value); }); }
+  restore(snapshot,namespaces=[...new Set(snapshot.map(row=>row.module))]) {
+    this.transaction(()=>{
+      for(const namespace of namespaces)this.db.prepare('DELETE FROM state WHERE module=?').run(namespace);
+      for(const row of snapshot)if(namespaces.includes(row.module))this.db.prepare('INSERT INTO state(module,key,value) VALUES(?,?,?)').run(row.module,row.key,row.value);
+    });
+  }
   get(key, fallback=null) { const row=this.db.prepare('SELECT value FROM kv WHERE key=?').get(key); return row ? JSON.parse(row.value) : fallback; }
   set(key,value) { this.db.prepare('INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run(key,JSON.stringify(value)); }
   close() { this.db.close(); }

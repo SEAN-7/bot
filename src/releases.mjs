@@ -49,11 +49,12 @@ export async function initialize(home,config,{appsDir=join(CORE_ROOT,'apps'),fix
   for(const dir of ['drafts','workspace','revisions']) await mkdir(join(home,dir),{recursive:true});
   const starter=await readJSON(join(CORE_ROOT,'apps','config.json'));
   if(config.modules)throw new Error('Plugin modules are unsupported; migrate to process apps');
-  config={apiVersion:API_VERSION,model:{},...starter,...config,apps:{...starter.apps,...config.apps},coreRoot:fixedCoreRoot ? await trustedCore(fixedCoreRoot) : await coreSnapshot(home,config.coreRoot||CORE_ROOT)};
+  config={apiVersion:API_VERSION,...starter,...config,apps:{...starter.apps,...config.apps},coreRoot:fixedCoreRoot ? await trustedCore(fixedCoreRoot) : await coreSnapshot(home,config.coreRoot||CORE_ROOT)};
   if(config.apiVersion!==API_VERSION)throw new Error('Unsupported configuration API');
   await cp(join(CORE_ROOT,'apps'),join(home,'drafts','apps'),{recursive:true});
   if(resolve(appsDir)!==join(CORE_ROOT,'apps'))await cp(appsDir,join(home,'drafts','apps'),{recursive:true});
   await atomicJSON(join(home,'drafts','config.json'),config);
+  await atomicJSON(join(home,'control','clients.json'),config.clients||{});
   await symlink(join(config.coreRoot,'node_modules'),join(home,'drafts','node_modules'),'dir');
   try {await cp(join(CORE_ROOT,'docs','contract.md'),join(home,'workspace','BOT-API.md'));}catch(error){if(error.code!=='ENOENT')throw error;}
   const revision=await createBundle(home,config);
@@ -70,21 +71,10 @@ async function createBundle(home,config) {
     if(config.modules)throw new Error('Plugin modules are unsupported');
     if(!APP_ID.test(config.controller)||!config.apps?.[config.controller]?.enabled)throw new Error('Enable one controller application');
     await rejectSymlinks(join(home,'drafts','apps',config.controller));
-    // Bundled apps own their optional shared library. The core never imports it.
-    try{await rejectSymlinks(join(home,'drafts','apps','_lib'));await cp(join(home,'drafts','apps','_lib'),join(dest,'apps','_lib'),{recursive:true});}catch(error){if(error.code!=='ENOENT')throw error;}
-    for(const [appId,options] of Object.entries(config.apps||{})) {
-      if(!options.enabled)continue;
-      if(!APP_ID.test(appId))throw new Error('Invalid app ID');
-      const source=join(home,'drafts','apps',appId);
-      if(appId===config.controller) {
-        const manifest=await appManifest(source);
-        if(manifest.id!==appId)throw new Error('App directory/ID mismatch');
-      }
-      // Retain code for operator rollback and controller-owned dependencies,
-      // without making unrelated commands a prerequisite for an update.
-      try { await cp(source,join(dest,'apps',appId),{recursive:true}); }
-      catch(error) { if(error.code!=='ENOENT'||appId===config.controller)throw error; }
-    }
+    const source=join(home,'drafts','apps',config.controller);
+    const manifest=await appManifest(source);
+    if(manifest.id!==config.controller)throw new Error('App directory/ID mismatch');
+    await cp(source,join(dest,'apps',config.controller),{recursive:true});
     await atomicJSON(join(dest,'config.json'),config);
     await symlink(join(config.coreRoot,'node_modules'),join(dest,'node_modules'),'dir');
     return id;
@@ -136,10 +126,10 @@ export async function stageCore(home,source,{fixed=false}={}) {
 export async function beginTrial(home,store) {
   const meta=await readJSON(metadataPath(home));
   if(!meta.pending) return null;
-  const snapshot=store.snapshot();
-  await atomicJSON(join(home,'revisions',meta.pending,'before-state.json'),snapshot);
   const before=await readJSON(join(home,'revisions',meta.active,'config.json'));
   const after=await readJSON(join(home,'revisions',meta.pending,'config.json'));
+  const namespaces=[...new Set([before,after].filter(config=>config.apiVersion===API_VERSION).map(config=>config.apps[config.controller].stateNamespace||`app:${config.controller}`))];
+  await atomicJSON(join(home,'revisions',meta.pending,'before-state.json'),before.apiVersion===API_VERSION?{namespaces,state:store.snapshot().filter(row=>namespaces.includes(row.module))}:store.snapshot());
   const trial={from:meta.active,to:meta.pending,startedAt:Date.now(),kind:before.coreRoot===after.coreRoot?'controller':'core'};
   await atomicJSON(metadataPath(home),{...meta,active:meta.pending,pending:null,trial});
   store.record('update.trial',trial);
@@ -165,7 +155,12 @@ export async function rollback(home,existingStore) {
     const target=meta.trial?.from||meta.previous;
     if(!target) throw new Error('No previous working version is available');
     const snapshot=await readJSON(join(home,'revisions',meta.active,'before-state.json'));
-    store.restore(snapshot);
+    // Older revisions kept whole-store snapshots. Restore only controller state,
+    // even when recovering one of those revisions.
+    const from=await readJSON(join(home,'revisions',meta.active,'config.json'));
+    const to=await readJSON(join(home,'revisions',target,'config.json'));
+    const namespaces=Array.isArray(snapshot)?[...new Set([from,to].map(config=>config.apps[config.controller].stateNamespace||`app:${config.controller}`))]:snapshot.namespaces;
+    store.restore(Array.isArray(snapshot)?snapshot:snapshot.state,namespaces);
     const next={active:target,previous:null,pending:null,trial:null};
     // Preserve the previous release's own rollback chain, when it has one.
     const targetConfig=await readJSON(join(home,'revisions',target,'config.json'));
