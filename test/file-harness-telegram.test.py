@@ -117,6 +117,15 @@ class TelegramTests(unittest.TestCase):
         self.channel.health()
         self.assertTrue(p.exists())
 
+    def test_first_long_poll_gets_startup_grace_but_not_forever(self):
+        with self.channel.db:
+            self.channel.set('watch', {'state': 'starting', 'checked_at': telegram.time.time()})
+        self.assertTrue(self.channel.health()['healthy'])
+        self.assertEqual(list((self.home / 'inbox').iterdir()), [])
+        with self.channel.db:
+            self.channel.set('watch', {'state': 'starting', 'checked_at': telegram.time.time() - 181})
+        self.assertFalse(self.channel.health()['healthy'])
+
     def test_import_preserves_offset_and_receipts_without_replaying_history(self):
         with self.channel.db:
             self.channel.set('imported', False)

@@ -192,7 +192,7 @@ class Channel:
 
     def health(self):
         watch = self.get('watch', {})
-        bad = time.time() - watch.get('checked_at', 0) > 180 or watch.get('state') != 'connected'
+        bad = time.time() - watch.get('checked_at', 0) > 180 or watch.get('state') not in ('connected', 'starting')
         previous = self.get('health_bad', False)
         if bad and not previous:
             atomic(self.home / 'inbox' / 'telegram-health.json',
@@ -204,6 +204,8 @@ class Channel:
     def watch(self):
         with (self.folder / 'listener.lock').open('a') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.db:
+                self.set('watch', {'state': 'starting', 'checked_at': time.time(), 'error': None})
             stopping = False
             def stop(*_):
                 nonlocal stopping

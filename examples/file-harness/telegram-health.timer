@@ -2,7 +2,7 @@
 Description=Check Telegram listener every five minutes
 
 [Timer]
-OnBootSec=3min
+OnActiveSec=3min
 OnUnitActiveSec=5min
 
 [Install]
