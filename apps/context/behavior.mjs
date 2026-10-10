@@ -1,4 +1,5 @@
-import { SUMMARY_INSTRUCTIONS, recoveryPointer, pruneToolResults, continuityAnchors, sampleForSummary } from './summary.mjs';
+import { createHash } from 'node:crypto';
+import { SUMMARY_INSTRUCTIONS, recoveryPointer, summaryRecords, takeSummaryChunk } from './summary.mjs';
 
 // A boundary is safe only after every tool call in the assistant block has a result.
 export function messageGroups(messages) {
@@ -44,7 +45,7 @@ export function createContext(api) {
         inputBudgetChars: Number.isFinite(hardChars) ? hardChars + promptChars : null };
     };
     const requested = await api.state.get('compactionRequest', null);
-    let snapshot = await api.state.get('summary', null);
+    let snapshot = requested?.rebuild ? null : await api.state.get('summary', null);
     const through = snapshot ? messages.findIndex(message => message.id === snapshot.throughId) : -1;
     // A restored history can predate a module snapshot; never discard unmatched history.
     if (through < 0) snapshot = null;
@@ -83,32 +84,43 @@ export function createContext(api) {
       return prepared;
     }
     const older = groups.slice(headCount, cut).flat();
-    const pruned = pruneToolResults(older);
     const summarySettings = { ...settings };
     delete summarySettings.maxTokens;
-    const summaryBudget = Math.min(12000, window > 0 ? window * 0.05 : 12000, Math.max(2000, inputSize(pruned) / 4 * 0.2));
-    const instructions = `${SUMMARY_INSTRUCTIONS}\nAim for at most ${Math.floor(summaryBudget)} tokens. Full source history remains searchable.`;
-    const summaryPrefix = snapshot ? [summaryMessage(snapshot)] : [];
-    const available = hardChars - inputSize(summaryPrefix) - instructions.length - 1000;
-    if (available < 500) throw Object.assign(new Error('Model input budget cannot fit the context summary and saved memory.'), { blocked: true });
-    const summaryRequest = {
-      messages: [...summaryPrefix, ...sampleForSummary(pruned, available), {
-        id: 'summary-request', role: 'user', timestamp: 0,
-        content: instructions,
-      }],
-      tools: [], settings: summarySettings, signal,
-    };
-    checked(summaryRequest.messages);
-    let completion;
-    try { completion = await model.complete(summaryRequest); }
-    catch (error) { error.message = `Context summary failed: ${error.message}`; throw error; }
-    if (!completion.text?.trim() || completion.toolCalls?.length) throw new Error('Context summarization did not return a usable text summary');
-    const anchors = continuityAnchors(messages.slice(0, messages.findIndex(message => message.id === older.at(-1).id) + 1), Math.min(12000, threshold * 0.1));
-    const nextSnapshot = { summary: [completion.text.trim(), anchors].filter(Boolean).join('\n\n'), throughId: older.at(-1).id, headIds: head.map(message => message.id) };
+    const summaryBudget = Math.min(12000, window > 0 ? window * 0.05 : 12000, Math.max(2000, inputSize(older) / 4 * 0.2));
+    const instructions = { id: 'summary-request', role: 'user', timestamp: 0,
+      content: `${SUMMARY_INSTRUCTIONS}\nAim for at most ${Math.floor(summaryBudget)} tokens. Full source history remains searchable.` };
+    const records = summaryRecords(older);
+    const sourceHash = createHash('sha256').update(JSON.stringify(records)).update(JSON.stringify(snapshot)).update(instructions.content).digest('hex');
+    const progress = await api.state.get('summaryProgress', null);
+    let cursor = { index: 0, offset: 0 }, summary = snapshot?.summary;
+    if (progress?.sourceHash === sourceHash) ({ cursor, summary } = progress);
+    const started = Date.now();
+    while (cursor.index < records.length) {
+      signal?.throwIfAborted();
+      // Yield between completed batches before the controller's operation deadline.
+      // A retry resumes only if the source evidence and prior summary still match.
+      if (Date.now() - started >= 60_000) throw Object.assign(new Error('Context compaction has saved its progress; retry preparation to continue.'), { retryable: true });
+      const summaryPrefix = summary ? [{ id: 'previous-summary', role: 'context', timestamp: 0,
+        content: `Previous continuity summary (reference; may be incomplete):\n${summary}` }] : [];
+      const budget = Number.isFinite(hardChars) ? hardChars : Math.max(threshold, 60000);
+      const available = budget - inputSize(summaryPrefix) - inputSize([instructions]) - 1000;
+      const chunk = takeSummaryChunk(records, cursor, available);
+      const request = { messages: [...summaryPrefix, ...chunk.messages, instructions], tools: [], settings: summarySettings, signal };
+      checked(request.messages);
+      let completion;
+      try { completion = await model.complete(request); }
+      catch (error) { error.message = `Context summary failed: ${error.message}`; throw error; }
+      if (!completion.text?.trim() || completion.toolCalls?.length) throw new Error('Context summarization did not return a usable text summary');
+      summary = completion.text.trim();
+      cursor = chunk.cursor;
+      await api.state.set('summaryProgress', { sourceHash, cursor, summary });
+    }
+    const nextSnapshot = { summary, throughId: older.at(-1).id, headIds: head.map(message => message.id), format: 2 };
     recent = groups.slice(cut).flat();
     const prepared = checked([...head, summaryMessage(nextSnapshot), ...recent]);
     // Persist only a complete, usable summary; failure leaves prior state intact.
     await api.state.set('summary', nextSnapshot);
+    await api.state.delete('summaryProgress');
     if (requested) await api.state.delete('compactionRequest');
     return { ...prepared, boundary: nextSnapshot.throughId, compacted: true };
   };

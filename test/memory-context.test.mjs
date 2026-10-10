@@ -1,3 +1,4 @@
+import { summaryEvidence } from './helpers/summary.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -7,7 +8,7 @@ import { prepareSnapshot } from '../apps/context/request.mjs';
 import { contribute } from '../apps/memory/behavior.mjs';
 import { commands as memoryCommands } from '../apps/memory/commands.mjs';
 import { createContext } from '../apps/context/behavior.mjs';
-import { continuityAnchors, sampleForSummary } from '../apps/context/summary.mjs';
+import { summaryRecords, takeSummaryChunk } from '../apps/context/summary.mjs';
 import { createModel } from '../apps/model-provider/behavior.mjs';
 import { Store } from '../src/store.mjs';
 import { initialize } from '../src/releases.mjs';
@@ -82,7 +83,7 @@ test('model provider sends saved memory in the actual system prompt, separately 
   assert.equal(captured.messages[0].content, 'Human request');
 });
 
-test('Hermes compaction preserves a bounded opening and active tools, prunes old output, and rolls the summary forward', async () => {
+test('compaction preserves a bounded opening, all older tool evidence and exact active tools', async () => {
   const api = stateFixture({ maxInputChars: 10000, keepRecentGroups: 1 });
   api.saved.set('compactionRequest', { keepRecentGroups: 1 });
   const messages = [
@@ -100,12 +101,8 @@ test('Hermes compaction preserves a bounded opening and active tools, prunes old
   const first = await prepare({ messages, model });
   assert.deepEqual(first.messages.slice(0, 2), messages.slice(0, 2));
   assert.deepEqual(first.messages.slice(3), messages.slice(5));
-  assert.match(first.messages[2].content, /\/opt\/project\/report.go/);
-  assert.match(first.messages[2].content, /PR #123/);
-  assert.match(first.messages[2].content, /abc123def/);
-  assert.match(first.messages[2].content, /Human Messages/);
   assert.match(first.messages[2].content, /bot-app memory search/);
-  assert.match(requests[0].messages.find(message => message.id === 5).content, /Old shell output cleared/);
+  assert.deepEqual(summaryEvidence(requests[0]), messages.slice(2, 5));
   assert.match(requests[0].messages.at(-1).content, /Latest Unresolved Request/);
   assert.match(requests[0].messages.at(-1).content, /Session Log/);
   assert.deepEqual(requests[0].tools, []);
@@ -118,7 +115,7 @@ test('Hermes compaction preserves a bounded opening and active tools, prunes old
   assert.deepEqual(messages, original);
 });
 
-test('summary failures retain the prior summary and request; unknown outcomes survive pruning', async () => {
+test('summary failures retain the prior summary and request, including unknown tool outcomes', async () => {
   const api = stateFixture({ maxInputChars: 1000, keepRecentGroups: 1 });
   const previous = { summary: 'Prior summary', throughId: 1 };
   api.saved.set('summary', previous);
@@ -128,19 +125,127 @@ test('summary failures retain the prior summary and request; unknown outcomes su
     { id: 4, role: 'tool', toolCallId: 'x', content: 'UNKNOWN interrupted external action '.repeat(100), isError: true },
     { id: 5, role: 'user', content: 'Current' }];
   await assert.rejects(createContext(api)({ messages, model: { complete: async request => {
-    assert.equal(request.messages.find(message => message.id === 4).content, messages[3].content);
+    assert.equal(summaryEvidence(request).find(message => message.id === 4).content, messages[3].content);
     return { text: '', toolCalls: [] };
   } } }), /usable text summary/);
   assert.deepEqual(api.saved.get('summary'), previous);
   assert.ok(api.saved.has('compactionRequest'));
 });
 
-test('large summary input is sampled with explicit elisions and anchors stay bounded', () => {
-  const messages = Array.from({ length: 100 }, (_, i) => ({ id: i, role: 'user', content: 'x'.repeat(10000) + ` /path/to/file${i}` }));
-  const sampled = sampleForSummary(messages, 50000);
-  assert.ok(JSON.stringify(sampled).length < 50000);
-  assert.match(JSON.stringify(sampled), /elided/);
-  assert.ok(continuityAnchors(messages, 1000).length < 1200);
+test('oversized tool results and arguments are fully covered across bounded summary batches', async () => {
+  const api = stateFixture({ maxInputChars: 1000, keepRecentGroups: 1 });
+  const incoming = JSON.stringify({ messages: [{ id: 243, sender: 'human', text: 'Build a database of Australian radiology companies, using LSPNs as the inbox.' },
+    { id: 245, sender: 'human', text: 'Yes, create the company and site tables; commit and push.' }] });
+  const messages = [
+    { id: 1, role: 'context', content: 'Incoming communication message', metadata: { input: true } },
+    { id: 2, role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'shell', arguments: { command: 'bot-app example read ' + 'a'.repeat(12000) + 'END_ARGUMENT' } }],
+      metadata: { nativeAssistant: { content: [{ type: 'thinking', thinking: 'PRIVATE_REASONING' }] } } },
+    { id: 3, role: 'tool', toolCallId: 'read', content: JSON.stringify({ stdout: 'x'.repeat(18000) + incoming + 'y'.repeat(18000), exitCode: 0 }) },
+    { id: 4, role: 'context', content: 'Command completed', metadata: { input: true } },
+  ];
+  const original = structuredClone(messages), requests = [];
+  const model = { describe: () => ({ contextWindow: 4000, maxOutputTokens: 500 }), complete: async request => {
+    assert.ok(request.messages.reduce((n, m) => n + JSON.stringify(m).length, 0) < (4000 * 0.85 - 500) * 4);
+    assert.ok(!JSON.stringify(request).includes('PRIVATE_REASONING'));
+    if (requests.length) assert.match(request.messages[0].content, /retained summary/);
+    requests.push(request); return { text: 'retained summary', toolCalls: [] };
+  } };
+  const result = await createContext(api)({ messages, model });
+  assert.ok(requests.length > 2);
+  const evidence = summaryEvidence(requests);
+  assert.deepEqual(evidence, messages.slice(0, 3).map(m => m.id === 2 ? { ...m, metadata: {} } : m));
+  assert.match(evidence[2].content, /Australian radiology/);
+  assert.deepEqual(result.messages.slice(1), messages.slice(3));
+  assert.equal(api.saved.get('summary').throughId, 3);
+  assert.deepEqual(messages, original);
+  // A failure after an earlier successful batch must not advance the boundary.
+  api.saved.set('compactionRequest', { rebuild: true, keepRecentGroups: 1 });
+  const saved = structuredClone(api.saved.get('summary')); let calls = 0;
+  await assert.rejects(createContext(api)({ messages, model: { ...model, complete: async () => {
+    if (++calls === 2) throw new Error('later batch failed');
+    return { text: 'partial summary' };
+  } } }), /later batch failed/);
+  assert.deepEqual(api.saved.get('summary'), saved);
+  assert.equal(api.saved.get('compactionRequest').rebuild, true);
+});
+
+test('long compaction yields with a checkpoint and resumes after restart without skipping evidence', async t => {
+  const api = stateFixture({ maxInputChars: 1000, keepRecentGroups: 1 });
+  const messages = [{ id: 1, role: 'user', content: 'a'.repeat(30000) },
+    { id: 2, role: 'assistant', content: 'done' }, { id: 3, role: 'user', content: 'Current request' }];
+  let now = 0, pause = true;
+  t.mock.method(Date, 'now', () => now);
+  const requests = [];
+  const model = { describe: () => ({ contextWindow: 4000, maxOutputTokens: 500 }), complete: async request => {
+    requests.push(request); if (pause) now += 61000;
+    return { text: 'Checkpoint summary' };
+  } };
+  await assert.rejects(createContext(api)({ messages, model }), error => error.retryable && /saved its progress/.test(error.message));
+  assert.equal(api.saved.has('summary'), false);
+  assert.ok(api.saved.get('summaryProgress').cursor.offset > 0);
+  pause = false;
+  const prepared = await createContext({ ...api })({ messages, model });
+  assert.deepEqual(summaryEvidence(requests), messages.slice(0, 2));
+  assert.equal(prepared.boundary, 2);
+  assert.equal(api.saved.has('summaryProgress'), false);
+
+  // A different history must never reuse a checkpoint for the old evidence.
+  api.saved.delete('summary'); requests.length = 0; pause = true;
+  await assert.rejects(createContext(api)({ messages, model }), /saved its progress/);
+  pause = false; requests.length = 0;
+  const changed = structuredClone(messages); changed[0].content = 'b'.repeat(30000);
+  await createContext(api)({ messages: changed, model });
+  assert.deepEqual(summaryEvidence(requests), changed.slice(0, 2));
+});
+
+test('summary chunks preserve escape-heavy and non-BMP text without skipping or splitting characters', () => {
+  const messages = [{ id: 8, role: 'tool', content: '\\"\n😀'.repeat(2000) }];
+  const records = summaryRecords(messages), requests = [];
+  let cursor = { index: 0, offset: 0 };
+  while (cursor.index < records.length) {
+    const chunk = takeSummaryChunk(records, cursor, 500);
+    assert.ok(chunk.messages.reduce((n, m) => n + JSON.stringify(m).length, 0) <= 500);
+    requests.push(chunk); cursor = chunk.cursor;
+  }
+  assert.deepEqual(summaryEvidence(requests), messages);
+  assert.throws(() => takeSummaryChunk(records, { index: 0, offset: 0 }, 10), /budget cannot fit/);
+});
+
+test('rebuild ignores a contaminated summary and recovers tool-only human messages from the journal', async () => {
+  const api = stateFixture({ maxInputChars: 10000, keepRecentGroups: 1 });
+  const messages = [{ id: 1, role: 'context', content: 'Incoming notification', metadata: { input: true } },
+    { id: 2, role: 'assistant', content: '', toolCalls: [{ id: 'read', name: 'shell', arguments: { command: 'bot-app telegram read' } }] },
+    { id: 3, role: 'tool', toolCallId: 'read', content: JSON.stringify({ stdout: JSON.stringify({ sender: 'human', text: 'Yes, build the database. Commit and push.' }) }) },
+    { id: 4, role: 'context', content: 'Current notification', metadata: { input: true } }];
+  api.saved.set('summary', { throughId: 3, summary: 'No database was requested and no permission was given.' });
+  api.saved.set('compactionRequest', { rebuild: true, keepRecentGroups: 1 });
+  const result = await createContext(api)({ messages, model: { complete: async request => {
+    assert.doesNotMatch(JSON.stringify(request), /No database was requested/);
+    assert.deepEqual(summaryEvidence(request), messages.slice(0, 3));
+    return { text: 'Database requested; commit and push authorized (journal 3).' };
+  } } });
+  assert.match(result.messages[0].content, /Database requested/);
+  assert.equal(result.boundary, 3);
+  assert.equal(api.saved.has('compactionRequest'), false);
+});
+
+test('journal search finds tool arguments and exact paginated reads recover the entire original record', async () => {
+  const messages = [{ id: 11, role: 'assistant', content: '', toolCalls: [{ id: 'x', name: 'shell', arguments: { command: 'sqlite3 radiology.sqlite ' + '😀\n'.repeat(9000) } }] },
+    { id: 12, role: 'tool', toolCallId: 'x', content: 'prefix '.repeat(1000) + 'approved company schema' + ' suffix'.repeat(1000) }];
+  const api = { ...stateFixture(), history: async () => structuredClone(messages) }, commands = memoryCommands(api);
+  const [match] = await commands.search.execute({ query: 'RADIOLOGY.SQLITE' });
+  assert.equal(match.id, 11); assert.equal(match.field, 'toolCalls'); assert.equal(match.truncated, true);
+  const [result] = await commands.search.execute({ query: 'approved' });
+  assert.equal(result.id, 12); assert.ok(result.offset > 0); assert.equal(result.truncated, true);
+  let offset = 0, text = '';
+  do {
+    const page = await commands.read.execute({ id: String(match.id), offset, limit: 1000 });
+    assert.equal(page.offset, offset); assert.ok(page.data.length <= 1000);
+    text += page.data; offset = page.nextOffset;
+  } while (offset !== null);
+  assert.deepEqual(JSON.parse(text), messages[0]);
+  await assert.rejects(commands.read.execute({ id: 999 }), /not found/);
+  await assert.rejects(commands.read.execute({ id: 11, offset: 1000000 }), /bounds/);
 });
 
 test('isolated bot refreshes system memory after compaction and preserves frozen memory across restart', { timeout: 45000 }, async t => {

@@ -1,3 +1,4 @@
+import { summaryEvidence } from './helpers/summary.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { prepareContext, usageNotice } from '../apps/context/prepare.mjs';
@@ -80,11 +81,11 @@ test('compaction can summarize older usage records while retaining current-turn 
     describe: () => ({ contextWindow: 10000 }),
     complete: async request => { summaryRequest = request; return { text: 'Earlier task complete.' }; },
   } });
-  assert.deepEqual(summaryRequest.messages.slice(0, -1), messages.slice(0, 3));
+  assert.deepEqual(summaryEvidence(summaryRequest), messages.slice(0, 3));
   assert.deepEqual(result.messages.slice(1), messages.slice(3));
   assert.equal(api.saved.get('summary').throughId, 2);
   assert.match(result.append[0].content, /prior input 125/);
-  assert.equal(summaryRequest.messages.filter(m => m.metadata?.contextUsage).length, 1);
+  assert.equal(summaryEvidence(summaryRequest).filter(m => m.metadata?.contextUsage).length, 1);
 });
 
 test('isolated controller journals snapshots before model calls and preserves them across restart', { timeout: 30000 }, async t => {

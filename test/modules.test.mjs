@@ -1,3 +1,4 @@
+import { summaryEvidence } from './helpers/summary.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, readFile, access } from 'node:fs/promises';
@@ -22,7 +23,7 @@ const piModel=(api,collection)=>api.registerModel(createModel(api.config,collect
 function installCommands(api, entries, names) {
   for(const [name, entry] of Object.entries(entries)) api.registerCommand({ ...entry, name: names[name] });
 }
-function memory(api) { memoryModule(api); installCommands(api,memoryCommands(api),{get:'memory_get',update:'memory_update',search:'history_search'}); }
+function memory(api) { memoryModule(api); installCommands(api,memoryCommands(api),{get:'memory_get',update:'memory_update',search:'history_search',read:'history_read'}); }
 function scheduler(api) { schedulerModule(api); installCommands(api,schedulerCommands(api),{create:'schedule_create',list:'schedule_list',cancel:'schedule_cancel'}); }
 function context(api) { contextModule(api); installCommands(api,contextCommands(api),{compact:'compact_conversation'}); }
 function execution(api) { api.registerCommand(shellExecution(api)); installCommands(api,moduleCommands(api),{apply:'module_apply'}); }
@@ -141,7 +142,7 @@ test('context compacts whole tool groups and reuses an identical summary prefix'
   const first = await h.api.context({ messages, model, settings: {} });
   assert.deepEqual(first.messages.slice(1).map(m => m.id), [6, 7]);
   assert.equal(h.state.get('summary').throughId, 5);
-  assert.deepEqual(requests[0].messages.slice(0, -1), messages.slice(0, 5));
+  assert.deepEqual(summaryEvidence(requests[0]), messages.slice(0, 5));
   assert.deepEqual(requests[0].tools, []);
   const later = await h.api.context({ messages: [...messages, { id: 8, role: 'user', content: 'Another task' }], model, settings: {} });
   assert.deepEqual(later.messages[0], first.messages[0]);
@@ -220,7 +221,7 @@ test('agent requests compaction below the automatic threshold while retaining cu
   assert.equal((await h.call('compact_conversation')).status, 'requested');
   assert.deepEqual(h.state.get('compactionRequest'), { keepRecentGroups: 1 });
   const result = await h.api.context({ messages, model });
-  assert.deepEqual(requests[0].messages.slice(0, -1), messages.slice(0, 5));
+  assert.deepEqual(summaryEvidence(requests[0]), messages.slice(0, 5));
   assert.deepEqual(requests[0].tools, []);
   assert.deepEqual(result.messages.slice(1), messages.slice(5));
   assert.equal(h.state.get('summary').throughId, 5);
@@ -427,7 +428,7 @@ test('large models compact above the default cost budget while explicit budgets 
     describe: () => ({ contextWindow: 1000000, maxOutputTokens: 128000 }),
     complete: async request => {
       calls++;
-      assert.deepEqual(request.messages.slice(0, -1), messages.slice(0, 2));
+      assert.deepEqual(summaryEvidence(request), messages.slice(0, 2));
       return { text: 'Earlier request completed.', toolCalls: [] };
     },
   };
