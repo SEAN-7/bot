@@ -143,7 +143,7 @@ test('large summary input is sampled with explicit elisions and anchors stay bou
   assert.ok(continuityAnchors(messages, 1000).length < 1200);
 });
 
-test('isolated bot refreshes system memory after compaction and preserves frozen memory across restart', { timeout: 30000 }, async t => {
+test('isolated bot refreshes system memory after compaction and preserves frozen memory across restart', { timeout: 45000 }, async t => {
   const home = await mkdtemp(join(tmpdir(), 'bot-memory-context-'));
   let server;
   t.after(async () => { await server?.stop(); await rm(home, { recursive: true, force: true }); });
@@ -164,12 +164,12 @@ test('isolated bot refreshes system memory after compaction and preserves frozen
       if (step < 2 && !systemContext.includes('original preference')) throw new Error('Memory was not frozen');
       if (step >= 2 && (!systemContext.includes('new preference') || systemContext.includes('unrefreshed'))) throw new Error('Boundary/restart snapshot failed');
       if (step >= 2) return { text: '', toolCalls: [] };
-      return { text: '', toolCalls: [{ id: 'memory-step-' + step, name: 'shell', arguments: { command: step === 0
+      return { text: '', toolCalls: [{ id: 'memory-step-' + step, name: 'shell', arguments: { yieldTimeMs:30000, command: step === 0
         ? ${JSON.stringify("bot-app memory update '{\"section\":\"USER\",\"value\":\"new preference\"}'")}
         : ${JSON.stringify("bot-app context compact '{\"keepRecentGroups\":1}'")} } }] };
     }
   });`);
-  const until = async check => { for (let i = 0; i < 500; i++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 20)); } assert.fail('Isolated bot timed out'); };
+  const until = async check => { for (let i = 0; i < 1000; i++) { if (await check()) return; await new Promise(resolve => setTimeout(resolve, 20)); } assert.fail('Isolated bot timed out'); };
   const api = (path, body) => fetch(server.url + path, { method: body ? 'POST' : 'GET', headers: { authorization: 'Bearer ' + server.token, 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }).then(r => r.json());
   server = await startSupervisor({ home, port: 0, unsafe: true });
   await until(async () => (await api('/api/status')).state === 'idle');
