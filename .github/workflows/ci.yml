@@ -18,3 +18,5 @@ jobs:
         run: |
           sudo useradd --system --no-create-home agent-test
           sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
+      - name: Reproducible release build
+        run: sh scripts/release_test.sh

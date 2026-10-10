@@ -1,30 +1,24 @@
-name: Build Linux bundles
+name: release
+
 on:
-  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
 permissions:
-  contents: read
+  contents: write
+
 jobs:
-  bundle:
-    strategy:
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            arch: x64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
+  release:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build self-contained executable
-        env:
-          BOT_BUNDLE_STAGE: ${{ runner.temp }}/bot-bundle
-        run: python3 scripts/build-bundle.py dist
-      - name: Verify self-extracting installer
-        run: ${{ runner.temp }}/bot-bundle/runtime/node/bin/node --test test/bundle-packaging.test.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-go@v5
         with:
-          name: bot-linux-${{ matrix.arch }}
-          path: |
-            dist/bot-linux-${{ matrix.arch }}
-            dist/bot-linux-${{ matrix.arch }}.sha256
-          if-no-files-found: error
+          go-version-file: go.mod
+      - run: go test ./...
+      - name: Rebuild and verify committed checksums
+        run: sh scripts/release.sh "${GITHUB_REF_NAME#v}" --verify
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes "Agent harness $GITHUB_REF_NAME"
