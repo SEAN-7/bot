@@ -17,6 +17,7 @@ jobs:
       - name: Privilege-separation tests (root)
         run: |
           sudo useradd --system --no-create-home agent-test
+          sudo useradd --system --no-create-home agent-test-provider
           sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
       - name: Reproducible release build
         run: sh scripts/release_test.sh

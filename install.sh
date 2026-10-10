@@ -79,7 +79,10 @@ install -m 755 -o root -g root "$tmp/agent" /usr/local/bin/agent
 id agent >/dev/null 2>&1 || useradd --create-home --home-dir /home/agent --shell /bin/bash agent
 id agent-provider >/dev/null 2>&1 || useradd --system --no-create-home --home-dir / --shell /usr/sbin/nologin agent-provider
 
-install -d -m 700 -o root -g root /etc/agent /etc/agent/credentials
+# /etc/agent is traversable (not listable) so agent-provider can reach plugins/;
+# credentials/ and settings.json stay root-only.
+install -d -m 711 -o root -g root /etc/agent
+install -d -m 700 -o root -g root /etc/agent/credentials
 install -d -m 750 -o root -g agent-provider /etc/agent/plugins
 install -d -m 755 -o root -g root /var/lib/agent /var/log/agent
 install -d -m 700 -o root -g root /var/lib/agent/owner

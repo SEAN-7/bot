@@ -12,6 +12,9 @@ import (
 	"github.com/SEAN-7/bot/internal/plugin"
 )
 
+// etcMode is the mode install.sh gives /etc/agent.
+const etcMode = 0o711
+
 // rootHarness runs the daemon as root with commands, file access and plugins
 // as an unprivileged test user, so the kernel enforces the boundaries.
 func rootHarness(t *testing.T, steps ...string) (*harness, string) {
@@ -50,7 +53,27 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	binary, _ := os.ReadFile(h.cfg.Self)
 	h.cfg.Self = filepath.Join(h.root, "daemon.test")
 	os.WriteFile(filepath.Join(h.root, "daemon.test"), binary, 0o755)
-	h.cfg.AgentUser, h.cfg.ProviderUser = name, name
+	// Mirror install.sh: /etc/agent traversable only, plugins for the provider
+	// group, credentials root-only; plugins run as a separate provider user.
+	provider := os.Getenv("AGENT_TEST_PROVIDER_USER")
+	if provider == "" {
+		provider = "agent-test-provider"
+	}
+	pu, err := user.Lookup(provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pgid, _ := strconv.Atoi(pu.Gid)
+	os.Chmod(h.cfg.Etc, etcMode)
+	os.Chmod(h.cfg.Credentials(), 0o700)
+	os.Chown(h.cfg.Plugins(), 0, pgid)
+	os.Chmod(h.cfg.Plugins(), 0o750)
+	plugin := filepath.Join(h.cfg.Plugins(), "replay")
+	os.Chown(plugin, 0, pgid)
+	os.Chmod(plugin, 0o750)
+	puid, _ := strconv.Atoi(pu.Uid)
+	os.Chown(replayDir, puid, pgid)
+	h.cfg.AgentUser, h.cfg.ProviderUser = name, provider
 	return h, name
 }
 
@@ -127,12 +150,12 @@ func TestPrivilegeJournalNotWritable(t *testing.T) {
 }
 
 func TestPrivilegeCommandsRunAsAgent(t *testing.T) {
-	h, name := rootHarness(t, step("id -un; cat ../../etc/agent/credentials/replay.env", 100), done())
+	h, name := rootHarness(t, step("id -un; cat ../../etc/agent/credentials/replay.env; ../../etc/agent/plugins/replay </dev/null; echo plugin-rc=$?", 100), done())
 	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
 	h.waitEnds(h.cfg.Home, 1)
 	tool := h.requests()[1].Messages[2].Content
-	if !strings.Contains(tool, name) || strings.Contains(tool, "REPLAY_SCRIPT=") {
+	if !strings.Contains(tool, name) || strings.Contains(tool, "REPLAY_SCRIPT=") || !strings.Contains(tool, "plugin-rc=126") {
 		t.Fatalf("tool %q", tool)
 	}
 }

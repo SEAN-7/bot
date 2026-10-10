@@ -45,9 +45,9 @@ be a script the agent writes, it stays out of the harness.
 | Path | Owner, mode | Contents |
 | --- | --- | --- |
 | `/usr/local/bin/agent` | root, 0755 | The harness binary |
-| `/etc/agent/` | root, 0700 | `settings.json`, `credentials/` |
+| `/etc/agent/` | root, 0711 (traversable, not listable) | `settings.json` (0600), `credentials/` (0700) |
 | `/etc/agent/credentials/NAME.env` | root, 0600 | Plugin settings and secrets as `KEY=value` lines |
-| `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables, root:agent-provider 0750 |
+| `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables, root:agent-provider 0750; the agent user cannot read or run them |
 | `/var/lib/agent/owner/` | root, 0700 | Spool for `agent send` |
 | `/var/lib/agent/delivered.jsonl` | root, 0600 | Record of owner messages delivered (agent path, file name, SHA-256) |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output with no secrets, for `agent provider describe` |
