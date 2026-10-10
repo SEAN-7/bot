@@ -1,7 +1,0 @@
-{
-  "id": "telegram",
-  "version": "1.0.0",
-  "description": "Read and reply in a separate Telegram conversation. Incoming messages wake the bot with references.",
-  "command": ["node", "main.mjs"],
-  "preflight": ["--preflight"]
-}

@@ -1,11 +1,26 @@
-# Project philosophy
+# Project instructions
 
-Read [the project philosophy](docs/philosophy.md) before making design or implementation changes. Preserve one durable conversation, keep the protected core minimal and unopinionated, and put evolving behavior in replaceable modules. Bot-managed changes must preserve continuity and recovery.
+Read [the spec](docs/spec.md) and [the philosophy](docs/philosophy.md) before
+making design or implementation changes. Keep the harness small: if the agent
+could build something as a script, it does not belong in the harness.
 
-# Project workflow
+## Workflow
 
-- Commit and push all completed repository changes to GitHub by default. Verify the working tree is clean and the local branch matches its remote before reporting completion.
-- Deploy completed changes to the bot VM by default. The SSH target is `bot` in the operator's SSH configuration.
-- Build and validate the Linux bundle, then use the managed installer to update the VM. Preserve conversation data, credentials, and the previous release for rollback.
-- Verify service health and the changed behavior on the VM before reporting completion. State explicitly if deployment or verification is blocked.
-- Never send synthetic deployment checks, test prompts, or diagnostic instructions to the real bot conversation. Messages shown as the user must come from the human. Run conversation and reconnect tests with a temporary, isolated bot home; use read-only production health checks. Operator core updates complete startup validation without conversation traffic; bot-managed controller trials settle through genuine work.
+- Go standard library only. Run `go vet ./...` and `go test ./...` before
+  committing; CI also runs the root privilege tests and the reproducible
+  release check (`scripts/release_test.sh`).
+- Commit and push completed changes by default. Verify the working tree is
+  clean and the branch matches its remote before reporting completion.
+- Releases: run `scripts/release.sh X.Y.Z`, commit the updated
+  `plugins/index.json` and `install.sh`, then tag `vX.Y.Z` and push the tag.
+  The release workflow rebuilds and refuses to publish if any checksum differs.
+- Deploy to the VM (SSH host `bot`) by running the release's `install.sh`
+  there; on an existing installation it upgrades in place and keeps the
+  agent's files, journals and credentials.
+- Verify service health after deploying (`systemctl is-active agent`,
+  `journalctl -u agent`) with read-only checks.
+- Never send synthetic messages, test prompts or diagnostic instructions to
+  the live agent. Messages labelled as the owner's must come from the human.
+  Run tests in temporary roots; the VM has no Go, so cross-compile test
+  binaries (`GOOS=linux go test -c`) and set `REPLAY_BIN` when running them
+  there, using a throwaway user and directory.

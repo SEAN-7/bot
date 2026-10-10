@@ -1,9 +1,0 @@
-{
-  "id": "terminal-chat",
-  "version": "1.0.0",
-  "description": "Full-screen terminal frontend and constrained ACP transport.",
-  "command": [
-    "node",
-    "main.mjs"
-  ]
-}

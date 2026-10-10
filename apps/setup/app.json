@@ -1,9 +1,0 @@
-{
-  "id": "setup",
-  "version": "1.0.0",
-  "description": "Configure a default app collection.",
-  "command": [
-    "node",
-    "main.mjs"
-  ]
-}

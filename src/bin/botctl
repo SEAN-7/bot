@@ -1,2 +1,0 @@
-#!/bin/sh
-exec "$BOT_NODE" "$BOT_CORE_CLI" "$@"
