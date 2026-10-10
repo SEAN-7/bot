@@ -2,13 +2,16 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -19,6 +22,8 @@ import (
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
+	"github.com/SEAN-7/bot/internal/proto"
+	"github.com/SEAN-7/bot/internal/release"
 	"github.com/SEAN-7/bot/internal/seed"
 	"github.com/SEAN-7/bot/internal/version"
 )
@@ -157,5 +162,52 @@ func reorder(args []string) []string {
 }
 
 func install(ctx context.Context, l layout.Layout, target, sha string) error {
-	return errors.New("provider install is not available yet")
+	settings, err := layout.LoadSettings(l.SettingsFile())
+	if err != nil {
+		return err
+	}
+	r, err := runner(l)
+	if err != nil {
+		return err
+	}
+	err = cli.Install(ctx, target, sha, cli.InstallOptions{
+		Layout:        l,
+		Release:       &release.Client{API: "https://api.github.com", Token: os.Getenv("GITHUB_TOKEN")},
+		Repo:          settings.Repository,
+		Version:       version.Version,
+		Arch:          runtime.GOARCH,
+		ProviderGroup: "agent-provider",
+		Prompt:        prompt,
+		Runner:        r,
+	})
+	if err == nil {
+		fmt.Println("Installed. Models:")
+		return cli.Describe(ctx, l, r, true, os.Stdout)
+	}
+	return err
+}
+
+// prompt asks on the terminal, even when stdin is a pipe (curl | sh).
+// Secrets are read with echo turned off.
+func prompt(s proto.Setting) (string, error) {
+	tty, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return "", fmt.Errorf("%s is not set and there is no terminal to ask on", s.Name)
+	}
+	defer tty.Close()
+	fmt.Fprintf(tty, "%s (%s): ", s.Name, s.Description)
+	if s.Secret {
+		stty := func(arg string) {
+			cmd := exec.Command("stty", arg)
+			cmd.Stdin = tty
+			cmd.Run()
+		}
+		stty("-echo")
+		defer func() { stty("echo"); fmt.Fprintln(tty) }()
+	}
+	line, err := bufio.NewReader(tty).ReadString('\n')
+	if err != nil && line == "" {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
 }
