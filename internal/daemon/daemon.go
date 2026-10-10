@@ -124,8 +124,16 @@ func (d *daemon) reconcile(ctx context.Context) {
 		d.cfg.Logger.Printf("scan %s: %v", d.cfg.Home, err)
 		return
 	}
+	var valid []string
+	for _, dir := range dirs {
+		if validAgentDir(d.cfg.Home, dir) {
+			valid = append(valid, dir)
+		} else {
+			d.cfg.Logger.Printf("ignoring unexpected agent path %q", dir)
+		}
+	}
 	present := map[string]bool{}
-	for _, dir := range d.admit(dirs) {
+	for _, dir := range d.admit(valid) {
 		present[dir] = true
 	}
 	d.mu.Lock()
@@ -149,6 +157,28 @@ func (d *daemon) reconcile(ctx context.Context) {
 			}()
 		}
 	}
+}
+
+// validAgentDir accepts home and home/agents/NAME[/agents/NAME...] with clean
+// components. Scan results come from a process the agent user could tamper
+// with, and journal paths are derived from them.
+func validAgentDir(home, dir string) bool {
+	if dir == home {
+		return true
+	}
+	if filepath.Clean(dir) != dir || !strings.HasPrefix(dir, home+"/") {
+		return false
+	}
+	parts := strings.Split(strings.TrimPrefix(dir, home+"/"), "/")
+	if len(parts)%2 != 0 {
+		return false
+	}
+	for i, part := range parts {
+		if i%2 == 0 && part != "agents" || part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // admit applies max_agents in scan order. Each excess agent gets an ERROR

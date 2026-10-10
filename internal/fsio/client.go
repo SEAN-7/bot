@@ -9,7 +9,9 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 )
 
 // Client sends requests to the helper. It is safe for concurrent use and
@@ -17,6 +19,10 @@ import (
 type Client struct {
 	self string
 	user *syscall.Credential
+	// Timeout bounds each call. The helper runs as the agent user, which can
+	// stop it; a stuck helper is killed and restarted rather than hanging the
+	// daemon.
+	Timeout time.Duration
 
 	mu    sync.Mutex
 	cmd   *exec.Cmd
@@ -27,7 +33,7 @@ type Client struct {
 
 // Start launches `self _fsio` with the given credential (nil: current user).
 func Start(self string, user *syscall.Credential) (*Client, error) {
-	c := &Client{self: self, user: user}
+	c := &Client{self: self, user: user, Timeout: 30 * time.Second}
 	if err := c.spawn(); err != nil {
 		return nil, err
 	}
@@ -73,9 +79,15 @@ func (c *Client) call(req request) (response, error) {
 		}
 	}
 	var resp response
+	var timedOut atomic.Bool
+	proc := c.cmd.Process
+	timer := time.AfterFunc(c.Timeout, func() { timedOut.Store(true); proc.Kill() })
 	err := json.NewEncoder(c.stdin).Encode(req)
 	if err == nil {
 		err = c.dec.Decode(&resp)
+	}
+	if !timer.Stop() && timedOut.Load() {
+		err = fmt.Errorf("timed out after %s", c.Timeout)
 	}
 	if err != nil {
 		c.dead = true

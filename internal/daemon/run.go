@@ -100,7 +100,12 @@ func (a *agent) run(ctx context.Context) {
 	if !ok {
 		return
 	}
-	j, err := journal.Create(a.d.cfg.JournalDir(a.dir), time.Now())
+	jdir := a.d.cfg.JournalDir(a.dir)
+	if !strings.HasPrefix(jdir, filepath.Clean(a.d.cfg.Log)+"/") {
+		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
+		return
+	}
+	j, err := journal.Create(jdir, time.Now())
 	if err != nil {
 		a.logf("journal: %v", err)
 		return

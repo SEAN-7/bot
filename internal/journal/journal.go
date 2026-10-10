@@ -25,7 +25,6 @@ func Create(dir string, now time.Time) (*Writer, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	os.Chmod(dir, 0o755)
 	for t := now.UTC(); ; t = t.Add(time.Nanosecond) {
 		path := filepath.Join(dir, t.Format(stamp)+".jsonl")
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)

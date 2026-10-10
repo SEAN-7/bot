@@ -146,3 +146,24 @@ func TestMaxAgents(t *testing.T) {
 		t.Fatal("limit ERROR not cleared")
 	}
 }
+
+func TestValidAgentDir(t *testing.T) {
+	home := "/home/agent"
+	for dir, want := range map[string]bool{
+		"/home/agent":                     true,
+		"/home/agent/agents/a":            true,
+		"/home/agent/agents/a/agents/b":   true,
+		"/home/agent/agents/a/x/b":        false,
+		"/home/agent/agents":              false,
+		"/home/agent/agents/../../../etc": false,
+		"/home/agent/agents/a/agents/..":  false,
+		"/etc":                            false,
+		"/home/agentx/agents/a":           false,
+		"/home/agent/agents/a/agents/b/":  false,
+		"/home/agent/agents/a/agents/./b": false,
+	} {
+		if got := validAgentDir(home, dir); got != want {
+			t.Errorf("validAgentDir(%q) = %v, want %v", dir, got, want)
+		}
+	}
+}

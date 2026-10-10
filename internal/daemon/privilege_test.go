@@ -159,3 +159,13 @@ func TestPrivilegeCommandsRunAsAgent(t *testing.T) {
 		t.Fatalf("tool %q", tool)
 	}
 }
+
+func TestPrivilegeHelperNotDumpable(t *testing.T) {
+	h, _ := rootHarness(t, step("cat /proc/$(pgrep -f 'daemon.test _fsio' | head -n 1)/environ >/dev/null; echo environ-rc=$?", 100), done())
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	h.waitEnds(h.cfg.Home, 1)
+	if tool := h.requests()[1].Messages[2].Content; !strings.Contains(tool, "environ-rc=1") {
+		t.Fatalf("agent can inspect the file helper: %q", tool)
+	}
+}

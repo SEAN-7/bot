@@ -228,3 +228,22 @@ func TestReadFIFODoesNotBlock(t *testing.T) {
 		t.Fatal("reading a FIFO blocked the helper")
 	}
 }
+
+func TestHelperCallTimeout(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	c.Timeout = 500 * time.Millisecond
+	c.mu.Lock()
+	pid := c.cmd.Process.Pid
+	c.mu.Unlock()
+	syscall.Kill(pid, syscall.SIGSTOP)
+	begin := time.Now()
+	if _, _, err := c.Read(filepath.Join(dir, "x"), 10); err == nil {
+		t.Fatal("call to a stopped helper succeeded")
+	}
+	if time.Since(begin) > 3*time.Second {
+		t.Fatalf("call blocked for %s", time.Since(begin))
+	}
+	if err := c.Write(filepath.Join(dir, "y"), []byte("ok")); err != nil {
+		t.Fatalf("helper not restarted: %v", err)
+	}
+}

@@ -47,6 +47,9 @@ type response struct {
 
 // Serve answers JSON-line requests until r is closed.
 func Serve(r io.Reader, w io.Writer) error {
+	if err := undumpable(); err != nil {
+		return err
+	}
 	dec := json.NewDecoder(bufio.NewReader(r))
 	enc := json.NewEncoder(w)
 	for {
