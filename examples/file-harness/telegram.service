@@ -1,0 +1,14 @@
+[Unit]
+Description=Agent-owned Telegram inbox listener
+After=network.target
+StartLimitIntervalSec=0
+
+[Service]
+ExecStart=/usr/bin/python3 %h/bin/telegram watch
+Restart=always
+RestartSec=5
+TimeoutStopSec=70
+UMask=0077
+
+[Install]
+WantedBy=default.target

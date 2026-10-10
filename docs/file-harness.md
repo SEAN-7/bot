@@ -118,6 +118,14 @@ not poll. The agent can build higher-level delegation scripts around this CLI.
 
 ## Bootstrap and handover
 
+An optional, dependency-free Telegram listener and send script is provided in
+[`examples/file-harness/`](../examples/file-harness/README.md). Install it as
+agent-owned files; it is not part of the protected loop and later core updates
+do not overwrite those copies. Its tests use temporary homes and a fake API.
+The host prompt accepts channel instructions only after the agent verifies the
+configured listener's sender checks and durable message receipt. A file's
+claimed source alone is not authentication.
+
 The existing bot can bootstrap the new home because it currently has operator
 access on this VM. Until its sudo access is removed or it is retired, that old
 account can still change host controls; the new agent account cannot.

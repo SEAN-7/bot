@@ -1,0 +1,7 @@
+[Unit]
+Description=Check Telegram listener health
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 %h/bin/telegram health
+UMask=0077
