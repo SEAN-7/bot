@@ -1,81 +1,53 @@
 # Project philosophy
 
-We are building a persistent bot that can develop its own capabilities while
-retaining a small, protected foundation. It should evolve through use: the user
-and bot work together in one continuous conversation, and the bot can build shell-accessible applications and change its behavior as their needs become clearer.
+The harness gives guarantees and the agent sets policy. The harness is one
+always-on loop with one shell tool. Everything else is ordinary files and
+services on the VM. The file harness in `harness/` is the new design; the older
+runtime remains available during migration.
 
-## One continuous conversation
+## Durable continuity
 
-The bot has one durable primary conversation. Closing chat, restarting the
-service, changing models, or replacing applications should preserve that continuity.
-The complete journal remains available even when the model needs a shorter
-context. Accepted messages and work belong to the persistent bot, independently
-of any particular frontend connection.
+There is one durable primary conversation. Every accepted inbox message, model
+reply, command start and tool result is appended to the host-owned journal.
+Closing a client, restarting the service or resetting working context does not
+delete that record. Channel listeners retain their own delivery state and
+message IDs. Original journal evidence takes precedence over lossy summaries.
 
-This is the bot's working conversation, not the storage for every external chat.
-Communication applications own their conversation history and delivery state.
-Terminal chat and Telegram are separate conversations. Incoming messages wake
-the bot with durable reference notifications; the bot reads and replies through
-the relevant application's CLI. Keep channel message storage out of the core.
+The editable README and TASK files are loaded at each wake and reset, with
+independent size caps. README is stable guidance; TASK is volatile work state.
+The agent can request an early reset with `.reset`; the new context names the
+previous journal file. Memory notes, indexes,
+task state and retrieval procedures are conventions seeded there, not a memory
+framework enforced by the harness. When context resets, only disk state survives.
 
-## A minimal, unopinionated core
+## A small protected harness
 
-The core provides the reliable machinery: durable history, a single event queue,
-controlled execution, protected installation files, and recovery. Keep it small
-and understandable. Decisions about memory, scheduling, context management,
-application discovery, model access, chat, and working strategy belong in replaceable applications.
+The host owns serialization, journaling, shell timeouts, clipping with full
+output files, daily heartbeat, context warnings and resets, crash recovery,
+per-wake step/spend limits and a daily spend limit. A response with no command
+ends a wake. Policy about when to stop belongs in the README.
 
-Default applications are useful starting points. They should be replaceable through
-the same interfaces available to new applications. A particular model, memory
-strategy, or task workflow should not become a permanent assumption of the core.
+The agent owns README, notes, scripts, listeners, channel sending, cron jobs,
+retrieval and task strategy. Capabilities are ordinary programs invoked through
+`sh`; no tool plugin registry, controller framework or capability catalogue is
+required. Delegated briefs use fresh contexts under the same serialized host
+and spending controls.
 
-## The bot can change how it works
+## Authority and recovery
 
-Self-development is part of the purpose of the project. The bot can edit application
-programs, build new capabilities, and install or upgrade ordinary CLI tools. This lets useful
-behavior emerge from actual work without requiring every future capability to
-be designed into the application in advance.
+The agent owns its working account, not the host's administrative account.
+Journal storage, model credentials, pause/kill controls, network policy and
+spend limits remain outside that account's authority. Listeners authenticate
+the owner and label their input; other sources are data. Host owner messages
+have provenance that files written by the agent cannot forge.
 
-Capabilities are ordinary applications paired with skills and invoked through one supervised shell tool. All replaceable behavior, including the conversation controller, runs in separate application processes. Apps communicate with the core through shell commands and with one another through executable hooks. Setup and frontends are replaceable apps too. The core has no plugin loader or registration API. Applications and their guides should evolve together.
+The host snapshots agent files before each reset. Filesystem or provider errors
+fail closed with a retained alert. Unknown request charges remain reserved;
+unknown command effects are never automatically replayed. A snapshot cannot
+undo an external action. The default archive covers the agent home, not the
+entire VM disk; full-volume snapshots are an operator-provided host hook.
 
-The protected core remains outside the bot's editing authority. Operator-managed
-core updates are separate from bot-managed application changes.
-
-Bundled app sources remain available separately from the bot's editable copies.
-The bot decides whether and when to adopt upstream changes and merges them using
-its own tools. Core releases do not automatically update or merge those copies.
-
-## Experimentation with recovery
-
-Ordinary applications behave like third-party CLI tools. Edits and upgrades take
-effect on their next invocation, without mandatory validation, activation or
-probation. Testing is an engineering choice appropriate to the change. Existing
-processes use their loaded code until restarted. Preserve persistent data and
-credentials; retain useful previous versions without making every app edit a
-whole-bot update.
-
-Replacing the running conversation controller or its startup configuration is a
-separate operation. Switch it at a turn boundary, check startup and retain the
-previous controller revision for recovery without losing the conversation. Snapshot only the controller package and its state; ordinary apps own their separate code, state and migrations.
-
-Recovery must be honest about its limits. Restoring application state cannot undo an
-external action. Record tool starts and outcomes durably, and inspect interrupted
-actions with unknown outcomes before repeating them.
-
-## Always available, with purposeful activity
-
-The service lives independently of the chat window. User messages and configured
-stimuli can wake the same conversation; idle time alone does not require a model
-call. Scheduling and decisions about continued work remain replaceable behavior.
-
-The agent is tool-only. Notifications and tool results enter its next model
-context as soon as they are available. Human replies use communication tools;
-plain assistant text does not finish an objective. The core does not classify
-tasks as complete. With no new stimulus, it stays idle without a wait tool.
-
-## How to judge a change
-
-Ask: does this change protect continuity, execution, or recovery, or is it behavior
-that should remain replaceable? Prefer the smallest practical mechanism that
-meets the need. Keep behavioral policy in applications and preserve the bot's ability
-to evolve without expanding the protected core unnecessarily.
+Migration must preserve the original conversation, credentials, channel offsets,
+working files and rollback release. Bootstrap a separate paused installation,
+then switch channels at an explicit handover. Never run two pollers for the
+same Telegram token. Never manufacture user messages to test production.

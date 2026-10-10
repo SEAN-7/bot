@@ -1,0 +1,24 @@
+# Managed by bot file harness
+[Unit]
+Description=Bot file harness
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0077
+EnvironmentFile=/etc/bot-next/environment
+ExecStart=/usr/bin/flock --nonblock /var/lib/bot-next-host/lock /opt/bot-next/current/runtime/node/bin/node /opt/bot-next/current/app/harness/main.mjs /etc/bot-next/config.json
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=10
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

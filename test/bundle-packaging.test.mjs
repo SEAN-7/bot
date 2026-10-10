@@ -32,6 +32,10 @@ test('self-extracting installer verifies payload and preserves argument boundari
     assert.equal(good.status, 0, good.stderr);
     assert.match(good.stdout, /<install>\n<--bundle>\n<[^>]+\/bundle>\n<--name>\n<contains spaces>\n<literal;\$value>/);
     const altered = Buffer.from(bytes);
+    const next = spawnSync(executable, ['install-next', '--credential-file', '/some path/environment'], { env, encoding: 'utf8' });
+    assert.equal(next.status, 0, next.stderr);
+    assert.match(next.stdout, /\/app\/harness\/install.mjs>\n<install-next>/);
+    assert.match(next.stdout, /<--credential-file>\n<\/some path\/environment>/);
     altered[altered.length - 1] ^= 1;
     writeFileSync(executable, Buffer.concat([Buffer.from(stub), altered]));
     const bad = spawnSync(executable, ['update'], { env, encoding: 'utf8' });

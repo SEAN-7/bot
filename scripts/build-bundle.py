@@ -55,7 +55,7 @@ def main():
         bundle = temp / 'bundle'
         app = bundle / 'app'
         app.mkdir(parents=True)
-        for name in ('package.json', 'package-lock.json', 'README.md', 'src', 'apps', 'docs', 'examples'):
+        for name in ('package.json', 'package-lock.json', 'README.md', 'src', 'apps', 'harness', 'docs', 'examples'):
             source = ROOT / name
             if source.is_dir(): shutil.copytree(source, app / name)
             else: shutil.copy2(source, app / name)
@@ -125,8 +125,8 @@ def repack():
         raise SystemExit('Dependency lock changed; rebuild runtimes and production dependencies.')
     shutil.rmtree(bundle / 'app' / 'defaults', ignore_errors=True)
     shutil.copy2(ROOT / 'package-lock.json', bundle / 'app/package-lock.json')
-    for name in ('src', 'apps', 'docs', 'examples'):
-        shutil.rmtree(bundle / 'app' / name)
+    for name in ('src', 'apps', 'harness', 'docs', 'examples'):
+        shutil.rmtree(bundle / 'app' / name, ignore_errors=True)
         shutil.copytree(ROOT / name, bundle / 'app' / name)
     shutil.copy2(ROOT / 'package.json', bundle / 'app/package.json')
     shutil.copy2(ROOT / 'README.md', bundle / 'app/README.md')

@@ -1,5 +1,22 @@
 # Bot
 
+This branch implements the **file harness**: one always-on loop, one `sh` tool,
+editable `~/README.md` and `~/TASK.md`, a file inbox, and a protected append-only
+journal. Creating `~/.reset` reloads both files and links the previous journal.
+The agent builds its own capabilities as ordinary VM files and services.
+See [the design and separate installation](docs/file-harness.md).
+
+```sh
+sudo sh ./bot-linux-x64 install-next --credential-file /etc/bot/environment
+sudo bot-next status
+```
+
+This installs `bot-next.service` under a separate account and leaves it paused.
+The existing bot keeps running during bootstrap. The legacy runtime below is
+retained for migration and rollback; `install-next` does not replace it.
+
+## Legacy runtime
+
 A small bot with one durable working conversation and separate communication apps, including a full-screen terminal interface built with Pi TUI. The parent process protects the journal, controls the queue, and restores working versions. The protected runtime exposes one supervised shell tool. A replaceable controller and separate process apps provide model access, context, wake-ups and ACP chat; ordinary apps paired with skills provide capabilities.
 
 We are building a bot that can develop its own capabilities while retaining a small, protected foundation. See [the project philosophy](docs/philosophy.md) for the principles that guide design and implementation.
