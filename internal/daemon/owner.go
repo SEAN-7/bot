@@ -132,6 +132,9 @@ func (d *daemon) deliverOwner() {
 			d.cfg.Logger.Printf("owner delivery: %v", err)
 			continue
 		}
+		if err := d.appendMessage(map[string]any{"from": "owner", "text": strings.ToValidUTF8(string(data), "\uFFFD")}); err != nil {
+			d.cfg.Logger.Printf("messages log: %v", err)
+		}
 		os.Remove(spooled)
 	}
 }

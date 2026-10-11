@@ -106,7 +106,7 @@ func Run(ctx context.Context, cfg Config) error {
 	defer ticker.Stop()
 	for {
 		d.deliverOwner()
-		d.reconcile(ctx)
+		d.collectMessages(d.reconcile(ctx))
 		select {
 		case <-ctx.Done():
 			d.mu.Lock()
@@ -121,12 +121,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-// reconcile starts loops for new agent directories and stops removed ones.
-func (d *daemon) reconcile(ctx context.Context) {
+// reconcile starts loops for new agent directories and stops removed ones,
+// returning the admitted agents.
+func (d *daemon) reconcile(ctx context.Context) []string {
 	dirs, err := d.fs.Scan(d.cfg.Home)
 	if err != nil {
 		d.cfg.Logger.Printf("scan %s: %v", d.cfg.Home, err)
-		return
+		return nil
 	}
 	var valid []string
 	for _, dir := range dirs {
@@ -140,7 +141,8 @@ func (d *daemon) reconcile(ctx context.Context) {
 	for _, dir := range valid {
 		exists[dir] = true
 	}
-	for _, dir := range d.admit(valid) {
+	admitted := d.admit(valid)
+	for _, dir := range admitted {
 		present[dir] = true
 	}
 	d.mu.Lock()
@@ -168,6 +170,7 @@ func (d *daemon) reconcile(ctx context.Context) {
 			}()
 		}
 	}
+	return admitted
 }
 
 // validAgentDir accepts home and home/agents/NAME[/agents/NAME...] with clean

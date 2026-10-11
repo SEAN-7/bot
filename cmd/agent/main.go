@@ -32,6 +32,8 @@ const usage = `Usage:
   agent daemon                      run the service (root)
   agent send "text"                 send an owner message to the main agent (root)
   agent log [NAME]                  follow an agent's journal (NAME under ~/agents)
+  agent message "text"|-            (agents) send a message to the owner; - reads stdin
+  agent messages                    show the owner conversation and follow it
   agent provider install NAME|URL   install a provider plugin (root; URL needs --sha256)
   agent provider describe           show providers, models and options
   agent version
@@ -71,6 +73,29 @@ func run(args []string) error {
 		}
 		fmt.Println("Sent.")
 		return nil
+	case "message":
+		if len(args) != 2 {
+			return errors.New(`usage: agent message "text" (or - to read stdin)`)
+		}
+		text := args[1]
+		if text == "-" {
+			data, err := io.ReadAll(io.LimitReader(os.Stdin, cli.MessageLimit+1))
+			if err != nil {
+				return err
+			}
+			text = string(data)
+		}
+		if err := cli.Message(os.Getenv("HOME"), text, time.Now()); err != nil {
+			return err
+		}
+		fmt.Println("Queued for your owner.")
+		return nil
+	case "messages":
+		err := cli.Messages(ctx, l, os.Stdout)
+		if errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return err
 	case "log":
 		name := ""
 		if len(args) > 1 {

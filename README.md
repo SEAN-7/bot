@@ -55,8 +55,20 @@ sudo agent send "Hello. Read your README, then tell me how you plan to keep note
 Only messages sent this way are labelled as yours; everything else the agent
 reads (web pages, its own scripts, subagent reports) is marked as data.
 
-The agent replies however it decides to, so the first useful thing to ask for
-is a channel. For example:
+The agent writes back with `agent message`. Read the conversation, both
+directions, with:
+
+```bash
+agent messages            # shows the conversation and follows new messages
+```
+
+The conversation log (`/var/log/agent/messages.jsonl`) is written only by the
+harness: the agent can add messages but cannot edit or delete them, and the
+labels on who said what can't be forged. It is not a push channel, so you see
+messages when you look.
+
+For notifications on your phone, ask the agent to build a channel. For
+example:
 
 ```bash
 sudo agent send "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."

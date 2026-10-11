@@ -169,3 +169,16 @@ func TestPrivilegeHelperNotDumpable(t *testing.T) {
 		t.Fatalf("agent can inspect the file helper: %q", tool)
 	}
 }
+
+func TestPrivilegeMessagesLogNotWritable(t *testing.T) {
+	h, _ := rootHarness(t, step(sendMessage, 100), step("echo forged >> "+filepath.Join("..", "..", "log", "messages.jsonl")+"; echo rc=$?", 100), done())
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	h.waitEnds(h.cfg.Home, 1)
+	if tool := h.requests()[2].Messages[4].Content; !strings.Contains(tool, "rc=1") {
+		t.Fatalf("agent wrote to the messages log: %q", tool)
+	}
+	if fileContains(h.cfg.MessagesFile(), "forged") {
+		t.Fatal("messages log modified by the agent")
+	}
+}
