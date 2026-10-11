@@ -17,18 +17,23 @@ On the VM, replacing `vX.Y.Z` with the release you want:
 
 ```bash
 export GITHUB_TOKEN=github_pat_...
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo GITHUB_TOKEN="$GITHUB_TOKEN" sh
+printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
 ```
 
 The installer verifies every download against pinned checksums, asks which
 provider plugin to use (anthropic or openai-compatible), its credentials and
 a model, then creates the `agent` user and `/home/agent`, installs the
-service and a daily heartbeat, and starts it. The token is not stored.
+service and a daily heartbeat, and starts it. The token is not stored and is
+passed to curl on stdin, so it never shows up in process listings.
 
 Running a newer release's `install.sh` upgrades in place, keeping the agent's
-files, journals and credentials.
+files, journals and credentials. The previous binary is kept as
+`/usr/local/bin/agent.prev`, and a failed upgrade restores it and restarts the
+service.
 
-`--sudo` (append `-s -- --sudo` after `sh`) gives the agent passwordless sudo.
+`--sudo` (append `-s -- --sudo` after `sh`) gives the agent passwordless sudo;
+rerunning without it leaves an existing grant alone (remove
+`/etc/sudoers.d/agent` to revoke).
 Only use it if you accept that the credential, journal and owner-message
 protections then become conventions the agent could ignore.
 

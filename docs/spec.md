@@ -293,13 +293,15 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 `install.sh` runs as:
 
 ```sh
-curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo GITHUB_TOKEN="$GITHUB_TOKEN" sh
+printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
 ```
 
 It pins its own version and the SHA-256 of every release binary. It:
 1. Detects the architecture, downloads the release binaries through the
    GitHub API with the token, and verifies their checksums. The token is never
-   written to disk.
+   written to disk and reaches curl on stdin, never in command arguments.
+   On upgrade it keeps the previous binary and restores it, restarting the
+   service, if anything fails.
 2. Creates the `agent` and `agent-provider` users, the directories above, and
    `/home/agent` with the seed files.
 3. Asks which provider plugin to install, installs it with

@@ -9,6 +9,14 @@ trap restore EXIT
 
 sh -n install.sh
 grep -q '^# BEGIN CHECKSUMS$' install.sh
+# The token must never appear in a command's arguments, where any local user
+# (including the agent) could read it with ps.
+if grep -n 'GITHUB_TOKEN' install.sh | grep -v -e "printf 'header" -e '^[0-9]*:#' -e 'GITHUB_TOKEN="\$GITHUB_TOKEN" /usr/local/bin/agent' -e 'GITHUB_TOKEN:-' | grep .; then
+	echo "install.sh passes GITHUB_TOKEN on a command line" >&2
+	exit 1
+fi
+# A truncated download must not run a partial script: everything is in main.
+tail -n 1 install.sh | grep -q '^main "\$@"$' || { echo "install.sh must end by calling main" >&2; exit 1; }
 
 sh scripts/release.sh 0.0.0-test >/dev/null
 cp dist/SHA256SUMS "$backup/first"
