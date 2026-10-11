@@ -153,8 +153,11 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
-	heartbeat='0 9 * * * f="$HOME/inbox/.heartbeat"; printf '"'"'Heartbeat: anything pending?\n'"'"' > "$f" && mv "$f" "$HOME/inbox/$(date -u +\%Y\%m\%dT\%H\%M\%SZ)-heartbeat.md"'
-	{ crontab -u agent -l 2>/dev/null | grep -v 'Heartbeat: anything pending' || true; printf '%s\n' "$heartbeat"; } | crontab -u agent -
+	# No harness heartbeat: the agent schedules its own wake-ups. Remove the
+	# one earlier releases installed, keeping the agent's own entries.
+	if crontab -u agent -l 2>/dev/null | grep -q 'Heartbeat: anything pending'; then
+		crontab -u agent -l | grep -v 'Heartbeat: anything pending' | crontab -u agent -
+	fi
 
 	if [ "$GRANT_SUDO" = yes ]; then
 		printf 'agent ALL=(ALL) NOPASSWD:ALL\n' >"$tmp/sudoers"

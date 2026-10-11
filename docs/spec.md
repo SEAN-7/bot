@@ -30,6 +30,8 @@ be a script the agent writes, it stays out of the harness.
   systemd's default kill behaviour, so stopping it stops everything it
   started. Lingering gives the `agent` user a persistent user manager; the
   daemon sets `XDG_RUNTIME_DIR` so `systemd-run --user` works from commands.
+- **No daily heartbeat.** The agent wakes on messages and on wake-ups it
+  schedules itself.
 - **Subagents are not isolated from each other.** All agents run as the one
   `agent` user. Subagents divide work; they are not a security boundary.
 - **Provider failures are visible but never touch the inbox.** Retries back
@@ -333,9 +335,9 @@ It pins its own version and the SHA-256 of every release binary. It:
 3. Asks which provider plugin to install, installs it with
    `agent provider install`, prompts for its settings and model, and writes
    `config.json`.
-4. Enables lingering for `agent`, installs the systemd service, and adds a
-   daily crontab entry for `agent` that writes "Heartbeat: anything pending?"
-   to the inbox with an atomic dot-name rename.
+4. Enables lingering for `agent` and installs the systemd service. There is
+   no harness heartbeat: the agent schedules its own wake-ups (an upgrade
+   removes the heartbeat entry earlier releases added).
 5. Starts the daemon.
 
 `--sudo` grants the agent passwordless sudo (default: none). It prints a

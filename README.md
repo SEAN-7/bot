@@ -23,7 +23,7 @@ printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K -
 The installer verifies every download against pinned checksums, asks which
 provider plugin to use (anthropic or openai-compatible), its credentials and
 a model, then creates the `agent` user and `/home/agent`, installs the
-service and a daily heartbeat, and starts it. The token is not stored and is
+service, and starts it. The token is not stored and is
 passed to curl on stdin, so it never shows up in process listings.
 
 Running a newer release's `install.sh` upgrades in place, keeping the agent's
