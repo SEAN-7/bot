@@ -19,6 +19,9 @@ could build something as a script, it does not belong in the harness.
   agent's files, journals and credentials.
 - Verify service health after deploying (`systemctl is-active agent`,
   `journalctl -u agent`) with read-only checks.
+- Keep the cached prompt prefix stable: the system prompt, the `sh` tool
+  definition and how plugins build requests. Changing any of them rebuilds
+  every agent's prompt cache once; change them rarely and deliberately.
 - Never send synthetic messages, test prompts or diagnostic instructions to
   the live agent. Messages labelled as the owner's must come from the human.
   Run tests in temporary roots; the VM has no Go, so cross-compile test

@@ -23,11 +23,16 @@ func (a *agent) loop(ctx context.Context) {
 	ticker := time.NewTicker(a.d.cfg.Poll)
 	defer ticker.Stop()
 	for {
+		if a.d.draining() {
+			return
+		}
 		if names, err := a.d.pending(a.dir); err == nil && len(names) > 0 {
 			a.run(ctx)
 		}
 		select {
 		case <-ctx.Done():
+			return
+		case <-a.d.drain:
 			return
 		case <-ticker.C:
 		}

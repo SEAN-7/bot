@@ -96,7 +96,10 @@ main() {
 		cp -p /usr/local/bin/agent /usr/local/bin/agent.prev
 		ROLLBACK=yes
 	fi
-	[ "$upgrade" = no ] || systemctl stop agent
+	if [ "$upgrade" = yes ]; then
+		say "Stopping the agent; active runs finish first (up to 15 minutes)..."
+		systemctl stop agent
+	fi
 	install -m 755 -o root -g root "$tmp/agent" /usr/local/bin/agent
 
 	id agent >/dev/null 2>&1 || useradd --create-home --home-dir /home/agent --shell /bin/bash agent
@@ -148,6 +151,10 @@ Wants=network-online.target
 ExecStart=/usr/local/bin/agent daemon
 Restart=always
 RestartSec=2
+# A stop asks only the daemon to finish: active runs complete (up to 15
+# minutes) before it exits, so upgrades and restarts lose no context.
+KillMode=mixed
+TimeoutStopSec=17min
 
 [Install]
 WantedBy=multi-user.target

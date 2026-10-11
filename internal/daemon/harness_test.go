@@ -100,6 +100,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg.Poll = 10 * time.Millisecond
 	h.cfg.CommandTimeout = 2 * time.Second
 	h.cfg.RetryBase, h.cfg.RetryMax = 10*time.Millisecond, 50*time.Millisecond
+	h.cfg.DrainTimeout = 2 * time.Second
 	h.cfg.Logger = log.New(io.MultiWriter(h.logs, testWriter{t}), "", 0)
 	t.Cleanup(h.stop)
 	return h

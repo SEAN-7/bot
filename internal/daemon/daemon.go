@@ -31,6 +31,7 @@ type Config struct {
 	RetryBase      time.Duration
 	RetryMax       time.Duration
 	ErrorAfter     int
+	DrainTimeout   time.Duration // how long a stop waits for active runs
 	OutputClip     int
 	InboxClip      int
 	Logger         *log.Logger
@@ -47,6 +48,7 @@ func DefaultConfig(self string) Config {
 		RetryBase:      2 * time.Second,
 		RetryMax:       10 * time.Minute,
 		ErrorAfter:     3,
+		DrainTimeout:   15 * time.Minute,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
@@ -58,6 +60,7 @@ func DefaultConfig(self string) Config {
 var (
 	errRemoved = errors.New("agent directory removed")
 	errLimited = errors.New("agent limit reached")
+	errDrained = errors.New("drain deadline reached")
 )
 
 type daemon struct {
@@ -68,7 +71,10 @@ type daemon struct {
 	agentName string
 	agentUID  int
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// drain is closed when a stop is requested: no new runs start, and active
+	// runs finish before the daemon exits, up to DrainTimeout.
+	drain       chan struct{}
 	agents      map[string]*agent
 	delivered   *delivered
 	settings    layout.Settings // last good settings.json
@@ -78,7 +84,7 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, drain: make(chan struct{})}
 	d.settings, _ = layout.LoadSettings("")
 	var err error
 	if d.agentCred, err = osuser.Lookup(cfg.AgentUser); err != nil {
@@ -109,15 +115,40 @@ func Run(ctx context.Context, cfg Config) error {
 		d.collectMessages(d.reconcile(ctx))
 		select {
 		case <-ctx.Done():
-			d.mu.Lock()
-			for _, a := range d.agents {
-				a.cancel(ctx.Err())
-			}
-			d.mu.Unlock()
-			d.wg.Wait()
+			d.shutdown()
 			return nil
 		case <-ticker.C:
 		}
+	}
+}
+
+// shutdown lets active runs finish so a restart loses no context, then
+// interrupts whatever is still running at the deadline. Interrupted runs stay
+// unclean, so the next daemon resumes them.
+func (d *daemon) shutdown() {
+	close(d.drain)
+	finished := make(chan struct{})
+	go func() { d.wg.Wait(); close(finished) }()
+	select {
+	case <-finished:
+		return
+	case <-time.After(d.cfg.DrainTimeout):
+	}
+	d.cfg.Logger.Printf("stop: active runs still going after %s; interrupting them", d.cfg.DrainTimeout)
+	d.mu.Lock()
+	for _, a := range d.agents {
+		a.cancel(errDrained)
+	}
+	d.mu.Unlock()
+	<-finished
+}
+
+func (d *daemon) draining() bool {
+	select {
+	case <-d.drain:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -160,7 +191,7 @@ func (d *daemon) reconcile(ctx context.Context) []string {
 	for dir := range present {
 		if _, ok := d.agents[dir]; !ok && ctx.Err() == nil {
 			a := newAgent(d, dir)
-			actx, cancel := context.WithCancelCause(ctx)
+			actx, cancel := context.WithCancelCause(context.Background())
 			a.cancel = cancel
 			d.agents[dir] = a
 			d.wg.Add(1)

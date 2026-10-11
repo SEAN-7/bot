@@ -212,9 +212,11 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			return a.stopReason(ctx)
 		}
 		messages = append(messages, proto.Message{Role: "tool", CallID: callID, Content: content})
-		more, err := a.collectInbox(j)
-		if err != nil {
-			a.logf("inbox: %v", err)
+		var more []inboxRecord
+		if !d.draining() { // during a stop, new messages wait for the next daemon
+			if more, err = a.collectInbox(j); err != nil {
+				a.logf("inbox: %v", err)
+			}
 		}
 		var parts []string
 		if warnNext {

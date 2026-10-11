@@ -117,6 +117,11 @@ agent user cannot read another user's process environment.
   a symlink) at `<agent>/agents/<name>` that contains an `inbox/` directory.
   The scan runs through the helper and never follows symlinks.
 - One goroutine loop per agent, one run at a time per agent.
+- **Graceful stop.** On SIGTERM the daemon starts no new runs and delivers no
+  new inbox files; active runs finish, up to 15 minutes, before it exits.
+  Runs still going at the deadline are interrupted and left unclean, so the
+  next start resumes them. The unit uses `KillMode=mixed` and
+  `TimeoutStopSec=17min`, so systemd signals only the daemon until it exits.
 - **max_agents.** Agents discovered beyond the limit are not started. The
   daemon writes the reason to that directory's `ERROR` and the service log,
   and notifies the parent's inbox once.
