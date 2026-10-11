@@ -1,4 +1,8 @@
 {
-  "version": "dev",
-  "plugins": {}
+  "version": "0.1.0",
+  "plugins": {
+    "anthropic": {"linux-amd64": "5f391935094dda84d511695a56984a0348726401e06534b5356cbf7979943942", "linux-arm64": "5bdf6b526c98869050193ce7d4f79a36f71e62d546355273f442935752068524"},
+    "openai-compatible": {"linux-amd64": "0791661b7f749a945bf67b6a4438d9899912b63932aaee68403378a2710f2d20", "linux-arm64": "d17acd9b83d414a8c671e455b8472969ff2b3d9a6e3bd044abb750218e8069e9"},
+    "replay": {"linux-amd64": "67e3f44707dcb4bfdf387f56136a042ca8a76e3f714b8238e50e2d8eea57d6fe", "linux-arm64": "c195580034b22ab68757668f71bae7402b97ed1fdff8d34b78257a5a9c39126a"}
+  }
 }
