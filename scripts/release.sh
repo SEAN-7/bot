@@ -7,6 +7,11 @@ VERSION=$1
 MODE=${2:-write}
 cd "$(dirname "$0")/.."
 
+# Build with exactly the toolchain go.mod names: the toolchain line is only a
+# minimum, and a different patch release produces different binaries.
+GOTOOLCHAIN=$(sed -n 's/^toolchain //p' go.mod)
+export GOTOOLCHAIN
+
 PLUGINS="anthropic openai-compatible replay"
 ARCHES="amd64 arm64"
 LDFLAGS="-buildid= -X github.com/SEAN-7/bot/internal/version.Version=$VERSION"
