@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -109,5 +111,44 @@ func TestDescribeReadsCacheAsNonRoot(t *testing.T) {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
+	}
+}
+
+func TestLogDoesNotFollowErrorSymlink(t *testing.T) {
+	l := tempLayout(t)
+	os.MkdirAll(l.Home, 0o755)
+	secret := filepath.Join(t.TempDir(), "secret")
+	os.WriteFile(secret, []byte("TOPSECRET"), 0o600)
+	os.Symlink(secret, filepath.Join(l.Home, "ERROR"))
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	var out bytes.Buffer
+	Log(ctx, l, "", &out)
+	if strings.Contains(out.String(), "TOPSECRET") {
+		t.Fatal("agent log followed a symlinked ERROR")
+	}
+}
+
+func TestLogDoesNotHangOnErrorFIFO(t *testing.T) {
+	l := tempLayout(t)
+	os.MkdirAll(l.Home, 0o755)
+	if err := syscall.Mkfifo(filepath.Join(l.Home, "ERROR"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { Log(ctx, l, "", io.Discard); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("agent log hung on a FIFO ERROR")
+	}
+}
+
+func TestFormatStripsControlCharacters(t *testing.T) {
+	got := Format([]byte(`{"t":"2026-10-11T09:30:15Z","type":"assistant","text":"hi\u001b[2J\u0007there","command":"echo \u001b]0;pwned\u0007"}`))
+	if strings.ContainsAny(got, "\x1b\x07") || !strings.Contains(got, "hi") || !strings.Contains(got, "there") {
+		t.Fatalf("got %q", got)
 	}
 }

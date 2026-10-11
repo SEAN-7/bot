@@ -60,7 +60,7 @@ sudo agent send "Set up a Telegram channel for yourself so we can talk there. He
 ## Watch it
 
 ```bash
-agent log                 # follow the main agent's current run
+sudo agent log            # follow the main agent's current run (sudo also shows ~/ERROR)
 agent log research        # follow a subagent at ~/agents/research
 journalctl -u agent -f    # the service log: startup, config and provider errors
 ```

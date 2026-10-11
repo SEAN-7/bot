@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/layout"
@@ -17,8 +18,44 @@ import (
 
 const resultLines = 20
 
+// sanitize drops control characters, so agent-written text cannot drive the
+// operator's terminal with escape sequences.
+func sanitize(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' {
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r < 0xa0) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// readError reads an agent's ERROR file safely when run as root: no
+// symlinks, no FIFOs or devices, and at most 4 KiB.
+func readError(path string) (string, bool) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, 4096))
+	if err != nil {
+		return "", false
+	}
+	return sanitize(strings.TrimSpace(string(data))), true
+}
+
 // Format renders one journal record for people.
 func Format(line []byte) string {
+	return sanitize(format(line))
+}
+
+func format(line []byte) string {
 	var r map[string]any
 	if err := json.Unmarshal(line, &r); err != nil {
 		return string(line)
@@ -85,8 +122,8 @@ func newest(dir string) string {
 // moving on to each new run as it starts.
 func Log(ctx context.Context, l layout.Layout, name string, w io.Writer) error {
 	dir := AgentDir(l, name)
-	if data, err := os.ReadFile(filepath.Join(dir, "ERROR")); err == nil {
-		fmt.Fprintf(w, "ERROR: %s\n", strings.TrimSpace(string(data)))
+	if text, ok := readError(filepath.Join(dir, "ERROR")); ok {
+		fmt.Fprintf(w, "ERROR: %s\n", text)
 	}
 	var file *os.File
 	var reader *bufio.Reader
