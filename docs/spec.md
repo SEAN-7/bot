@@ -37,8 +37,9 @@ be a script the agent writes, it stays out of the harness.
   the service log and shown by `agent log`.
 - **The repository stays private.** Installation and plugin downloads
   authenticate with a `GITHUB_TOKEN` that is never stored on the VM.
-- **The old Node bot is retired with its history archived** read-only for the
-  new agent (see Migration).
+- **The old Node bot is retired.** Its history and projects become ordinary
+  working files in the agent's home (see Migration); the harness and seed
+  files know nothing about them.
 - **A built-in, append-only owner conversation.** `agent message` lets an
   agent write to its owner; the daemon records both directions in a
   root-owned log the agent can read but not change (see Messages). It is
@@ -309,8 +310,7 @@ Sources live in `plugins/<name>/` (each its own `main` package).
   may revise: memory, task state, stopping, messages and subagents. It adds:
   - long-running jobs go through `systemd-run --user`;
   - inbox records labelled `"from": "owner"` are verified owner messages;
-  - `agent message` reaches the owner, permanently and without push;
-  - the old bot's history is in `~/archive/old-bot/` (main agent only).
+  - `agent message` reaches the owner, permanently and without push.
 - `TASK.md`: "No task yet."
 - `config.json`: the provider, model and options chosen at install.
 
@@ -391,7 +391,9 @@ After the harness is built and tested:
    `AGENTS.md` and the docs are rewritten for the new design.
 2. On the VM, the Node bot is stopped and uninstalled with its own uninstaller,
    which retains its data.
-3. Its journal is exported to JSONL, and its memory and workspace are copied
-   to `/home/agent/archive/old-bot/`, owned by root and readable by the agent.
+3. A full root-only backup is kept in `/var/backups/`. The journal and chat
+   histories are exported to JSONL and, with its memory and notes, copied to
+   `/home/agent/old-bot/`; its LSPN collector project goes to
+   `/home/agent/lspn-collector/`. Both are ordinary files owned by the agent.
 4. The new harness is installed and verified with read-only checks.
    Synthetic messages are never sent to the live agent.
