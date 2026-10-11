@@ -148,6 +148,9 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		j.Record("note", map[string]any{"text": "inbox: " + err.Error()})
 		return "error"
 	}
+	if len(records) == 0 {
+		return "empty" // the files vanished after the wake-up; nothing to say
+	}
 	messages := []proto.Message{{Role: "user", Content: encodeRecords(records)}}
 	runID := strings.TrimSuffix(filepath.Base(j.Path()), ".jsonl")
 	warned, warnNext := false, false
@@ -193,7 +196,9 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			}
 		}
 		if n == 1 {
+			// A successful call settles errors left by earlier runs or a restart.
 			a.clearError(errGuardPrefix)
+			a.clearError(errProviderPrefix)
 		}
 		if msg.Command == nil {
 			return "done"

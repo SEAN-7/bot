@@ -247,3 +247,18 @@ func TestHelperCallTimeout(t *testing.T) {
 		t.Fatalf("helper not restarted: %v", err)
 	}
 }
+
+func TestScanSkipsSymlinkedAgentsDir(t *testing.T) {
+	c, home := start(t), t.TempDir()
+	agentDir(t, home)
+	agentDir(t, filepath.Join(home, "agents", "a"))
+	// agents/a/agents → home/agents would nest agent a inside itself forever.
+	os.Symlink("../../agents", filepath.Join(home, "agents", "a", "agents"))
+	got, err := c.Scan(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{home, filepath.Join(home, "agents", "a")}; fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("got %v", got)
+	}
+}

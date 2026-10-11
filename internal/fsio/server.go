@@ -184,7 +184,11 @@ func scan(home string) ([]string, error) {
 	}
 	found := []string{home}
 	for i := 0; i < len(found); i++ {
-		items, err := os.ReadDir(filepath.Join(found[i], "agents"))
+		agents := filepath.Join(found[i], "agents")
+		if info, err := os.Lstat(agents); err != nil || !info.IsDir() {
+			continue // missing, or a symlink, which could nest agents inside themselves
+		}
+		items, err := os.ReadDir(agents)
 		if err != nil {
 			continue
 		}

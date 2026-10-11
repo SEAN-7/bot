@@ -159,3 +159,15 @@ func TestOverflowFirstCallGuards(t *testing.T) {
 		t.Fatalf("overflow retried: %d requests", n)
 	}
 }
+
+func TestStaleProviderErrorCleared(t *testing.T) {
+	h := newHarness(t, done())
+	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	os.WriteFile(errorFile, []byte("Provider failing since 2026-10-11T00:00:00Z: 429\n"), 0o644)
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	h.waitEnds(h.cfg.Home, 1)
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
+		t.Fatal("provider ERROR from before a restart survived a successful call")
+	}
+}

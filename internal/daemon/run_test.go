@@ -1,6 +1,10 @@
 package daemon
 
 import (
+	"context"
+
+	"github.com/SEAN-7/bot/internal/fsio"
+	"github.com/SEAN-7/bot/internal/plugin"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +142,21 @@ func TestJournalSymlinkRepaired(t *testing.T) {
 	h.waitEnds(h.cfg.Home, 1)
 	if target, err := os.Readlink(filepath.Join(h.cfg.Home, "journal")); err != nil || target != h.cfg.JournalDir(h.cfg.Home) {
 		t.Fatalf("journal link %q %v", target, err)
+	}
+}
+
+func TestVanishedInboxDoesNotCallModel(t *testing.T) {
+	h := newHarness(t, step("echo never", 100))
+	fs, err := fsio.Start(h.cfg.Self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fs.Close()
+	d := &daemon{cfg: h.cfg, fs: fs, delivered: &delivered{pending: map[string]bool{}},
+		runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
+	// The loop saw a file, but it vanished before the run collected it.
+	newAgent(d, h.cfg.Home).run(context.Background())
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("model called %d times with nothing to say", n)
 	}
 }
