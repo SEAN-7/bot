@@ -174,6 +174,14 @@ type responseMessage struct {
 
 type apiError struct {
 	Message string `json:"message"`
+	Code    any    `json:"code"`
+}
+
+// overflow recognises "request exceeds the context window" errors, which a
+// retry cannot fix, from OpenAI and common compatible servers.
+func (e *apiError) overflow() bool {
+	m := strings.ToLower(e.Message)
+	return e.Code == "context_length_exceeded" || strings.Contains(m, "maximum context length") || strings.Contains(m, "context length exceeded")
 }
 
 type chatResponse struct {
@@ -223,7 +231,11 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 	if httpResp.StatusCode < 200 || httpResp.StatusCode > 299 {
 		var e chatResponse
 		if json.Unmarshal(data, &e) == nil && e.Error != nil && e.Error.Message != "" {
-			return fail("HTTP %d: %s", httpResp.StatusCode, e.Error.Message)
+			resp := fail("HTTP %d: %s", httpResp.StatusCode, e.Error.Message)
+			if e.Error.overflow() {
+				resp.Error.Kind = proto.ErrContextOverflow
+			}
+			return resp
 		}
 		return fail("HTTP %d: %s", httpResp.StatusCode, clip(string(data), 2000))
 	}

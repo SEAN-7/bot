@@ -64,9 +64,24 @@ func (r *Runner) Complete(ctx context.Context, provider string, req proto.Comple
 	var resp proto.CompleteResponse
 	err := r.run(ctx, provider, req, &resp)
 	if err == nil && resp.Error != nil {
-		err = errors.New(resp.Error.Message)
+		err = &ProviderError{Message: resp.Error.Message, Kind: resp.Error.Kind}
 	}
 	return resp, err
+}
+
+// ProviderError is an error reported by the plugin, as opposed to a failure
+// to run it.
+type ProviderError struct {
+	Message string
+	Kind    string
+}
+
+func (e *ProviderError) Error() string { return e.Message }
+
+// IsContextOverflow reports whether err says the request was too large.
+func IsContextOverflow(err error) bool {
+	var p *ProviderError
+	return errors.As(err, &p) && p.Kind == proto.ErrContextOverflow
 }
 
 func (r *Runner) run(ctx context.Context, provider string, req, resp any) error {

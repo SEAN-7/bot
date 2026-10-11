@@ -46,9 +46,15 @@ func (u Usage) Total() int {
 	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
 }
 
+// Error reports a failed call. Kind lets the daemon tell failures that a
+// retry cannot fix from transient ones.
 type Error struct {
 	Message string `json:"message"`
+	Kind    string `json:"kind,omitempty"`
 }
+
+// ErrContextOverflow: the request exceeds the model's context window.
+const ErrContextOverflow = "context_overflow"
 
 type CompleteRequest struct {
 	Protocol int            `json:"protocol"`
@@ -133,9 +139,9 @@ func ServeIO(h Handler, r io.Reader, w io.Writer) error {
 	}
 	var resp any
 	if err := json.Unmarshal(data, &req); err != nil {
-		resp = CompleteResponse{Protocol: Version, Error: &Error{"invalid request: " + err.Error()}}
+		resp = CompleteResponse{Protocol: Version, Error: &Error{Message: "invalid request: " + err.Error()}}
 	} else if req.Protocol != Version {
-		resp = CompleteResponse{Protocol: Version, Error: &Error{fmt.Sprintf("unsupported protocol %d (want %d)", req.Protocol, Version)}}
+		resp = CompleteResponse{Protocol: Version, Error: &Error{Message: fmt.Sprintf("unsupported protocol %d (want %d)", req.Protocol, Version)}}
 	} else if req.Type == "describe" {
 		d := h.Describe()
 		d.Protocol = Version
@@ -149,7 +155,7 @@ func ServeIO(h Handler, r io.Reader, w io.Writer) error {
 		c.Protocol = Version
 		resp = c
 	} else {
-		resp = CompleteResponse{Protocol: Version, Error: &Error{"unknown request type " + req.Type}}
+		resp = CompleteResponse{Protocol: Version, Error: &Error{Message: "unknown request type " + req.Type}}
 	}
 	return json.NewEncoder(w).Encode(resp)
 }

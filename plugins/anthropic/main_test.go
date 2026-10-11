@@ -430,3 +430,20 @@ func jsonEqual(t *testing.T, a, b []byte) bool {
 	ya, _ := json.Marshal(y)
 	return bytes.Equal(xa, ya)
 }
+
+func TestContextOverflowKind(t *testing.T) {
+	for _, body := range []string{
+		`{"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 1050000 tokens > 1000000 maximum"}}`,
+		`{"type":"error","error":{"type":"invalid_request_error","message":"input length and max_tokens exceed context limit: 990000 + 64000 > 1000000"}}`,
+	} {
+		srv := (&fakeAPI{status: 400, body: body}).serve(t)
+		resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}})
+		if resp.Error == nil || resp.Error.Kind != proto.ErrContextOverflow {
+			t.Fatalf("%s: got %+v", body, resp.Error)
+		}
+	}
+	srv := (&fakeAPI{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}`}).serve(t)
+	if resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}}); resp.Error == nil || resp.Error.Kind != "" {
+		t.Fatalf("other 400 marked as overflow: %+v", resp.Error)
+	}
+}

@@ -106,3 +106,10 @@ func TestUsageAndText(t *testing.T) {
 		t.Fatalf("got %+v", r)
 	}
 }
+
+func TestErrorKind(t *testing.T) {
+	setup(t, `{"error":"too long","error_kind":"context_overflow"}`)
+	if r := call(t, plain); r.Error == nil || r.Error.Kind != proto.ErrContextOverflow {
+		t.Fatalf("got %+v", r.Error)
+	}
+}

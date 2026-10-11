@@ -455,3 +455,19 @@ func TestServeDescribe(t *testing.T) {
 		t.Fatalf("describe over protocol = %s (%v)", out.Bytes(), err)
 	}
 }
+
+func TestContextOverflowKind(t *testing.T) {
+	for _, body := range []string{
+		`{"error":{"message":"This model's maximum context length is 8192 tokens. However, your messages resulted in 9000 tokens.","type":"invalid_request_error","code":"context_length_exceeded"}}`,
+		`{"error":{"message":"This model's maximum context length is 8192 tokens.","type":"BadRequestError"}}`,
+	} {
+		f := newFake(t, 400, body)
+		if r := handlerFor(f).Complete(context.Background(), baseRequest()); r.Error == nil || r.Error.Kind != proto.ErrContextOverflow {
+			t.Fatalf("%s: got %+v", body, r.Error)
+		}
+	}
+	f := newFake(t, 400, `{"error":{"message":"invalid model"}}`)
+	if r := handlerFor(f).Complete(context.Background(), baseRequest()); r.Error == nil || r.Error.Kind != "" {
+		t.Fatalf("other 400 marked as overflow: %+v", r.Error)
+	}
+}

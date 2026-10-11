@@ -27,6 +27,7 @@ type step struct {
 	Usage   proto.Usage     `json:"usage"`
 	Opaque  json.RawMessage `json:"opaque"`
 	Error   string          `json:"error"`
+	Kind    string          `json:"error_kind"`
 }
 
 type handler struct{}
@@ -137,7 +138,7 @@ func (handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.Co
 	}
 	s := steps[index]
 	if s.Error != "" {
-		return proto.CompleteResponse{Error: &proto.Error{Message: s.Error}}
+		return proto.CompleteResponse{Error: &proto.Error{Message: s.Error, Kind: s.Kind}}
 	}
 	return proto.CompleteResponse{Text: s.Text, Command: s.Command, Usage: s.Usage, Opaque: s.Opaque}
 }

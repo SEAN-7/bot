@@ -123,3 +123,39 @@ func TestNoResetWhenStopping(t *testing.T) {
 		t.Fatalf("reset note written for a run that chose to stop: %v", names)
 	}
 }
+
+const overflow = `{"error":"prompt is too long","error_kind":"context_overflow"}`
+
+func TestOverflowMidRunResets(t *testing.T) {
+	h := newHarness(t, step("true", 100), overflow, done())
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "context" {
+		t.Fatalf("end %s", end)
+	}
+	found := false
+	for _, r := range h.waitEnds(h.cfg.Home, 2) {
+		if r["type"] == "inbox" && strings.Contains(r["content"].(string), "Context reset. Continue from TASK.md.") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("no reset note in the next run")
+	}
+}
+
+func TestOverflowFirstCallGuards(t *testing.T) {
+	h := newHarness(t, overflow, done())
+	h.drop(h.cfg.Home, "huge.md", "too much")
+	h.start()
+	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "context-guard" {
+		t.Fatalf("end %s", end)
+	}
+	if !fileContains(filepath.Join(h.cfg.Home, "ERROR"), "over the model's limit") {
+		t.Fatal("no ERROR for an oversized first call")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(h.requests()); n != 1 {
+		t.Fatalf("overflow retried: %d requests", n)
+	}
+}

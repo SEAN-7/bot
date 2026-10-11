@@ -306,7 +306,11 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 	if httpResp.StatusCode/100 != 2 {
 		var e apiError
 		if json.Unmarshal(respData, &e) == nil && e.Error.Message != "" {
-			return fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
+			resp := fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
+			if httpResp.StatusCode == http.StatusBadRequest && isOverflow(e.Error.Message) {
+				resp.Error.Kind = proto.ErrContextOverflow
+			}
+			return resp
 		}
 		return fail("anthropic: HTTP %d: %s", httpResp.StatusCode, clip(string(respData), 2000))
 	}
@@ -538,4 +542,11 @@ func parseResponse(data []byte) proto.CompleteResponse {
 		out.Opaque = mustJSON(r.Content)
 	}
 	return out
+}
+
+// isOverflow recognises the API's "request exceeds the context window" errors,
+// which a retry cannot fix.
+func isOverflow(message string) bool {
+	m := strings.ToLower(message)
+	return strings.Contains(m, "prompt is too long") || strings.Contains(m, "exceed context limit")
 }

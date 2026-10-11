@@ -230,7 +230,10 @@ service log. Every request and response carries `"protocol": 1`.
   - `{role: "assistant", text, command, call_id, opaque}`
   - `{role: "tool", call_id, content}`
 - Response: `{text, command, usage: {input_tokens, output_tokens,
-  cache_read_tokens, cache_write_tokens}, opaque}`, or `{error: {message}}`.
+  cache_read_tokens, cache_write_tokens}, opaque}`, or `{error: {message,
+  kind}}`. `kind` is optional; `"context_overflow"` means the request exceeds
+  the model's context window. The daemon does not retry it: it ends the run
+  with a reset note, or applies the first-call guard on a run's first call.
   The daemon assigns `call_id`. The plugin may set `opaque` on its response.
   The daemon stores it on that assistant message and returns it unchanged in
   later requests (for example provider-native reasoning blocks and

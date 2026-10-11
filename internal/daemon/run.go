@@ -153,6 +153,18 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	warned, warnNext := false, false
 	for n := 1; ; n++ {
 		resp, err := a.complete(ctx, cfg, system, messages)
+		if plugin.IsContextOverflow(err) {
+			if n == 1 {
+				text := fmt.Sprintf(MsgOverflowGuardFmt, err)
+				a.logf("%s", text)
+				a.setError(text)
+				return "context-guard"
+			}
+			if err := d.writeNote(a.dir, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
+				a.logf("reset note: %v", err)
+			}
+			return "context"
+		}
 		if err != nil {
 			return a.stopReason(ctx)
 		}
@@ -233,7 +245,7 @@ func (a *agent) retry(ctx context.Context, call func() error) error {
 	for failures := 0; ; failures++ {
 		err := call()
 		var bad errConfig
-		if err == nil || errors.As(err, &bad) {
+		if err == nil || errors.As(err, &bad) || plugin.IsContextOverflow(err) {
 			if failures >= a.d.cfg.ErrorAfter {
 				a.clearError(errProviderPrefix)
 			}
@@ -262,7 +274,7 @@ func (a *agent) retry(ctx context.Context, call func() error) error {
 
 const (
 	errProviderPrefix = "Provider failing since"
-	errGuardPrefix    = "Context is over 95%"
+	errGuardPrefix    = "Context is over"
 )
 
 func (a *agent) setError(text string) {
