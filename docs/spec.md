@@ -39,6 +39,10 @@ be a script the agent writes, it stays out of the harness.
   authenticate with a `GITHUB_TOKEN` that is never stored on the VM.
 - **The old Node bot is retired with its history archived** read-only for the
   new agent (see Migration).
+- **A built-in, append-only owner conversation.** `agent message` lets an
+  agent write to its owner; the daemon records both directions in a
+  root-owned log the agent can read but not change (see Messages). It is
+  pull, not push: alerts remain something the agent builds.
 
 ## Filesystem layout on the VM
 
@@ -52,6 +56,7 @@ be a script the agent writes, it stays out of the harness.
 | `/var/lib/agent/delivered.jsonl` | root, 0600 | Record of owner messages delivered (agent path, file name, SHA-256) |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output with no secrets, for `agent provider describe` |
 | `/var/log/agent/` | root, 0755 | Journals; directories 0755, files 0644 |
+| `/var/log/agent/messages.jsonl` | root, 0644 | The owner conversation (see Messages) |
 | `/home/agent/` | agent | The main agent directory |
 
 `settings.json` holds `max_agents` (default 16) and `repository`
@@ -172,6 +177,24 @@ to a 10-minute ceiling. After 3 consecutive failures, write the provider's
 error to `~/ERROR` and the service log; clear `~/ERROR` on the next success.
 Never write inbox messages for provider errors.
 
+## Messages
+
+- `agent message "text"` (run by any agent, as the agent user) writes the
+  text to `~/.messages/<UTC timestamp>.md` with an atomic dot-name rename.
+  Messages over 64 KiB are refused, with advice to send a file path instead.
+- Each poll, for every admitted agent, the daemon reads `~/.messages/`
+  through the helper (regular, non-dot files in name order, at most 64 KiB
+  each), appends one record per file to `/var/log/agent/messages.jsonl`, then
+  removes the file. Records: `{"t", "from": "agent", "agent": <name>,
+  "text"}`, where `<name>` is `main` or the path under `~/agents/`.
+- When the daemon delivers an owner message from the spool, it also appends
+  `{"t", "from": "owner", "text"}`.
+- Only the daemon writes the log, so its labels are trustworthy, and the
+  agent cannot edit or delete anything in it. A crash between appending and
+  removing can only duplicate a message.
+- `agent messages` prints the conversation and follows new records, with
+  control characters removed.
+
 ## Journal
 
 - One JSONL file per run at `/var/log/agent/<agent path>/<UTC timestamp>.jsonl`,
@@ -264,6 +287,8 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 
 - `agent daemon`: run the service.
 - `agent send "text"`: requires root. Writes an owner message to the spool.
+- `agent message "text"`: for agents. Queues a message to the owner.
+- `agent messages`: shows the owner conversation and follows new messages.
 - `agent log [NAME]`: follows an agent's newest journal, switching to new
   runs as they start. `NAME` is a path relative to `/home/agent/agents`
   (for example `research` or `research/agents/scraper`); it is omitted for the
@@ -284,6 +309,7 @@ Sources live in `plugins/<name>/` (each its own `main` package).
   may revise: memory, task state, stopping, messages and subagents. It adds:
   - long-running jobs go through `systemd-run --user`;
   - inbox records labelled `"from": "owner"` are verified owner messages;
+  - `agent message` reaches the owner, permanently and without push;
   - the old bot's history is in `~/archive/old-bot/` (main agent only).
 - `TASK.md`: "No task yet."
 - `config.json`: the provider, model and options chosen at install.
@@ -337,6 +363,8 @@ Using the replay plugin:
 - a symlinked `README.md` pointing at a privileged file
 - a parent creating a child and receiving its report
 - owner labelling: a delivered message is `owner`, and a forged file is `data`
+- messages: an agent's and a subagent's `agent message` and an owner message
+  all reach the log with correct labels; the agent cannot write the log
 
 Paths, user names and timings are configurable so the loop can be tested in
 a temporary root. Tests that depend on privilege separation need root and a
