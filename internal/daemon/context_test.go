@@ -10,9 +10,9 @@ import (
 
 func TestWarningAt80(t *testing.T) {
 	h := newHarness(t, step("true", 800), step("true", 850), done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
 	reqs := h.requests()
 	msgs := reqs[1].Messages
 	if last := msgs[len(msgs)-1]; last.Role != "user" || !strings.Contains(last.Content, MsgWarn80) {
@@ -29,14 +29,14 @@ func TestWarningAt80(t *testing.T) {
 
 func TestResetAt95(t *testing.T) {
 	h := newHarness(t, step("true", 100), step("touch ran", 960), done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	first := h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	first := h.waitEnds(h.mainID, 1)
 	if end := lastEnd(first); end != "context" {
 		t.Fatalf("end %s", end)
 	}
-	second := h.waitEnds(h.cfg.Home, 2)
-	runs := h.runs(h.cfg.Home)
+	second := h.waitEnds(h.mainID, 2)
+	runs := h.runs(h.mainID)
 	want := "Context reset. Continue from TASK.md. Previous journal: " + runs[0]
 	found := false
 	for _, r := range second {
@@ -47,19 +47,19 @@ func TestResetAt95(t *testing.T) {
 	if !found {
 		t.Fatalf("second run did not receive %q: %v", want, second)
 	}
-	if _, err := os.Stat(filepath.Join(h.cfg.Home, "ran")); err == nil {
+	if _, err := os.Stat(filepath.Join(h.mainHome, "ran")); err == nil {
 		t.Fatal("command issued at 95% was run")
 	}
 }
 
 func TestFirstCallGuard(t *testing.T) {
 	h := newHarness(t, step("true", 990))
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "context-guard" {
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "context-guard" {
 		t.Fatalf("end %s", end)
 	}
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	if !fileContains(errorFile, "over 95%") {
 		t.Fatal("ERROR not written")
 	}
@@ -67,11 +67,11 @@ func TestFirstCallGuard(t *testing.T) {
 	if n := len(h.requests()); n != 1 {
 		t.Fatalf("guard looped: %d requests", n)
 	}
-	for _, name := range inboxNames(h.cfg.Home) {
+	for _, name := range inboxNames(h.mainHome) {
 		t.Fatalf("unexpected inbox file %s", name)
 	}
-	h.drop(h.cfg.Home, "smaller.md", "go") // exhausted script: replies without a command
-	h.waitEnds(h.cfg.Home, 2)
+	h.drop(h.mainHome, "smaller.md", "go") // exhausted script: replies without a command
+	h.waitEnds(h.mainID, 2)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("guard ERROR not cleared after a normal run")
 	}
@@ -79,22 +79,22 @@ func TestFirstCallGuard(t *testing.T) {
 
 func TestProviderRetry(t *testing.T) {
 	h := newHarness(t, `{"error":"rate limited"}`, `{"error":"rate limited"}`, `{"error":"rate limited"}`, step("echo ok", 10), done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "done" {
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
 		t.Fatalf("end %s", end)
 	}
 	if !strings.Contains(h.logs.String(), "Provider failing since") || !strings.Contains(h.logs.String(), "rate limited") {
 		t.Fatalf("logs:\n%s", h.logs)
 	}
-	if _, err := os.Stat(filepath.Join(h.cfg.Home, "ERROR")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(h.mainCtrl, "ERROR")); !os.IsNotExist(err) {
 		t.Fatal("provider ERROR not cleared")
 	}
 	reqs := h.requests()
 	if tool := reqs[len(reqs)-1].Messages[2].Content; tool != "exit status 0\nok\n" {
 		t.Fatalf("tool %q", tool)
 	}
-	processed, _ := os.ReadDir(filepath.Join(h.cfg.Home, "inbox", "processed"))
+	processed, _ := os.ReadDir(filepath.Join(h.mainHome, "inbox", "processed"))
 	if len(processed) != 1 {
 		t.Fatalf("provider errors produced inbox files: %v", processed)
 	}
@@ -103,23 +103,23 @@ func TestProviderRetry(t *testing.T) {
 func TestProviderErrorFileWritten(t *testing.T) {
 	h := newHarness(t, `{"error":"bad key"}`, `{"error":"bad key"}`, `{"error":"bad key"}`, `{"error":"bad key"}`, `{"error":"bad key"}`)
 	h.cfg.RetryBase, h.cfg.RetryMax = 20*time.Millisecond, 200*time.Millisecond
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	waitFor(t, "ERROR file", func() bool { return fileContains(filepath.Join(h.cfg.Home, "ERROR"), "Provider failing since") })
-	if !fileContains(filepath.Join(h.cfg.Home, "ERROR"), "bad key") {
+	h.drop(h.mainHome, "go.md", "go")
+	waitFor(t, "ERROR file", func() bool { return fileContains(filepath.Join(h.mainCtrl, "ERROR"), "Provider failing since") })
+	if !fileContains(filepath.Join(h.mainCtrl, "ERROR"), "bad key") {
 		t.Fatal("ERROR lacks provider message")
 	}
 }
 
 func TestNoResetWhenStopping(t *testing.T) {
 	h := newHarness(t, step("true", 100), `{"text":"finished","usage":{"input_tokens":970}}`)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "done" {
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
 		t.Fatalf("end %s", end)
 	}
 	time.Sleep(200 * time.Millisecond)
-	if names := inboxNames(h.cfg.Home); len(names) != 0 || len(h.runs(h.cfg.Home)) != 1 {
+	if names := inboxNames(h.mainHome); len(names) != 0 || len(h.runs(h.mainID)) != 1 {
 		t.Fatalf("reset note written for a run that chose to stop: %v", names)
 	}
 }
@@ -128,13 +128,13 @@ const overflow = `{"error":"prompt is too long","error_kind":"context_overflow"}
 
 func TestOverflowMidRunResets(t *testing.T) {
 	h := newHarness(t, step("true", 100), overflow, done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "context" {
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "context" {
 		t.Fatalf("end %s", end)
 	}
 	found := false
-	for _, r := range h.waitEnds(h.cfg.Home, 2) {
+	for _, r := range h.waitEnds(h.mainID, 2) {
 		if r["type"] == "inbox" && strings.Contains(r["content"].(string), "Context reset. Continue from TASK.md.") {
 			found = true
 		}
@@ -146,12 +146,12 @@ func TestOverflowMidRunResets(t *testing.T) {
 
 func TestOverflowFirstCallGuards(t *testing.T) {
 	h := newHarness(t, overflow, done())
-	h.drop(h.cfg.Home, "huge.md", "too much")
 	h.start()
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "context-guard" {
+	h.drop(h.mainHome, "huge.md", "too much")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "context-guard" {
 		t.Fatalf("end %s", end)
 	}
-	if !fileContains(filepath.Join(h.cfg.Home, "ERROR"), "over the model's limit") {
+	if !fileContains(filepath.Join(h.mainCtrl, "ERROR"), "over the model's limit") {
 		t.Fatal("no ERROR for an oversized first call")
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -162,11 +162,11 @@ func TestOverflowFirstCallGuards(t *testing.T) {
 
 func TestStaleProviderErrorCleared(t *testing.T) {
 	h := newHarness(t, done())
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	os.WriteFile(errorFile, []byte("Provider failing since 2026-10-11T00:00:00Z: 429\n"), 0o644)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("provider ERROR from before a restart survived a successful call")
 	}

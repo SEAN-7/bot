@@ -3,12 +3,9 @@ package daemon
 import (
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 )
@@ -28,20 +25,14 @@ func ownerSegment(text string) string {
 	return "\n\n" + OwnerHeader + "\n\n" + text
 }
 
-// readOwner returns the agent's OWNER.md: /etc/agent/OWNER.md for main, read
-// as root, or OWNER.md in a subagent's control directory, read through its
-// parent's helper. A missing file is no instructions. One that exists is
-// used only if it is a regular file, owned by the owner's user and not
-// writable by group or others, in a directory that meets the same rule;
-// otherwise the error says why and the agent must not start.
+// readOwner returns the agent's OWNER.md, in its control directory, read
+// through its parent's helper. A missing file is no instructions. One that
+// exists is used only if it is a regular file, owned by the parent's user
+// (root for root's children) and not writable by group or others, in a
+// directory that meets the same rule; otherwise the error says why and the
+// agent must not start.
 func (a *agent) readOwner() (string, error) {
-	var data []byte
-	var err error
-	if a.parent == nil {
-		data, err = readMainOwner(a.d.cfg.OwnerFile(), a.d.cfg.OwnerUID)
-	} else {
-		data, err = readChildOwner(a.parent.fs, a.parent.uid(), filepath.Join(a.ctrl, "OWNER.md"))
-	}
+	data, err := readChildOwner(a.parent.fs, a.parent.uid(), filepath.Join(a.ctrl, "OWNER.md"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	} else if err != nil {
@@ -50,53 +41,13 @@ func (a *agent) readOwner() (string, error) {
 	return strings.ToValidUTF8(string(data), "�"), nil
 }
 
-// readMainOwner reads the main agent's OWNER.md as root. It is outside every
-// agent home, so the daemon opens it itself, without following a symlink and
-// without blocking on a FIFO.
-func readMainOwner(path string, uid int) ([]byte, error) {
-	dir := filepath.Dir(path)
-	dirInfo, dirErr := os.Lstat(dir)
-	if errors.Is(dirErr, fs.ErrNotExist) {
-		return nil, dirErr
-	}
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, err
-	} else if errors.Is(err, syscall.ELOOP) {
-		return nil, fmt.Errorf("%s is a symlink", path)
-	} else if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if dirErr != nil {
-		return nil, dirErr
-	}
-	info, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if err := checkMainOwner(dir, dirInfo, path, info, uid); err != nil {
-		return nil, err
-	}
-	return io.ReadAll(io.LimitReader(f, segmentLimit))
-}
-
-// checkMainOwner applies the rule to main's OWNER.md and its directory, as
-// stat'ed by readMainOwner.
-func checkMainOwner(dir string, dirInfo fs.FileInfo, path string, info fs.FileInfo, uid int) error {
-	if err := checkSafe(dir, dirInfo.IsDir(), "a directory", fileUID(dirInfo), uid, uint32(dirInfo.Mode().Perm())); err != nil {
-		return err
-	}
-	return checkSafe(path, info.Mode().IsRegular(), "a regular file", fileUID(info), uid, uint32(info.Mode().Perm()))
-}
-
 // ownerReader is the part of a parent's helper that reads OWNER.md.
 type ownerReader interface {
 	Stat(path string) (fsio.Entry, error)
 	Read(path string, limit int64) ([]byte, int64, error)
 }
 
-// readChildOwner reads a subagent's OWNER.md through its parent's helper:
+// readChildOwner reads an agent's OWNER.md through its parent's helper:
 // the control directory belongs to the parent, who wrote the file.
 func readChildOwner(parent ownerReader, uid int, path string) ([]byte, error) {
 	dir := filepath.Dir(path)
@@ -138,11 +89,4 @@ func checkSafe(path string, rightType bool, kind string, owner, uid int, perm ui
 		return fmt.Errorf("%s is writable by group or others", path)
 	}
 	return nil
-}
-
-func fileUID(info fs.FileInfo) int {
-	if st, ok := info.Sys().(*syscall.Stat_t); ok {
-		return int(st.Uid)
-	}
-	return -1
 }

@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SEAN-7/bot/internal/seed"
 )
 
 func textStep(text string, tokens int) string {
@@ -24,15 +26,15 @@ func itoa(n int) string {
 
 func TestFollowUpContinuesConversation(t *testing.T) {
 	h := newHarness(t, step("echo first", 100), textStep("answered first", 120), step("echo second", 150), textStep("answered second", 170))
-	h.drop(h.cfg.Home, "a.md", "first question")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
-	os.WriteFile(filepath.Join(h.cfg.Home, "README.md"), []byte("edited readme"), 0o644)
-	h.drop(h.cfg.Home, "b.md", "follow-up question")
-	second := h.waitEnds(h.cfg.Home, 2)
+	h.drop(h.mainHome, "a.md", "first question")
+	h.waitEnds(h.mainID, 1)
+	os.WriteFile(filepath.Join(h.mainHome, "README.md"), []byte("edited readme"), 0o644)
+	h.drop(h.mainHome, "b.md", "follow-up question")
+	second := h.waitEnds(h.mainID, 2)
 	reqs := h.requests()
 	req := reqs[2] // first call of the second run
-	if req.System[1].Text != "readme" {
+	if req.System[1].Text != seed.README {
 		t.Fatalf("system sections changed mid-conversation: %q", req.System[1].Text)
 	}
 	msgs := req.Messages
@@ -43,7 +45,7 @@ func TestFollowUpContinuesConversation(t *testing.T) {
 	if last := reqs[3].Messages[5]; last.CallID != "call-3" {
 		t.Fatalf("call id %q, want call-3", last.CallID)
 	}
-	if second[0]["continues"] != h.runs(h.cfg.Home)[0] {
+	if second[0]["continues"] != h.runs(h.mainID)[0] {
 		t.Fatalf("start record does not name the run it continues: %v", second[0])
 	}
 }
@@ -51,13 +53,13 @@ func TestFollowUpContinuesConversation(t *testing.T) {
 func TestColdFollowUpStartsFresh(t *testing.T) {
 	h := newHarness(t, textStep("one", 100), textStep("two", 100))
 	h.cfg.ContinueWindow = 100 * time.Millisecond
-	h.drop(h.cfg.Home, "a.md", "first")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "a.md", "first")
+	h.waitEnds(h.mainID, 1)
 	time.Sleep(300 * time.Millisecond)
-	os.WriteFile(filepath.Join(h.cfg.Home, "README.md"), []byte("edited readme"), 0o644)
-	h.drop(h.cfg.Home, "b.md", "second")
-	h.waitEnds(h.cfg.Home, 2)
+	os.WriteFile(filepath.Join(h.mainHome, "README.md"), []byte("edited readme"), 0o644)
+	h.drop(h.mainHome, "b.md", "second")
+	h.waitEnds(h.mainID, 2)
 	req := h.requests()[1]
 	if len(req.Messages) != 1 || req.System[1].Text != "edited readme" {
 		t.Fatalf("cold follow-up did not start fresh: %d messages, readme %q", len(req.Messages), req.System[1].Text)
@@ -66,15 +68,15 @@ func TestColdFollowUpStartsFresh(t *testing.T) {
 
 func TestResetMarkerStartsFresh(t *testing.T) {
 	h := newHarness(t, step("touch ~/.reset", 100), textStep("done", 100), textStep("fresh", 100))
-	h.drop(h.cfg.Home, "a.md", "first")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
-	h.drop(h.cfg.Home, "b.md", "second")
-	h.waitEnds(h.cfg.Home, 2)
+	h.drop(h.mainHome, "a.md", "first")
+	h.waitEnds(h.mainID, 1)
+	h.drop(h.mainHome, "b.md", "second")
+	h.waitEnds(h.mainID, 2)
 	if n := len(h.requests()[2].Messages); n != 1 {
 		t.Fatalf("~/.reset ignored: %d messages", n)
 	}
-	if _, err := os.Stat(filepath.Join(h.cfg.Home, ".reset")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(h.mainHome, ".reset")); !os.IsNotExist(err) {
 		t.Fatal("~/.reset not removed after use")
 	}
 }

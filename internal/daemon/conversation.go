@@ -21,10 +21,10 @@ const msgTruncated = "\n[message truncated]"
 
 func logText(data []byte) string { return strings.ToValidUTF8(string(data), "�") }
 
-// appendConversation adds one record to a conversation log: the human's with
-// the main agent, or a subagent's with its parent. Only the daemon writes
-// these root-owned files, so their labels can be trusted. Each append sets the
-// file's mode and group, so a log left by an earlier release is tightened.
+// appendConversation adds one record to an agent's conversation log with its
+// owner. Only the daemon writes these root-owned files, so their labels can
+// be trusted. Each append sets the file's mode and group, so a log left by an
+// earlier release is tightened.
 func (d *daemon) appendConversation(path string, gid int, record map[string]any) error {
 	record["t"] = time.Now().UTC().Format(time.RFC3339Nano)
 	data, err := json.Marshal(record)
@@ -53,9 +53,10 @@ func (d *daemon) appendConversation(path string, gid int, record map[string]any)
 
 // collectMessages delivers what each admitted agent queued, through its own
 // helper: ~/.messages/ for its owner, ~/.messages/agents/NAME/ for its child
-// NAME. The spool's location and owner identify the sender, so a label
-// cannot be forged. Each file is removed only after it was delivered and
-// logged, so a crash can only duplicate a message, never lose one.
+// NAME; and what root queued for its children in RootHome/.messages/agents/.
+// The spool's location and owner identify the sender, so a label cannot be
+// forged. Each file is removed only after it was delivered and logged, so a
+// crash can only duplicate a message, never lose one.
 func (d *daemon) collectMessages() {
 	d.mu.Lock()
 	agents := make(map[string]*agent, len(d.agents))
@@ -67,6 +68,12 @@ func (d *daemon) collectMessages() {
 	d.mu.Unlock()
 	sort.Strings(ids)
 	pass := &spoolPass{ignored: map[string]bool{}, listed: map[string]bool{}, unlisted: map[string]bool{}}
+	// Root has no owner, so no spool of its own.
+	if uid := d.root.uid(); uid >= 0 {
+		d.collectDown(d.root, uid, filepath.Join(d.root.home, ".messages", "agents"), agents, pass)
+	} else {
+		pass.unlisted[d.root.id] = true
+	}
 	for _, id := range ids {
 		a := agents[id]
 		uid := a.uid()
@@ -90,7 +97,7 @@ func (d *daemon) collectMessages() {
 		}
 	}
 	for k := range d.retries {
-		if k.agent != ownerSpoolAgent && !pass.listed[listedKey(k.agent, k.path)] && !pass.unlisted[k.agent] {
+		if !pass.listed[listedKey(k.agent, k.path)] && !pass.unlisted[k.agent] {
 			delete(d.retries, k)
 		}
 	}
@@ -134,8 +141,9 @@ func (d *daemon) settle(a *agent, k spoolKey, pass *spoolPass) {
 	delete(d.unremoved, k)
 }
 
-// collectUp delivers the agent's messages for its owner: the human's log for
-// the main agent, the parent's inbox for a subagent.
+// collectUp delivers the agent's messages for its owner: to the parent's
+// inbox and the agent's conversation log, or for a child of root, which has
+// no inbox, to the log alone.
 func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
 	for _, path := range d.spoolFiles(a, uid, spool, pass) {
 		data, err := readMessage(a, path)
@@ -147,8 +155,8 @@ func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
 		if done {
 			continue
 		}
-		if a.parent == nil {
-			err = d.appendConversation(d.cfg.MessagesFile(), a.gid(), map[string]any{"from": "agent", "agent": a.name, "text": logText(data)})
+		if a.parent == d.root {
+			err = d.appendConversation(d.cfg.ConversationFile(a.id), a.gid(), map[string]any{"from": "agent", "text": logText(data)})
 		} else {
 			name := filepath.Base(a.ctrl)
 			if err = d.deliver(a.parent, d.inboxName(k, name), data, "agents/"+name); err == nil {
@@ -190,7 +198,7 @@ func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*a
 		if len(files) == 0 {
 			continue
 		}
-		if target := agents[filepath.Join(a.id, "agents", e.Name)]; target != nil {
+		if target := agents[joinID(a.id, e.Name)]; target != nil {
 			d.sendDown(a, target, files, pass)
 		} else if !a.childWaits(uid, e.Name) {
 			for _, f := range files {
@@ -198,7 +206,9 @@ func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*a
 					a.logf("message %s: %v", f, err)
 					continue
 				}
-				if err := d.writeNote(a, "undelivered", fmt.Sprintf(MsgUndeliveredFmt, e.Name)); err != nil {
+				if a == d.root {
+					a.logf(MsgUndeliveredFmt, e.Name) // root has no inbox
+				} else if err := d.writeNote(a, "undelivered", fmt.Sprintf(MsgUndeliveredFmt, e.Name)); err != nil {
 					a.logf("undelivered note: %v", err)
 				}
 			}

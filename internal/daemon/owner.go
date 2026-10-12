@@ -10,7 +10,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -151,50 +150,4 @@ func (d *daemon) deliveryFailed(k spoolKey) bool {
 	first := !r.logged
 	r.logged = true
 	return first
-}
-
-// ownerSpoolAgent keys the human's spool files in retries.
-const ownerSpoolAgent = ""
-
-// deliverOwner moves the human's spooled messages into the main agent's inbox.
-func (d *daemon) deliverOwner() {
-	entries, err := os.ReadDir(d.cfg.OwnerSpool())
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			d.cfg.Logger.Printf("owner spool: %v", err)
-		}
-		return
-	}
-	listed := map[string]bool{}
-	for _, e := range entries {
-		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		spooled := filepath.Join(d.cfg.OwnerSpool(), e.Name())
-		listed[spooled] = true
-		data, err := os.ReadFile(spooled)
-		if err != nil {
-			d.cfg.Logger.Printf("owner spool: %v", err)
-			continue
-		}
-		sum := sha256.Sum256(data)
-		k := spoolKey{ownerSpoolAgent, spooled, hex.EncodeToString(sum[:])}
-		if err := d.deliver(d.main, d.inboxName(k, "owner"), data, "owner"); err != nil {
-			if d.deliveryFailed(k) {
-				d.cfg.Logger.Printf("owner delivery: %v", err)
-			}
-			continue
-		}
-		delete(d.retries, k)
-		if err := d.appendConversation(d.cfg.MessagesFile(), d.main.gid(), map[string]any{"from": "owner", "text": logText(data)}); err != nil {
-			d.cfg.Logger.Printf("messages log: %v", err)
-		}
-		os.Remove(spooled)
-	}
-	// Forget the names kept for files no longer there.
-	for k := range d.retries {
-		if k.agent == ownerSpoolAgent && !listed[k.path] {
-			delete(d.retries, k)
-		}
-	}
 }

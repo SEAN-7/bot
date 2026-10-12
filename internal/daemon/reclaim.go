@@ -122,16 +122,23 @@ func (d *daemon) wipe(user string) error {
 	return helper.PurgeOwned(d.cfg.TmpDirs)
 }
 
-// parentID is the id of agentID's parent: main's home or another subagent's id.
-func parentID(agentID string) string { return filepath.Dir(filepath.Dir(agentID)) }
+// parentID is the id of agentID's parent: "" (root) for a top-level agent.
+func parentID(agentID string) string {
+	i := strings.LastIndex(agentID, "/agents/")
+	if i < 0 {
+		return ""
+	}
+	return agentID[:i]
+}
 
 // ancestorGid is the group of agentID's nearest ancestor that still has a
 // user: its parent's, unless the parent has been reclaimed too, in which
-// case its journals already belong to a higher ancestor's group. -1 leaves
-// groups alone (no credential: unprivileged tests).
+// case its journals already belong to a higher ancestor's group, or root's
+// when none has (0 in production, so only root reads them). -1 leaves groups
+// alone (no credential: unprivileged tests).
 func (d *daemon) ancestorGid(agentID string) (int, error) {
-	user := d.cfg.AgentUser
-	for p := parentID(agentID); p != d.cfg.Home && strings.HasPrefix(p, d.cfg.Home+"/"); p = parentID(p) {
+	user := d.cfg.RootUser
+	for p := parentID(agentID); p != ""; p = parentID(p) {
 		if u := d.pool.userOf(p); u != "" {
 			user = u
 			break
@@ -152,7 +159,7 @@ func (d *daemon) ancestorGid(agentID string) (int, error) {
 // missing or renamed config.json, which an agent may move about. A directory
 // that is not the one admitted (want, when known) was removed and created
 // again, so the admitted one is gone. Anything short of certainty keeps the
-// agent: a failing helper or user lookup must not wipe a live subagent.
+// agent: a failing helper or user lookup must not wipe a live agent.
 func controlDirGone(parent *agent, ctrl string, want fileID) bool {
 	e, err := parent.fs.Stat(ctrl)
 	if err != nil {
@@ -184,25 +191,26 @@ func (d *daemon) sweep() {
 	}
 }
 
-// orphaned reports whether the subagent id, which holds an active pool
-// entry, is not running and its control directory is gone. Its parent must
-// be running to look, through the parent's helper; a parent that holds no
+// orphaned reports whether the agent id, which holds an active pool entry,
+// is not running and its control directory is gone. Its parent must be root
+// or running to look, through the parent's helper; a parent that holds no
 // user, or whose user is being reclaimed, is gone, and its control
 // directories with it.
 func (d *daemon) orphaned(id string) bool {
+	pid := parentID(id)
 	d.mu.Lock()
 	_, running := d.agents[id]
-	parent := d.agents[parentID(id)]
+	parent := d.agents[pid]
 	d.mu.Unlock()
 	if running {
 		return false
 	}
+	if pid == "" {
+		parent = d.root
+	}
 	if parent == nil {
-		if pid := parentID(id); pid != d.cfg.Home {
-			e, held := d.pool.entryOf(pid)
-			return !held || e.State == poolReclaiming
-		}
-		return false
+		e, held := d.pool.entryOf(pid)
+		return !held || e.State == poolReclaiming
 	}
 	return controlDirGone(parent, filepath.Join(parent.home, "agents", filepath.Base(id)), fileID{})
 }

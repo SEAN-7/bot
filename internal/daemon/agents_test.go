@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,40 +26,43 @@ func countNotes(dir, suffix string) int {
 	return n
 }
 
-// makeChild creates a control directory under the main agent's agents/, as
-// a parent would; config.json is what makes the daemon admit it.
+// makeChild creates a control directory under main's agents/, as main
+// would, once main is admitted; config.json is what makes the daemon admit it.
 func makeChild(t *testing.T, h *harness, name string, config bool) string {
 	t.Helper()
-	ctrl := filepath.Join(h.cfg.Home, "agents", name)
+	ctrl := filepath.Join(h.mainHome, "agents", name)
+	if config {
+		return writeConfig(t, ctrl)
+	}
 	if err := os.MkdirAll(ctrl, 0o755); err != nil {
 		t.Fatal(err)
-	}
-	if config {
-		os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
 	}
 	return ctrl
 }
 
+// childID is the id of main's child name.
+func childID(name string) string { return "main/agents/" + name }
+
 func TestConfigValidationFailure(t *testing.T) {
 	h := newHarness(t, done())
-	config := filepath.Join(h.cfg.Home, "config.json")
+	config := filepath.Join(h.mainCtrl, "config.json")
 	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	h.drop(h.mainHome, "go.md", "go")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	waitFor(t, "config ERROR", func() bool { return fileContains(errorFile, `config.json: unknown model "nope"`) })
 	time.Sleep(100 * time.Millisecond)
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("%d requests with invalid config", n)
 	}
-	if names := inboxNames(h.cfg.Home); len(names) != 1 || names[0] != "go.md" {
+	if names := inboxNames(h.mainHome); len(names) != 1 || names[0] != "go.md" {
 		t.Fatalf("inbox touched: %v", names)
 	}
 	if strings.Count(h.logs.String(), `unknown model "nope"`) != 1 {
 		t.Fatalf("config error not logged exactly once:\n%s", h.logs)
 	}
-	os.WriteFile(config, []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
-	h.waitEnds(h.cfg.Home, 1)
+	os.WriteFile(config, []byte(testConfig), 0o644)
+	h.waitEnds(h.mainID, 1)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("config ERROR not cleared")
 	}
@@ -66,54 +70,54 @@ func TestConfigValidationFailure(t *testing.T) {
 
 func TestChildWithoutConfigWaits(t *testing.T) {
 	h := newHarness(t)
-	ctrl := makeChild(t, h, "c", false)
 	h.start()
+	ctrl := makeChild(t, h, "c", false)
 	time.Sleep(300 * time.Millisecond)
 	if _, err := os.Lstat(filepath.Join(ctrl, "home")); !os.IsNotExist(err) {
 		t.Fatal("a directory without config.json was admitted")
 	}
-	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-1") {
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
 		t.Fatalf("a user was prepared: %v", sys)
 	}
-	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 0 {
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 0 {
 		t.Fatalf("parent notified %d times", n)
 	}
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	writeConfig(t, ctrl)
 	h.drop(h.childHome(ctrl), "task.md", "do it")
-	h.waitEnds(ctrl, 1)
+	h.waitEnds(childID("c"), 1)
 }
 
 func TestParentChildReport(t *testing.T) {
-	create := "mkdir -p agents/c && cp config.json agents/c/ && " + sendDownText("c", "child-task: say hi")
+	create := "mkdir -p agents/c && printf %s " + shellQuote(testConfig) + " > agents/c/config.json && " + sendDownText("c", "child-task: say hi")
 	h := newHarness(t,
 		matchStep(parentMark, create, 100), doneFor(parentMark),
 		matchStep(childMark, sendMessageText("report: hi"), 100), doneFor(childMark),
 		doneFor(parentMark), doneFor(parentMark),
 	)
-	h.markParent()
-	h.drop(h.cfg.Home, "go.md", "make a child")
 	h.start()
+	h.markParent()
+	h.drop(h.mainHome, "go.md", "make a child")
 	waitFor(t, "parent receiving the report", func() bool {
 		return h.sawRecord(`"file":"inbox/processed/`, `-c.md","from":"agents/c","content":"report: hi"}`)
 	})
 	if !h.sawRecord(`-owner.md","from":"owner","content":"child-task: say hi"}`) {
 		t.Fatal("child task not delivered from owner")
 	}
-	if records := h.waitEnds(filepath.Join(h.cfg.Home, "agents", "c"), 1); lastEnd(records) != "done" {
+	if records := h.waitEnds(childID("c"), 1); lastEnd(records) != "done" {
 		t.Fatalf("child end %v", records)
 	}
 }
 
 func TestRemovalStopsAgent(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "sleep 30", 100))
-	ctrl := makeChild(t, h, "c", true)
 	h.start()
+	ctrl := makeChild(t, h, "c", true)
 	h.drop(h.childHome(ctrl), "task.md", "work")
 	waitFor(t, "child command", func() bool { return len(h.requests()) >= 1 })
 	time.Sleep(100 * time.Millisecond)
 	os.RemoveAll(ctrl)
 	start := time.Now()
-	if end := lastEnd(h.waitEnds(ctrl, 1)); end != "removed" {
+	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "removed" {
 		t.Fatalf("end %s", end)
 	}
 	if time.Since(start) > 3*time.Second {
@@ -123,14 +127,14 @@ func TestRemovalStopsAgent(t *testing.T) {
 
 func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
 	h := newHarness(t, step("sleep 0.5", 100), done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
+	h.drop(h.mainHome, "go.md", "go")
 	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	os.WriteFile(h.cfg.SettingsFile(), []byte("{"), 0o644)
-	if end := lastEnd(h.waitEnds(h.cfg.Home, 1)); end != "done" {
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
 		t.Fatalf("run ended %q after settings.json broke", end)
 	}
-	if fileContains(filepath.Join(h.cfg.Home, "ERROR"), "Agent limit") {
+	if fileContains(filepath.Join(h.mainCtrl, "ERROR"), "Agent limit") {
 		t.Fatal("broken settings treated as max_agents=0")
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -141,10 +145,10 @@ func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
 
 func TestAdmissionSeedsPoolHome(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "pwd; cat README.md | head -1", 100), `{"match":"inbox/processed/task.md","text":"done"}`)
-	ctrl := makeChild(t, h, "c", true)
 	h.start()
+	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
-	if home != filepath.Join(h.cfg.Homes, "agent-1") {
+	if home != filepath.Join(h.cfg.Homes, "agent-2") {
 		t.Fatal(home)
 	}
 	for _, p := range []string{"README.md", "TASK.md", "inbox/processed", "agents"} {
@@ -153,30 +157,30 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 		}
 	}
 	h.drop(home, "task.md", "work")
-	h.waitEnds(ctrl, 1) // journals are keyed by the control directory
+	h.waitEnds(childID("c"), 1) // journals are keyed by the path from root
 	if tool := h.requests()[1].Messages[2].Content; !strings.Contains(tool, home) {
 		t.Fatal(tool)
 	}
 	sys := h.cfg.System.(*fakeSystem)
-	if !sys.called("members agent-1 "+h.mainUser()) || !sys.called("linger agent-1") {
+	if !sys.called("members agent-2 agent-1") || !sys.called("linger agent-2") {
 		t.Fatal(sys)
 	}
-	if info, err := os.Stat(h.cfg.JournalDir(ctrl)); err != nil || info.Mode().Perm() != 0o751 {
+	if info, err := os.Stat(h.cfg.JournalDir(childID("c"))); err != nil || info.Mode().Perm() != 0o751 {
 		t.Fatalf("journal dir %v %v", info, err)
 	}
 }
 
 func TestConfigErrorGoesToControlDir(t *testing.T) {
 	h := newHarness(t, done())
+	h.start()
 	ctrl := makeChild(t, h, "c", false)
 	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
-	h.start()
 	home := h.childHome(ctrl)
 	h.drop(home, "task.md", "work")
 	waitFor(t, "child ERROR", func() bool { return fileContains(filepath.Join(ctrl, "ERROR"), `config.json: unknown model "nope"`) })
-	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
+	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
 	time.Sleep(200 * time.Millisecond)
-	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
 	if _, err := os.Stat(filepath.Join(home, "ERROR")); !os.IsNotExist(err) {
@@ -190,22 +194,22 @@ func TestConfigErrorGoesToControlDir(t *testing.T) {
 func TestMaxAgentsUsesPool(t *testing.T) {
 	h := newHarness(t)
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
-	a := makeChild(t, h, "a", true)
-	b := makeChild(t, h, "b", true)
 	h.start()
+	a := makeChild(t, h, "a", true)
 	h.childHome(a)
+	b := makeChild(t, h, "b", true)
 	errorFile := filepath.Join(b, "ERROR")
 	waitFor(t, "limit ERROR", func() bool { return fileContains(errorFile, "Agent limit reached (max_agents=2)") })
-	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
+	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
 	time.Sleep(200 * time.Millisecond)
-	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
 	if _, err := os.Lstat(filepath.Join(b, "home")); !os.IsNotExist(err) {
 		t.Fatal("b admitted despite the limit")
 	}
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":3}`), 0o644)
-	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-2") {
+	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-3") {
 		t.Fatal(home)
 	}
 	waitFor(t, "limit ERROR cleared", func() bool {
@@ -216,12 +220,12 @@ func TestMaxAgentsUsesPool(t *testing.T) {
 
 func TestAdmissionClearsLeftoverHome(t *testing.T) {
 	h := newHarness(t)
-	leftover := filepath.Join(h.cfg.Homes, "agent-1")
+	leftover := filepath.Join(h.cfg.Homes, "agent-2")
 	os.MkdirAll(leftover, 0o755)
 	os.WriteFile(filepath.Join(leftover, "stale.txt"), []byte("old"), 0o644)
 	os.WriteFile(filepath.Join(leftover, "README.md"), []byte("old readme"), 0o644)
-	ctrl := makeChild(t, h, "c", true)
 	h.start()
+	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
 	waitFor(t, "seeded README", func() bool {
 		data, err := os.ReadFile(filepath.Join(home, "README.md"))
@@ -234,22 +238,20 @@ func TestAdmissionClearsLeftoverHome(t *testing.T) {
 
 func TestGrandchildAdmitted(t *testing.T) {
 	h := newHarness(t)
-	c := makeChild(t, h, "c", true)
 	h.start()
+	c := makeChild(t, h, "c", true)
 	cHome := h.childHome(c)
-	g := filepath.Join(cHome, "agents", "g")
-	os.MkdirAll(g, 0o755)
-	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
-	if home := h.childHome(g); home != filepath.Join(h.cfg.Homes, "agent-2") {
+	g := writeConfig(t, filepath.Join(cHome, "agents", "g"))
+	if home := h.childHome(g); home != filepath.Join(h.cfg.Homes, "agent-3") {
 		t.Fatal(home)
 	}
 	sys := h.cfg.System.(*fakeSystem)
-	if !sys.called("members agent-2 agent-1," + h.mainUser()) {
+	if !sys.called("members agent-3 agent-2,agent-1") {
 		t.Fatal(sys)
 	}
-	// The grandchild's id is its path as seen from main, so its journals sit
-	// inside its parent's journal directory whichever user holds the parent.
-	id := filepath.Join(h.cfg.Home, "agents", "c", "agents", "g")
+	// The grandchild's id is its path from root, so its journals sit inside
+	// its parent's journal directory whichever user holds the parent.
+	id := childID("c/agents/g")
 	if info, err := os.Stat(h.cfg.JournalDir(id)); err != nil || !info.IsDir() {
 		t.Fatalf("grandchild journal dir: %v", err)
 	}
@@ -257,7 +259,7 @@ func TestGrandchildAdmitted(t *testing.T) {
 		t.Fatalf("journal keyed by the pool home path: %v", err)
 	}
 	data, _ := os.ReadFile(h.cfg.PoolFile())
-	if !strings.Contains(string(data), `{"user":"agent-2","agent":"`+id+`","state":"active"}`) {
+	if !strings.Contains(string(data), `{"user":"agent-3","agent":"`+id+`","state":"active"}`) {
 		t.Fatalf("pool.json %s", data)
 	}
 	h.drop(h.childHome(g), "task.md", "work")
@@ -268,8 +270,8 @@ func TestGrandchildAdmitted(t *testing.T) {
 
 func TestRestartKeepsChildHome(t *testing.T) {
 	h := newHarness(t)
-	ctrl := makeChild(t, h, "c", true)
 	h.start()
+	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
 	work := filepath.Join(home, "work.txt")
 	os.WriteFile(work, []byte("mine"), 0o644)
@@ -286,7 +288,7 @@ func TestRestartKeepsChildHome(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(home, "README.md")); string(data) != "my own readme" {
 		t.Fatalf("README.md after restart: %q", data)
 	}
-	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-3") {
 		t.Fatalf("a second user was prepared: %v", sys)
 	}
 }
@@ -325,7 +327,7 @@ func TestMissingPoolUsersLogged(t *testing.T) {
 	h.start()
 	time.Sleep(100 * time.Millisecond)
 	h.stop()
-	if n := strings.Count(h.logs.String(), "pool users not found: agent-3; subagents are limited to 2"); n != 1 {
+	if n := strings.Count(h.logs.String(), "pool users not found: agent-3; agents are limited to 3"); n != 1 {
 		t.Fatalf("logged %d times:\n%s", n, h.logs)
 	}
 }
@@ -334,24 +336,27 @@ func TestMissingPoolUsersLogged(t *testing.T) {
 // journal link already points at this agent's journals is this agent's own
 // home, so it is not cleared. Another agent's journal link does not count.
 func TestLostPoolKeepsOwnHome(t *testing.T) {
-	h := newHarness(t, done())
-	ctrl := makeChild(t, h, "c", true)
+	h := newHarness(t, done(), done())
 	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
+	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
 	h.drop(home, "task.md", "work")
-	h.waitEnds(ctrl, 1)
+	h.waitEnds(childID("c"), 1)
 	work := filepath.Join(home, "work.txt")
 	os.WriteFile(work, []byte("mine"), 0o644)
-	other := filepath.Join(h.cfg.Homes, "agent-2")
+	other := filepath.Join(h.cfg.Homes, "agent-3")
 	os.MkdirAll(other, 0o755)
 	os.WriteFile(filepath.Join(other, "stale.txt"), []byte("old"), 0o644)
-	os.Symlink(h.cfg.JournalDir(filepath.Join(h.cfg.Home, "agents", "x")), filepath.Join(other, "journal"))
+	os.Symlink(h.cfg.JournalDir(childID("x")), filepath.Join(other, "journal"))
 	h.stop()
 	os.Remove(h.cfg.PoolFile())
 	makeChild(t, h, "d", true)
 	h.start()
-	waitFor(t, "both admitted", func() bool {
-		return strings.Count(h.logs.String(), "c: admitted as agent-1") == 2 && strings.Contains(h.logs.String(), "d: admitted as agent-2")
+	waitFor(t, "all admitted", func() bool {
+		logs := h.logs.String()
+		return strings.Count(logs, "main: admitted as agent-1") == 2 && strings.Count(logs, "main/agents/c: admitted as agent-2") == 2 && strings.Contains(logs, "main/agents/d: admitted as agent-3")
 	})
 	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
 		t.Fatalf("own home cleared: %q %v", data, err)
@@ -382,5 +387,128 @@ func TestJournalOwnedBy(t *testing.T) {
 	}
 	if !journalOwnedBy(filepath.Join(dir, "missing"), -1) {
 		t.Fatal("without a credential (one user for every agent) the group cannot be checked")
+	}
+}
+
+// TestRootChildAdmitted: main is root's child, admitted from root's control
+// directory like any subagent.
+func TestRootChildAdmitted(t *testing.T) {
+	h := newHarness(t, done())
+	h.start()
+	if home := h.childHome(h.mainCtrl); home != h.cfg.PoolHome("agent-1") || home != h.mainHome {
+		t.Fatalf("main's home %s", home)
+	}
+	for _, p := range []string{"README.md", "TASK.md", "inbox/processed", "agents"} {
+		if _, err := os.Stat(filepath.Join(h.mainHome, p)); err != nil {
+			t.Fatal(p, err)
+		}
+	}
+	if !strings.Contains(poolJSON(h), `{"user":"agent-1","agent":"main","state":"active"}`) {
+		t.Fatalf("pool.json %s", poolJSON(h))
+	}
+	if sys := h.cfg.System.(*fakeSystem); !sys.called("members agent-1 ") {
+		t.Fatalf("root listed among main's group members: %v", sys)
+	}
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds("main", 1)
+	journal := filepath.Join(h.cfg.Log, "main")
+	if target, _ := os.Readlink(filepath.Join(h.mainHome, "journal")); target != journal {
+		t.Fatalf("journal link %q, want %s", target, journal)
+	}
+}
+
+// TestTwoTopLevelAgentsIsolated: root's children are siblings, each with its
+// own user and journals, and no ancestor in its group.
+func TestTwoTopLevelAgentsIsolated(t *testing.T) {
+	h := newHarness(t, done(), done())
+	research := topLevel(t, h, "research")
+	h.start()
+	mainHome, researchHome := h.childHome(h.mainCtrl), h.childHome(research)
+	if mainHome != h.cfg.PoolHome("agent-1") || researchHome != h.cfg.PoolHome("agent-2") {
+		t.Fatalf("homes %s and %s", mainHome, researchHome)
+	}
+	sys := h.cfg.System.(*fakeSystem)
+	if !sys.called("members agent-1 ") || !sys.called("members agent-2 ") {
+		t.Fatalf("group members: %v", sys)
+	}
+	h.drop(mainHome, "go.md", "go")
+	h.drop(researchHome, "go.md", "go")
+	h.waitEnds("main", 1)
+	h.waitEnds("research", 1)
+	for _, id := range []string{"main", "research"} {
+		if info, err := os.Stat(filepath.Join(h.cfg.Log, id)); err != nil || !info.IsDir() {
+			t.Fatalf("journal of %s: %v", id, err)
+		}
+	}
+}
+
+// TestOwnerMessageFromRoot: root's spool for main reaches main's inbox
+// labelled owner and is logged in main's conversation.
+func TestOwnerMessageFromRoot(t *testing.T) {
+	h := newHarness(t, done())
+	h.start()
+	spooled := h.sendOwner("hi")
+	if from := inboxRecordFrom(h.waitEnds("main", 1), "hi"); from != "owner" {
+		t.Fatalf("labelled %q", from)
+	}
+	log := readRecords(h.cfg.ConversationFile("main"))
+	if len(log) != 1 || log[0]["from"] != "owner" || log[0]["text"] != "hi" {
+		t.Fatalf("conversation %v", log)
+	}
+	if _, err := os.Stat(spooled); !os.IsNotExist(err) {
+		t.Fatalf("spool file kept: %v", err)
+	}
+}
+
+// TestTopLevelMessageLoggedOnly: a top-level agent's message to its owner is
+// logged in its conversation and delivered to no inbox: root has none.
+func TestTopLevelMessageLoggedOnly(t *testing.T) {
+	h := newHarness(t, step(sendMessageText("tests pass"), 100), done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	waitFor(t, "message logged", func() bool {
+		log := readRecords(h.cfg.ConversationFile("main"))
+		return len(log) == 1 && log[0]["from"] == "agent" && log[0]["text"] == "tests pass"
+	})
+	waitFor(t, "spool emptied", func() bool {
+		entries, _ := os.ReadDir(filepath.Join(h.mainHome, ".messages"))
+		return len(entries) == 0
+	})
+	if log := readRecords(h.cfg.ConversationFile("main")); log[0]["agent"] != nil {
+		t.Fatalf("record names the agent: %v", log[0])
+	}
+	time.Sleep(100 * time.Millisecond)
+	filepath.WalkDir(h.root, func(path string, e fs.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(path, "-main.md") {
+			t.Errorf("delivered to an inbox: %s", path)
+		}
+		return nil
+	})
+	if _, err := os.Stat(filepath.Join(h.cfg.RootHome(), "inbox")); !os.IsNotExist(err) {
+		t.Fatalf("root got an inbox: %v", err)
+	}
+}
+
+// TestRestartKeepsAdmittedChild: after a restart, a control directory with a
+// home link and a pool record is the same agent, whether or not it still
+// holds config.json, and keeps its home.
+func TestRestartKeepsAdmittedChild(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	marker := filepath.Join(h.mainHome, "marker.txt")
+	if err := os.WriteFile(marker, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.stop()
+	if err := os.Remove(filepath.Join(h.mainCtrl, "config.json")); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "mine" {
+		t.Fatalf("marker after restart: %q %v", data, err)
+	}
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
+		t.Fatalf("a second user was prepared: %v", sys)
 	}
 }

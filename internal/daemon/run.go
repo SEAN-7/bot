@@ -82,7 +82,7 @@ func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse
 		text := MsgConfigPrefix + err.Error()
 		a.logf("not starting: %s", text)
 		a.setError(text)
-		if a.parent != nil {
+		if a.parent != d.root { // root has no inbox: the service log reports it
 			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, a.name, text)); err != nil {
 				a.logf("notify parent: %v", err)
 			}
@@ -314,8 +314,8 @@ const (
 	errGuardPrefix    = "Context is over"
 )
 
-// setError writes the agent's ERROR beside its config.json, where its owner
-// sees it: ~/ERROR for main, the control directory for a subagent.
+// setError writes the agent's ERROR beside its config.json, in its control
+// directory, where its owner sees it.
 func (a *agent) setError(text string) {
 	ctl, dir := a.ctl()
 	if err := ctl.Write(filepath.Join(dir, "ERROR"), []byte(text+"\n")); err != nil {

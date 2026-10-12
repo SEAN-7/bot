@@ -70,21 +70,23 @@ func queue(dir, text string, now time.Time) error {
 }
 
 // Target resolves whose journal and conversation to show. name is "" for the
-// caller's own, or a subagent relative to the caller ("research" or
-// "research/agents/scraper"). root is true for the human, whose own agent is
-// the main agent. journalDir and conversation follow the agent's logical id
-// (its parent's id plus "/agents/NAME"); errorFile is in the real control
-// directory, which can sit under another agent's home, and is empty for a
-// subagent asking about itself because its ERROR is in its parent's.
+// caller's own, or a descendant relative to the caller ("research" or
+// "research/agents/scraper"). root is true for the human, whose agents are
+// root's, under RootHome; root has no journal of its own, so for root ""
+// names main. journalDir and conversation follow the agent's id, its path
+// from root (its parent's id plus "/agents/NAME"); errorFile is in the real
+// control directory, which can sit under another agent's home, and is empty
+// for an agent asking about itself because its ERROR is in its parent's.
 func Target(l layout.Layout, root bool, home, name string) (journalDir, errorFile, conversation string, err error) {
-	var id, base string // the caller's agent id, and where its agents/ directory is
+	var id, base string // the caller's agent id ("" for root), and where its agents/ directory is
 	switch {
 	case root:
-		id, base = l.Home, l.Home
+		base = l.RootHome()
+		if name == "" {
+			name = "main"
+		}
 	case home == "":
 		return "", "", "", errors.New("HOME is not set; run this from an agent's shell")
-	case home == l.Home:
-		id, base = l.Home, home
 	default:
 		if id, err = idFromJournal(l, home); err != nil {
 			return "", "", "", err
@@ -92,9 +94,6 @@ func Target(l layout.Layout, root bool, home, name string) (journalDir, errorFil
 		base = home
 	}
 	if name == "" {
-		if id == l.Home {
-			return l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), l.MessagesFile(), nil
-		}
 		journalDir, err = filepath.EvalSymlinks(filepath.Join(home, "journal"))
 		if err != nil {
 			return "", "", "", err
@@ -106,7 +105,11 @@ func Target(l layout.Layout, root bool, home, name string) (journalDir, errorFil
 		if !cleanName(part) {
 			return "", "", "", fmt.Errorf("%q is not a subagent name; use NAME or NAME/agents/NAME", name)
 		}
-		id = filepath.Join(id, "agents", part)
+		if id == "" {
+			id = part
+		} else {
+			id += "/agents/" + part
+		}
 	}
 	ctrl, dir := "", base
 	for i, part := range parts {
@@ -133,7 +136,7 @@ func idFromJournal(l layout.Layout, home string) (string, error) {
 	}
 	for _, root := range roots {
 		if rel, err := filepath.Rel(root, dir); err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, "../") {
-			return "/" + rel, nil
+			return rel, nil
 		}
 	}
 	return "", fmt.Errorf("%s: ~/journal points to %s, outside %s", home, dir, l.Log)
@@ -183,7 +186,7 @@ func formatMessage(line []byte) string {
 	}
 	who := m.From
 	if m.From == "agent" && m.Agent != "" {
-		who = m.Agent // the main agent's conversation names the agent
+		who = m.Agent // records from before 0.4.0 in main's conversation name the agent
 	}
 	text := strings.ReplaceAll(strings.TrimRight(m.Text, "\n"), "\n", "\n    ")
 	return sanitize(fmt.Sprintf("%s %s: %s", clock, who, text))

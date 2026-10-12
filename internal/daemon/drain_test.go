@@ -23,8 +23,8 @@ func (h *harness) stopAsync() chan struct{} {
 
 func TestDrainFinishesActiveRun(t *testing.T) {
 	h := newHarness(t, step("sleep 1", 100), done())
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
+	h.drop(h.mainHome, "go.md", "go")
 	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	finished := h.stopAsync()
 	select {
@@ -32,7 +32,7 @@ func TestDrainFinishesActiveRun(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("daemon did not stop after the run finished")
 	}
-	runs := h.runs(h.cfg.Home)
+	runs := h.runs(h.mainID)
 	if len(runs) != 1 || !ended(runs[0]) || lastEnd(readRecords(runs[0])) != "done" {
 		t.Fatalf("active run was interrupted by shutdown: %v", readRecords(runs[0]))
 	}
@@ -43,19 +43,19 @@ func TestDrainFinishesActiveRun(t *testing.T) {
 
 func TestDrainStartsNoNewRun(t *testing.T) {
 	h := newHarness(t, step("sleep 1", 100), done(), done())
-	ctrl := makeChild(t, h, "c", true)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
+	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
+	h.drop(h.mainHome, "go.md", "go")
 	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	finished := h.stopAsync()
-	h.drop(h.cfg.Home, "late.md", "arrived during shutdown")
+	h.drop(h.mainHome, "late.md", "arrived during shutdown")
 	h.drop(home, "task.md", "arrived during shutdown")
 	<-finished
-	if names := inboxNames(h.cfg.Home); len(names) != 1 || names[0] != "late.md" {
+	if names := inboxNames(h.mainHome); len(names) != 1 || names[0] != "late.md" {
 		t.Fatalf("message arriving during drain was consumed: %v", names)
 	}
-	if runs := h.runs(ctrl); len(runs) != 0 {
+	if runs := h.runs(childID("c")); len(runs) != 0 {
 		t.Fatalf("a new run started during drain: %v", runs)
 	}
 }
@@ -63,8 +63,8 @@ func TestDrainStartsNoNewRun(t *testing.T) {
 func TestDrainDeadlineInterrupts(t *testing.T) {
 	h := newHarness(t, step("sleep 30", 100))
 	h.cfg.DrainTimeout = 300 * time.Millisecond
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
+	h.drop(h.mainHome, "go.md", "go")
 	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	begin := time.Now()
 	finished := h.stopAsync()
@@ -76,7 +76,7 @@ func TestDrainDeadlineInterrupts(t *testing.T) {
 	if time.Since(begin) > 3*time.Second {
 		t.Fatalf("stop took %s", time.Since(begin))
 	}
-	if runs := h.runs(h.cfg.Home); len(runs) != 1 || ended(runs[0]) {
+	if runs := h.runs(h.mainID); len(runs) != 1 || ended(runs[0]) {
 		t.Fatal("run interrupted at the deadline must stay unclean so recovery resumes it")
 	}
 }

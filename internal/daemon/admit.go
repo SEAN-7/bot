@@ -16,45 +16,45 @@ import (
 
 const errLimitPrefix = "Agent limit reached"
 
-// admit gives the subagent at ctrl a pool user and a home, and starts its
-// loop. It returns nil when the subagent cannot start yet: no user is free,
+// admit gives the agent at ctrl a pool user and a home, and starts its
+// loop. It returns nil when the agent cannot start yet: no user is free,
 // its user is still being reclaimed, or a step failed and is retried at the
 // next poll. Only the poll goroutine calls it.
 func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if d.draining() {
 		return nil
 	}
-	name, id := childName(parent, ctrl), d.childID(parent, ctrl)
+	id := d.childID(parent, ctrl)
 	dir, err := parent.fs.Stat(ctrl)
 	if err != nil {
-		d.admitFailed(ctrl, name, "control directory", err)
+		d.admitFailed(ctrl, id, "control directory", err)
 		return nil
 	}
 	held := d.pool.userOf(id)
-	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents-1))
+	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents))
 	if err != nil {
-		d.admitFailed(ctrl, name, "pool", err)
+		d.admitFailed(ctrl, id, "pool", err)
 		return nil
 	}
 	if user == "" {
 		if held == "" {
-			d.holdBack(parent, ctrl, name)
+			d.holdBack(parent, ctrl, id)
 		}
 		return nil // held: its user is being reclaimed
 	}
-	c := &agent{d: d, id: id, name: name, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
+	c := &agent{d: d, id: id, name: id, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	// A user new to this agent may hold a previous agent's files; a user it
 	// already held (a daemon restart) keeps them.
 	fresh, cleared := held == "", false
 	fail := func(step string, err error) *agent {
-		d.admitFailed(ctrl, name, step, err)
+		d.admitFailed(ctrl, id, step, err)
 		if c.fs != nil {
 			c.fs.Close()
 		}
 		if fresh && !cleared {
 			// Retry as a new assignment, so the home is cleared then.
 			if err := d.pool.free(user); err != nil {
-				d.cfg.Logger.Printf("%s: pool: %v", name, err)
+				d.cfg.Logger.Printf("%s: pool: %v", id, err)
 			}
 		}
 		return nil
@@ -81,8 +81,8 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 		cleared = true
 	}
-	var ancestors []string // nearest first
-	for p := parent; p != nil; p = p.parent {
+	var ancestors []string // nearest first; root needs no group membership
+	for p := parent; p != d.root; p = p.parent {
 		ancestors = append(ancestors, p.userName())
 	}
 	if err := d.cfg.System.SetMembers(user, ancestors); err != nil {
@@ -136,7 +136,7 @@ func journalOwnedBy(dir string, gid int) bool {
 	return ok && int(st.Gid) == gid
 }
 
-// repairHomeLink puts back the home link in a subagent's control directory
+// repairHomeLink puts back the home link in an agent's control directory
 // if its parent removed it, through the parent's helper. A failure is
 // logged once and retried at the next poll.
 func (d *daemon) repairHomeLink(c *agent) {
@@ -185,8 +185,9 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 	}
 }
 
-// holdBack reports a subagent that max_agents keeps from starting: an ERROR
-// in its control directory and one note to its parent, once.
+// holdBack reports an agent that max_agents keeps from starting: an ERROR
+// in its control directory and one note to its parent, once. Root has no
+// inbox: for its children the service log is the report.
 func (d *daemon) holdBack(parent *agent, ctrl, name string) {
 	if d.limited[ctrl] {
 		return
@@ -197,12 +198,15 @@ func (d *daemon) holdBack(parent *agent, ctrl, name string) {
 	if err := parent.fs.Write(filepath.Join(ctrl, "ERROR"), []byte(fmt.Sprintf(MsgLimitFmt, limit)+"\n")); err != nil {
 		d.cfg.Logger.Printf("%s: write ERROR: %v", name, err)
 	}
+	if parent == d.root {
+		return
+	}
 	if err := d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgLimitParentFmt, name, limit)); err != nil {
 		d.cfg.Logger.Printf("%s: notify parent: %v", name, err)
 	}
 }
 
-// clearLimited removes a limit ERROR from an admitted subagent's control
+// clearLimited removes a limit ERROR from an admitted agent's control
 // directory, including one left by an earlier daemon.
 func (d *daemon) clearLimited(parent *agent, ctrl string) {
 	delete(d.limited, ctrl)

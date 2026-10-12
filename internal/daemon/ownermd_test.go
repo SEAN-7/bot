@@ -13,12 +13,15 @@ import (
 	"github.com/SEAN-7/bot/internal/fsio"
 )
 
+// mainOwner is main's OWNER.md, in root's control directory.
+func (h *harness) mainOwner() string { return filepath.Join(h.mainCtrl, "OWNER.md") }
+
 func TestOwnerSectionForMain(t *testing.T) {
 	h := newHarness(t, done())
-	os.WriteFile(h.cfg.OwnerFile(), []byte("Be brief."), 0o644)
-	h.drop(h.cfg.Home, "go.md", "go")
+	os.WriteFile(h.mainOwner(), []byte("Be brief."), 0o644)
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
 	want := SystemPrompt + "\n\n" + OwnerHeader + "\n\nBe brief."
 	if got := h.requests()[0].System[0].Text; got != want {
 		t.Fatalf("first segment %q, want %q", got, want)
@@ -46,11 +49,11 @@ func TestNoOwnerFileKeepsPrompt(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t, done())
 			if tc.content != nil {
-				os.WriteFile(h.cfg.OwnerFile(), []byte(*tc.content), 0o644)
+				os.WriteFile(h.mainOwner(), []byte(*tc.content), 0o644)
 			}
-			h.drop(h.cfg.Home, "go.md", "go")
 			h.start()
-			h.waitEnds(h.cfg.Home, 1)
+			h.drop(h.mainHome, "go.md", "go")
+			h.waitEnds(h.mainID, 1)
 			if got := h.requests()[0].System[0].Text; got != SystemPrompt {
 				t.Fatalf("first segment %q, want the system prompt alone", got)
 			}
@@ -60,15 +63,14 @@ func TestNoOwnerFileKeepsPrompt(t *testing.T) {
 
 func ptr(s string) *string { return &s }
 
-// runChild admits the child at ctrl, gives both it and main a message, and
+// runChild admits main's child c, gives both it and main a message, and
 // waits for both runs.
 func runChild(t *testing.T, h *harness, ctrl string) {
 	t.Helper()
-	h.drop(h.cfg.Home, "go.md", "go")
-	h.start()
+	h.drop(h.mainHome, "go.md", "go")
 	h.drop(h.childHome(ctrl), "task.md", "work")
-	h.waitEnds(h.cfg.Home, 1)
-	h.waitEnds(ctrl, 1)
+	h.waitEnds(h.mainID, 1)
+	h.waitEnds(childID("c"), 1)
 }
 
 // requestsOf splits the logged requests into main's and the seeded child's.
@@ -93,10 +95,13 @@ func requestsOf(h *harness) (mainSystem, childSystem []string, child []string) {
 
 func TestOwnerSectionForChild(t *testing.T) {
 	h := newHarness(t)
+	os.WriteFile(h.mainOwner(), []byte("Main rules."), 0o644)
+	h.start()
 	h.markParent()
-	os.WriteFile(h.cfg.OwnerFile(), []byte("Main rules."), 0o644)
-	ctrl := makeChild(t, h, "c", true)
+	ctrl := filepath.Join(h.mainHome, "agents", "c")
+	os.MkdirAll(ctrl, 0o755)
 	os.WriteFile(filepath.Join(ctrl, "OWNER.md"), []byte("Child rules."), 0o644)
+	writeConfig(t, ctrl)
 	runChild(t, h, ctrl)
 	mainSystem, childSystem, _ := requestsOf(h)
 	if len(mainSystem) != 1 || len(childSystem) != 1 {
@@ -112,8 +117,9 @@ func TestOwnerSectionForChild(t *testing.T) {
 
 func TestParentOwnerNotInherited(t *testing.T) {
 	h := newHarness(t)
+	os.WriteFile(h.mainOwner(), []byte("MAIN-ONLY"), 0o644)
+	h.start()
 	h.markParent()
-	os.WriteFile(h.cfg.OwnerFile(), []byte("MAIN-ONLY"), 0o644)
 	ctrl := makeChild(t, h, "c", true)
 	runChild(t, h, ctrl)
 	_, childSystem, child := requestsOf(h)
@@ -171,15 +177,18 @@ func TestUnsafeOwnerStopsRun(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHarness(t)
-			home, dir, id := h.cfg.Home, h.cfg.Home, h.cfg.Home
-			owner := h.cfg.OwnerFile()
-			if tc.child {
-				dir = makeChild(t, h, "c", true)
-				id, owner = dir, filepath.Join(dir, "OWNER.md")
+			home, dir, id := h.mainHome, h.mainCtrl, h.mainID
+			owner := h.mainOwner()
+			if !tc.child {
+				tc.spoil(t, owner)
 			}
-			tc.spoil(t, owner)
 			h.start()
 			if tc.child {
+				dir = filepath.Join(h.mainHome, "agents", "c")
+				id, owner = childID("c"), filepath.Join(dir, "OWNER.md")
+				os.MkdirAll(dir, 0o755)
+				tc.spoil(t, owner)
+				writeConfig(t, dir)
 				home = h.childHome(dir)
 			}
 			h.drop(home, "go.md", "go")
@@ -215,18 +224,18 @@ func TestUnsafeOwnerStopsRun(t *testing.T) {
 
 func TestOwnerEditStartsFresh(t *testing.T) {
 	h := newHarness(t, textStep("one", 100), textStep("two", 100), textStep("three", 100))
-	os.WriteFile(h.cfg.OwnerFile(), []byte("First rules."), 0o644)
-	h.drop(h.cfg.Home, "a.md", "first")
+	os.WriteFile(h.mainOwner(), []byte("First rules."), 0o644)
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
-	h.drop(h.cfg.Home, "b.md", "second")
-	h.waitEnds(h.cfg.Home, 2)
+	h.drop(h.mainHome, "a.md", "first")
+	h.waitEnds(h.mainID, 1)
+	h.drop(h.mainHome, "b.md", "second")
+	h.waitEnds(h.mainID, 2)
 	if n := len(h.requests()[1].Messages); n != 3 {
 		t.Fatalf("unchanged OWNER.md did not continue: %d messages", n)
 	}
-	os.WriteFile(h.cfg.OwnerFile(), []byte("Second rules."), 0o644)
-	h.drop(h.cfg.Home, "c.md", "third")
-	h.waitEnds(h.cfg.Home, 3)
+	os.WriteFile(h.mainOwner(), []byte("Second rules."), 0o644)
+	h.drop(h.mainHome, "c.md", "third")
+	h.waitEnds(h.mainID, 3)
 	req := h.requests()[2]
 	if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Content, "third") {
 		t.Fatalf("edited OWNER.md continued the conversation: %+v", req.Messages)
@@ -236,40 +245,20 @@ func TestOwnerEditStartsFresh(t *testing.T) {
 	}
 }
 
-// ownerAgents builds a main agent and its child c without running the
-// daemon, so readOwner can be checked against users the harness cannot make.
+// ownerAgents builds main and its child c without running the daemon, so
+// readOwner can be checked against users the harness cannot make.
 func ownerAgents(t *testing.T, h *harness) (*agent, *agent) {
 	t.Helper()
-	fs, err := fsio.Start(h.cfg.Self, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { fs.Close() })
 	d := &daemon{cfg: h.cfg}
-	main := newMain(d)
-	main.fs = fs
-	ctrl := makeChild(t, h, "c", true)
-	child := &agent{d: d, id: ctrl, name: "c", ctrl: ctrl, parent: main, user: "agent-1", done: make(chan struct{})}
+	main := detachedMain(t, h, d)
+	ctrl := writeConfig(t, filepath.Join(h.mainHome, "agents", "c"))
+	child := &agent{d: d, id: childID("c"), name: childID("c"), ctrl: ctrl, parent: main, user: "agent-2", done: make(chan struct{})}
 	return main, child
 }
 
 // The harness runs as one user, so a directory and file with different
-// owners need root (TestPrivilegeOwnerFileOfOtherUser). Without root, a
-// wrong expected owner fails at the directory, which is checked first.
-func TestOwnerDirectoryOfOtherUserRejected(t *testing.T) {
-	h := newHarness(t)
-	h.cfg.OwnerUID = os.Getuid() + 1
-	main, _ := ownerAgents(t, h)
-	os.WriteFile(h.cfg.OwnerFile(), []byte("x"), 0o644)
-	if _, err := main.readOwner(); err == nil || err.Error() != h.cfg.Etc+" is not owned by its owner" {
-		t.Fatalf("main OWNER.md in another user's directory: %v", err)
-	}
-	os.Remove(h.cfg.OwnerFile())
-	if text, err := main.readOwner(); text != "" || err != nil {
-		t.Fatalf("missing OWNER.md: %q, %v", text, err)
-	}
-}
-
+// owners need root (TestPrivilegeChildOwnerMd). Without root, a wrong
+// expected owner fails at the directory, which is checked first.
 func TestChildOwnerDirectoryOfOtherUserRejected(t *testing.T) {
 	h := newHarness(t)
 	other := uint32(os.Getuid() + 1)
@@ -278,30 +267,6 @@ func TestChildOwnerDirectoryOfOtherUserRejected(t *testing.T) {
 	os.WriteFile(filepath.Join(child.ctrl, "OWNER.md"), []byte("x"), 0o644)
 	if _, err := child.readOwner(); err == nil || err.Error() != child.ctrl+" is not owned by its owner" {
 		t.Fatalf("child OWNER.md in a directory the parent's user does not own: %v", err)
-	}
-}
-
-// fakeInfo is a stat result with a chosen owner.
-type fakeInfo struct {
-	mode fs.FileMode
-	uid  uint32
-}
-
-func (f fakeInfo) Name() string       { return "" }
-func (f fakeInfo) Size() int64        { return 0 }
-func (f fakeInfo) Mode() fs.FileMode  { return f.mode }
-func (f fakeInfo) ModTime() time.Time { return time.Time{} }
-func (f fakeInfo) IsDir() bool        { return f.mode.IsDir() }
-func (f fakeInfo) Sys() any           { return &syscall.Stat_t{Uid: f.uid} }
-
-func TestMainOwnerFileOfOtherUserRejected(t *testing.T) {
-	dir, path := "/etc/agent", "/etc/agent/OWNER.md"
-	safeDir := fakeInfo{fs.ModeDir | 0o711, 0}
-	if err := checkMainOwner(dir, safeDir, path, fakeInfo{0o644, 0}, 0); err != nil {
-		t.Fatalf("safe OWNER.md rejected: %v", err)
-	}
-	if err := checkMainOwner(dir, safeDir, path, fakeInfo{0o644, 1000}, 0); err == nil || err.Error() != path+" is not owned by its owner" {
-		t.Fatalf("OWNER.md of another user in a safe directory: %v", err)
 	}
 }
 
@@ -321,7 +286,7 @@ func (f fakeParent) Read(path string, limit int64) ([]byte, int64, error) {
 }
 
 func TestChildOwnerFileOfOtherUserRejected(t *testing.T) {
-	ctrl := "/home/agent/agents/c"
+	ctrl := "/home/agent-1/agents/c"
 	path := ctrl + "/OWNER.md"
 	parent := fakeParent{ctrl: {Type: "dir", UID: 1000, Mode: 0o755}, path: {Type: "file", UID: 1000, Mode: 0o644}}
 	if data, err := readChildOwner(parent, 1000, path); err != nil || string(data) != "rules" {
@@ -336,13 +301,13 @@ func TestChildOwnerFileOfOtherUserRejected(t *testing.T) {
 func TestOwnerDirectoryWritableRejected(t *testing.T) {
 	h := newHarness(t)
 	main, _ := ownerAgents(t, h)
-	os.WriteFile(h.cfg.OwnerFile(), []byte("x"), 0o644)
-	os.Chmod(h.cfg.Etc, 0o775)
-	defer os.Chmod(h.cfg.Etc, 0o755)
-	if _, err := main.readOwner(); err == nil || !strings.Contains(err.Error(), h.cfg.Etc+" is writable by group or others") {
-		t.Fatalf("group-writable %s: %v", h.cfg.Etc, err)
+	os.WriteFile(h.mainOwner(), []byte("x"), 0o644)
+	os.Chmod(h.mainCtrl, 0o775)
+	defer os.Chmod(h.mainCtrl, 0o755)
+	if _, err := main.readOwner(); err == nil || !strings.Contains(err.Error(), h.mainCtrl+" is writable by group or others") {
+		t.Fatalf("group-writable %s: %v", h.mainCtrl, err)
 	}
-	os.Remove(h.cfg.OwnerFile())
+	os.Remove(h.mainOwner())
 	if text, err := main.readOwner(); text != "" || err != nil {
 		t.Fatalf("missing OWNER.md in an unsafe directory: %q, %v", text, err)
 	}
@@ -361,7 +326,7 @@ func TestChildOwnerParentLookupFails(t *testing.T) {
 func TestOwnerNotRegularFileRejected(t *testing.T) {
 	h := newHarness(t)
 	main, child := ownerAgents(t, h)
-	os.Mkdir(h.cfg.OwnerFile(), 0o755)
+	os.Mkdir(h.mainOwner(), 0o755)
 	os.Mkdir(filepath.Join(child.ctrl, "OWNER.md"), 0o755)
 	for _, a := range []*agent{main, child} {
 		if _, err := a.readOwner(); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
@@ -372,11 +337,11 @@ func TestOwnerNotRegularFileRejected(t *testing.T) {
 
 func TestOwnerErrorFromEarlierDaemonCleared(t *testing.T) {
 	h := newHarness(t, done())
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	os.WriteFile(errorFile, []byte(MsgOwnerPrefix+"left by an earlier daemon\n"), 0o644)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("OWNER.md ERROR from before a restart not cleared")
 	}
@@ -384,11 +349,11 @@ func TestOwnerErrorFromEarlierDaemonCleared(t *testing.T) {
 
 func TestOwnerSuccessKeepsOtherErrors(t *testing.T) {
 	h := newHarness(t, done())
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	os.WriteFile(errorFile, []byte("something else\n"), 0o644)
-	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
-	h.waitEnds(h.cfg.Home, 1)
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
 	if !fileContains(errorFile, "something else") {
 		t.Fatal("an ERROR that is not an OWNER.md error was cleared")
 	}
@@ -398,11 +363,11 @@ func TestOwnerSuccessKeepsOtherErrors(t *testing.T) {
 // waiting, and returns the ERROR path once the problem is reported.
 func unsafeOwner(t *testing.T, h *harness) string {
 	t.Helper()
-	os.WriteFile(h.cfg.OwnerFile(), []byte("Be brief."), 0o644)
-	os.Chmod(h.cfg.OwnerFile(), 0o664)
-	h.drop(h.cfg.Home, "go.md", "go")
+	os.WriteFile(h.mainOwner(), []byte("Be brief."), 0o644)
+	os.Chmod(h.mainOwner(), 0o664)
 	h.start()
-	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	h.drop(h.mainHome, "go.md", "go")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	waitFor(t, "OWNER.md ERROR", func() bool { return fileContains(errorFile, MsgOwnerPrefix) })
 	return errorFile
 }
@@ -411,10 +376,10 @@ func TestOwnerErrorSurvivesConfigError(t *testing.T) {
 	h := newHarness(t)
 	errorFile := unsafeOwner(t, h)
 	want, _ := os.ReadFile(errorFile)
-	config := filepath.Join(h.cfg.Home, "config.json")
+	config := filepath.Join(h.mainCtrl, "config.json")
 	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
 	waitFor(t, "config ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
-	os.WriteFile(config, []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	os.WriteFile(config, []byte(testConfig), 0o644)
 	waitFor(t, "OWNER.md ERROR again", func() bool {
 		got, _ := os.ReadFile(errorFile)
 		return string(got) == string(want)

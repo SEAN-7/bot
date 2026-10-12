@@ -9,7 +9,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -55,14 +54,17 @@ func TestMain(m *testing.M) {
 const replayHeader = `{"models":[{"id":"replay-1","context_tokens":1000,"options":{"style":{"description":"s","values":["a","b"]}}}]}`
 
 type harness struct {
-	t      *testing.T
-	root   string
-	cfg    Config
-	script string
-	reqLog string
-	logs   *syncBuffer
-	cancel context.CancelFunc
-	done   chan error
+	t        *testing.T
+	root     string
+	cfg      Config
+	mainID   string // "main", root's child
+	mainCtrl string // root's control directory for main
+	mainHome string // main's home: the first pool user's, as main is admitted first
+	script   string
+	reqLog   string
+	logs     *syncBuffer
+	cancel   context.CancelFunc
+	done     chan error
 }
 
 func step(command string, totalTokens int) string {
@@ -77,15 +79,19 @@ func matchStep(match, command string, totalTokens int) string {
 
 func done() string { return `{"text":"done","usage":{"input_tokens":10}}` }
 
+const testConfig = `{"provider":"replay","model":"replay-1"}`
+
+// newHarness lays out a temporary root with root's control directory for
+// main; the daemon admits main from it, as any agent, once started.
 func newHarness(t *testing.T, steps ...string) *harness {
 	t.Helper()
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := layout.Layout{Home: filepath.Join(root, "home", "agent"), Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc", "agent"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
+	l := layout.Layout{Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc", "agent"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
 	tmp := filepath.Join(root, "tmp")
-	for _, dir := range []string{l.Plugins(), l.Credentials(), l.OwnerSpool(), l.Log, filepath.Join(l.Home, "inbox"), tmp} {
+	for _, dir := range []string{l.Plugins(), l.Credentials(), l.Lib, l.Log, tmp} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -93,21 +99,19 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	bin, _ := os.ReadFile(replayBin)
 	os.WriteFile(filepath.Join(l.Plugins(), "replay"), bin, 0o755)
 	h := &harness{t: t, root: root, script: filepath.Join(root, "script.jsonl"), reqLog: filepath.Join(root, "requests.jsonl"), logs: &syncBuffer{}}
+	h.mainID, h.mainHome = "main", l.PoolHome("agent-1")
 	h.setScript(steps...)
 	os.WriteFile(filepath.Join(l.Credentials(), "replay.env"), plugin.FormatEnv(map[string]string{"REPLAY_SCRIPT": h.script, "REPLAY_LOG": h.reqLog}), 0o600)
-	os.WriteFile(filepath.Join(l.Home, "README.md"), []byte("readme"), 0o644)
-	os.WriteFile(filepath.Join(l.Home, "TASK.md"), []byte("task"), 0o644)
-	os.WriteFile(filepath.Join(l.Home, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
 	self, _ := os.Executable()
 	h.cfg = DefaultConfig(self)
 	h.cfg.Layout = l
-	h.cfg.AgentUser, h.cfg.ProviderUser = "", ""
+	h.mainCtrl = topLevel(t, h, "main")
+	h.cfg.RootUser, h.cfg.ProviderUser = "", ""
 	// Every pool user resolves to the current user, so all helpers run as us.
-	h.cfg.PoolUsers = []string{"agent-1", "agent-2", "agent-3"}
+	h.cfg.PoolUsers = []string{"agent-1", "agent-2", "agent-3", "agent-4"}
 	h.cfg.LookupUser = func(string) (*syscall.Credential, error) { return nil, nil }
 	h.cfg.System = &fakeSystem{}
 	h.cfg.TmpDirs = []string{tmp}
-	h.cfg.OwnerUID = os.Getuid()
 	h.cfg.Poll = 10 * time.Millisecond
 	h.cfg.CommandTimeout = 2 * time.Second
 	h.cfg.RetryBase, h.cfg.RetryMax = 10*time.Millisecond, 50*time.Millisecond
@@ -115,6 +119,38 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg.Logger = log.New(io.MultiWriter(h.logs, testWriter{t}), "", 0)
 	t.Cleanup(h.stop)
 	return h
+}
+
+// writeConfig creates the control directory ctrl holding config.json, as a
+// parent would; config.json is what makes the daemon admit it.
+func writeConfig(t *testing.T, ctrl string) string {
+	t.Helper()
+	if err := os.MkdirAll(ctrl, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(testConfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return ctrl
+}
+
+// topLevel creates root's control directory for a top-level agent.
+func topLevel(t *testing.T, h *harness, name string) string {
+	t.Helper()
+	return writeConfig(t, filepath.Join(h.cfg.RootHome(), "agents", name))
+}
+
+// detachedMain builds root and main as the daemon would, without running
+// it, both with one helper running as us; d gets the root.
+func detachedMain(t *testing.T, h *harness, d *daemon) *agent {
+	t.Helper()
+	fs, err := fsio.Start(h.cfg.Self, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fs.Close() })
+	d.root = &agent{d: d, name: "root", home: h.cfg.RootHome(), user: h.cfg.RootUser, fs: fs, done: make(chan struct{})}
+	return &agent{d: d, id: h.mainID, name: h.mainID, home: h.mainHome, ctrl: h.mainCtrl, user: "agent-1", parent: d.root, fs: fs, done: make(chan struct{})}
 }
 
 // syncBuffer collects the daemon's log; tests read it while the daemon writes.
@@ -146,7 +182,16 @@ func (h *harness) setScript(steps ...string) {
 	os.WriteFile(h.script, []byte(strings.Join(append([]string{replayHeader}, steps...), "\n")+"\n"), 0o644)
 }
 
+// start runs the daemon and waits until main is admitted, so a test can
+// write into its home: admission clears a newly assigned home.
 func (h *harness) start() {
+	h.t.Helper()
+	h.run()
+	h.childHome(h.mainCtrl)
+}
+
+// run starts the daemon without waiting for anything.
+func (h *harness) run() {
 	ctx, cancel := context.WithCancel(context.Background())
 	h.cancel, h.done = cancel, make(chan error, 1)
 	go func() { h.done <- Run(ctx, h.cfg) }()
@@ -193,7 +238,7 @@ func readRecords(path string) []map[string]any {
 }
 
 // runs returns every run journal of the agent in order. Journals are keyed
-// by the agent's id: the main home, or a subagent's control directory.
+// by the agent's id, its path from root: main, main/agents/c.
 func (h *harness) runs(agentID string) []string {
 	matches, _ := filepath.Glob(filepath.Join(h.cfg.JournalDir(agentID), "*.jsonl"))
 	var runs []string
@@ -216,18 +261,6 @@ func (h *harness) childHome(ctrl string) string {
 		return home != ""
 	})
 	return home
-}
-
-// mainUser is the main agent's user name as the daemon reports it.
-func (h *harness) mainUser() string {
-	if h.cfg.AgentUser != "" {
-		return h.cfg.AgentUser
-	}
-	u, err := user.Current()
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	return u.Username
 }
 
 func ended(path string) bool {
@@ -330,6 +363,12 @@ func (h *harness) queue(dir, text string) string {
 	return path
 }
 
+// sendOwner queues a message from root to main, as `agent send` does.
+func (h *harness) sendOwner(text string) string {
+	h.t.Helper()
+	return h.spoolDown(h.cfg.RootHome(), "main", text)
+}
+
 // spoolDown queues a message from the agent at fromHome to its child name.
 func (h *harness) spoolDown(fromHome, name, text string) string {
 	h.t.Helper()
@@ -369,16 +408,16 @@ func sendMessageText(text string) string { return spoolCommand("~/.messages", te
 // sendDownText queues text for the agent's child name.
 func sendDownText(name, text string) string { return spoolCommand("~/.messages/agents/"+name, text) }
 
-// Replay match strings that tell a main agent's requests from a seeded
-// subagent's: the harness gives main this README, and a subagent's README
-// is the seed's.
+// Replay match strings that tell main's requests from a seeded subagent's:
+// markParent gives main this README, and a subagent's README is the seed's.
 const (
 	parentMark = "parent-readme"
 	childMark  = "These are starting suggestions"
 )
 
+// markParent replaces main's seeded README; call it once main is admitted.
 func (h *harness) markParent() {
-	os.WriteFile(filepath.Join(h.cfg.Home, "README.md"), []byte(parentMark), 0o644)
+	os.WriteFile(filepath.Join(h.mainHome, "README.md"), []byte(parentMark), 0o644)
 }
 
 func doneFor(mark string) string {

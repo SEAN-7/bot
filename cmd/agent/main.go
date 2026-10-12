@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -44,11 +43,6 @@ const usage = `Usage:
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "agent:", err)
-		// install.sh keeps the new release when a migration stopped part way.
-		var partial *daemon.PartialError
-		if errors.As(err, &partial) {
-			os.Exit(2)
-		}
 		os.Exit(1)
 	}
 }
@@ -147,19 +141,7 @@ func run(args []string) error {
 		}
 		return seed.Write(args[1], config)
 	case "_migrate":
-		// install.sh runs this with the daemon stopped, to move subagents of
-		// releases before 0.3.0 to pool users. Exit status 2: it failed with
-		// files already moved, so the previous release must not run.
-		if os.Geteuid() != 0 {
-			return errors.New("agent _migrate must run as root")
-		}
-		self, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		cfg := daemon.DefaultConfig(self)
-		cfg.Logger = log.New(os.Stdout, "", 0)
-		return daemon.Migrate(cfg)
+		return errors.New("agent _migrate is not available in this build")
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

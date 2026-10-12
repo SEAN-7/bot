@@ -19,7 +19,7 @@ import (
 
 func tempLayout(t *testing.T) layout.Layout {
 	root := t.TempDir()
-	return layout.Layout{Home: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
+	return layout.Layout{Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
 }
 
 func TestSendRequiresRoot(t *testing.T) {
@@ -31,16 +31,21 @@ func TestSendRequiresRoot(t *testing.T) {
 	}
 }
 
+// TestSendWritesSpool: root's message for main goes to root's spool for it.
 func TestSendWritesSpool(t *testing.T) {
 	l := tempLayout(t)
+	ctrl := filepath.Join(l.RootHome(), "agents", "main")
+	os.MkdirAll(ctrl, 0o700)
+	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte("{}"), 0o644)
 	if err := send(l, "hello agent", time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
-	entries, _ := os.ReadDir(l.OwnerSpool())
+	spool := filepath.Join(l.RootHome(), ".messages", "agents", "main")
+	entries, _ := os.ReadDir(spool)
 	if len(entries) != 1 || strings.HasPrefix(entries[0].Name(), ".") || !strings.HasSuffix(entries[0].Name(), ".md") {
 		t.Fatalf("spool %v", entries)
 	}
-	if data, _ := os.ReadFile(filepath.Join(l.OwnerSpool(), entries[0].Name())); string(data) != "hello agent\n" {
+	if data, _ := os.ReadFile(filepath.Join(spool, entries[0].Name())); string(data) != "hello agent" {
 		t.Fatalf("content %q", data)
 	}
 }
@@ -68,9 +73,10 @@ func TestFormat(t *testing.T) {
 
 func TestLogFollowsNewRuns(t *testing.T) {
 	l := tempLayout(t)
-	os.MkdirAll(l.Home, 0o755)
-	os.WriteFile(filepath.Join(l.Home, "ERROR"), []byte("Provider failing since now: 429\n"), 0o644)
-	dir := l.JournalDir(l.Home)
+	ctrl := filepath.Join(l.RootHome(), "agents", "main")
+	os.MkdirAll(ctrl, 0o755)
+	os.WriteFile(filepath.Join(ctrl, "ERROR"), []byte("Provider failing since now: 429\n"), 0o644)
+	dir := l.JournalDir("main")
 	first, _ := journal.Create(dir, time.Now().Add(-time.Minute), -1)
 	first.Record("assistant", map[string]any{"text": "first run"})
 	first.End("done")
@@ -83,7 +89,7 @@ func TestLogFollowsNewRuns(t *testing.T) {
 		second.Record("assistant", map[string]any{"text": "second run"})
 		second.End("done")
 	}()
-	if err := Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), &out); err != nil && err != context.DeadlineExceeded {
+	if err := Log(ctx, dir, filepath.Join(ctrl, "ERROR"), &out); err != nil && err != context.DeadlineExceeded {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -116,14 +122,15 @@ func TestDescribeReadsCacheAsNonRoot(t *testing.T) {
 
 func TestLogDoesNotFollowErrorSymlink(t *testing.T) {
 	l := tempLayout(t)
-	os.MkdirAll(l.Home, 0o755)
+	ctrl := filepath.Join(l.Homes, "agent-1", "agents", "c")
+	os.MkdirAll(ctrl, 0o755)
 	secret := filepath.Join(t.TempDir(), "secret")
 	os.WriteFile(secret, []byte("TOPSECRET"), 0o600)
-	os.Symlink(secret, filepath.Join(l.Home, "ERROR"))
+	os.Symlink(secret, filepath.Join(ctrl, "ERROR"))
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
-	Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), &out)
+	Log(ctx, l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), &out)
 	if strings.Contains(out.String(), "TOPSECRET") {
 		t.Fatal("agent log followed a symlinked ERROR")
 	}
@@ -131,14 +138,15 @@ func TestLogDoesNotFollowErrorSymlink(t *testing.T) {
 
 func TestLogDoesNotHangOnErrorFIFO(t *testing.T) {
 	l := tempLayout(t)
-	os.MkdirAll(l.Home, 0o755)
-	if err := syscall.Mkfifo(filepath.Join(l.Home, "ERROR"), 0o644); err != nil {
+	ctrl := filepath.Join(l.Homes, "agent-1", "agents", "c")
+	os.MkdirAll(ctrl, 0o755)
+	if err := syscall.Mkfifo(filepath.Join(ctrl, "ERROR"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
-	go func() { Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), io.Discard); close(done) }()
+	go func() { Log(ctx, l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), io.Discard); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

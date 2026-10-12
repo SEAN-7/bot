@@ -39,8 +39,9 @@ func TestMessageRejectsEmptyAndHuge(t *testing.T) {
 
 func TestMessagesShowsConversation(t *testing.T) {
 	l := tempLayout(t)
-	os.MkdirAll(l.Log, 0o755)
-	os.WriteFile(l.MessagesFile(), []byte(
+	path := l.ConversationFile("main")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, []byte(
 		`{"t":"2026-10-11T09:00:00Z","from":"owner","text":"set up telegram"}`+"\n"+
 			`{"t":"2026-10-11T09:05:00Z","from":"agent","agent":"main","text":"done\u001b[2J, token saved"}`+"\n"), 0o644)
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
@@ -48,11 +49,11 @@ func TestMessagesShowsConversation(t *testing.T) {
 	var out bytes.Buffer
 	go func() {
 		time.Sleep(200 * time.Millisecond)
-		f, _ := os.OpenFile(l.MessagesFile(), os.O_APPEND|os.O_WRONLY, 0)
+		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 		f.WriteString(`{"t":"2026-10-11T09:06:00Z","from":"agent","agent":"research","text":"report ready"}` + "\n")
 		f.Close()
 	}()
-	Messages(ctx, l.MessagesFile(), &out)
+	Messages(ctx, path, &out)
 	got := out.String()
 	for _, want := range []string{"owner: set up telegram", "main: done[2J, token saved", "research: report ready"} {
 		if !strings.Contains(got, want) {
@@ -162,34 +163,36 @@ func resolved(t *testing.T) string {
 	return dir
 }
 
-func TestTargetMainAndChild(t *testing.T) {
+func TestTargetRootAndDescendants(t *testing.T) {
 	l := tempLayout(t)
-	pool := resolved(t)
-	mustLink(t, pool, filepath.Join(l.Home, "agents", "research", "home"))
-	child := filepath.Join(l.Home, "agents", "research")
-	grand := child + "/agents/x"
+	mainCtrl := filepath.Join(l.RootHome(), "agents", "main")
+	mainHome, pool := resolved(t), resolved(t)
+	mustLink(t, mainHome, filepath.Join(mainCtrl, "home"))
+	mustLink(t, l.JournalDir("main"), filepath.Join(mainHome, "journal"))
+	os.MkdirAll(l.JournalDir("main"), 0o755)
+	mustLink(t, pool, filepath.Join(mainHome, "agents", "research", "home"))
+	child, grand := "main/agents/research", "main/agents/research/agents/x"
 
-	j, e, c, err := Target(l, true, "/root", "")
-	if err != nil || j != l.JournalDir(l.Home) || e != filepath.Join(l.Home, "ERROR") || c != l.MessagesFile() {
+	// Root names its agents under RootHome; with no name it means main.
+	for _, name := range []string{"", "main"} {
+		j, e, c, err := Target(l, true, "/root", name)
+		if err != nil || j != l.JournalDir("main") || e != filepath.Join(mainCtrl, "ERROR") || c != l.ConversationFile("main") {
+			t.Fatal(name, j, e, c, err)
+		}
+	}
+	j, e, c, err := Target(l, true, "/root", "main/agents/research")
+	if err != nil || j != l.JournalDir(child) || e != filepath.Join(mainHome, "agents", "research", "ERROR") || c != l.ConversationFile(child) {
 		t.Fatal(j, e, c, err)
 	}
-	j, e, c, err = Target(l, false, l.Home, "")
-	if err != nil || j != l.JournalDir(l.Home) || e != filepath.Join(l.Home, "ERROR") || c != l.MessagesFile() {
-		t.Fatal(j, e, c, err)
-	}
-	j, e, c, err = Target(l, true, "/root", "research")
-	if err != nil || j != l.JournalDir(child) || e != filepath.Join(child, "ERROR") || c != l.ConversationFile(child) {
-		t.Fatal(j, e, c, err)
-	}
-	if c != filepath.Join(l.JournalDir(child), "messages.jsonl") {
+	if c != filepath.Join(l.Log, "main", "agents", "research", "messages.jsonl") {
 		t.Fatal(c)
 	}
-	j, e, c, err = Target(l, true, "/root", "research/agents/x")
+	j, e, c, err = Target(l, true, "/root", "main/agents/research/agents/x")
 	if err != nil || j != l.JournalDir(grand) || e != filepath.Join(pool, "agents", "x", "ERROR") || c != l.ConversationFile(grand) {
 		t.Fatal(j, e, c, err)
 	}
-	// The main agent running as itself reaches the same places.
-	j, e, c, err = Target(l, false, l.Home, "research/agents/x")
+	// Main running as itself reaches the same places.
+	j, e, c, err = Target(l, false, mainHome, "research/agents/x")
 	if err != nil || j != l.JournalDir(grand) || e != filepath.Join(pool, "agents", "x", "ERROR") || c != l.ConversationFile(grand) {
 		t.Fatal(j, e, c, err)
 	}
@@ -198,7 +201,7 @@ func TestTargetMainAndChild(t *testing.T) {
 func TestTargetSubagentSelf(t *testing.T) {
 	l := tempLayout(t)
 	home := resolved(t)
-	jdir := l.JournalDir(l.Home + "/agents/research")
+	jdir := l.JournalDir("main/agents/research")
 	os.MkdirAll(jdir, 0o755)
 	mustLink(t, jdir, filepath.Join(home, "journal"))
 	want, _ := filepath.EvalSymlinks(jdir)
@@ -206,7 +209,7 @@ func TestTargetSubagentSelf(t *testing.T) {
 	if err != nil || j != want || e != "" || c != filepath.Join(want, "messages.jsonl") {
 		t.Fatal(j, e, c, err)
 	}
-	if !strings.HasSuffix(c, strings.TrimPrefix(l.ConversationFile(l.Home+"/agents/research"), l.Log)) {
+	if !strings.HasSuffix(c, strings.TrimPrefix(l.ConversationFile("main/agents/research"), l.Log)) {
 		t.Fatalf("conversation %s differs from the daemon's", c)
 	}
 }
@@ -214,7 +217,7 @@ func TestTargetSubagentSelf(t *testing.T) {
 func TestTargetSubagentChild(t *testing.T) {
 	l := tempLayout(t)
 	home := resolved(t)
-	self := l.Home + "/agents/research"
+	self := "main/agents/research"
 	jdir := l.JournalDir(self)
 	os.MkdirAll(jdir, 0o755)
 	mustLink(t, jdir, filepath.Join(home, "journal"))

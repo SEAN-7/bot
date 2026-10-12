@@ -1,5 +1,5 @@
-// Package daemon runs one loop per agent: the main agent and every subagent
-// admitted from a control directory below it, each with its own user.
+// Package daemon runs one loop per agent: every agent admitted from a
+// control directory in the tree below root, each with its own pool user.
 package daemon
 
 import (
@@ -27,15 +27,14 @@ import (
 
 type Config struct {
 	layout.Layout
-	AgentUser    string // runs commands and file access; "" = current user
+	RootUser     string // root's file access in RootHome; "" = current user
 	ProviderUser string // runs plugins; "" = current user
 	Self         string // this executable, re-run as the file helper
 
 	System     System                                    // root-only side effects; the real one by default
-	PoolUsers  []string                                  // subagent users; nil = the max_agents pool users that exist
+	PoolUsers  []string                                  // agent users; nil = the max_agents pool users that exist
 	LookupUser func(string) (*syscall.Credential, error) // resolves user names; osuser.Lookup by default
 	TmpDirs    []string                                  // shared directories swept when a user is reclaimed
-	OwnerUID   int                                       // owns the owner spool and OWNER.md
 
 	Poll           time.Duration
 	CommandTimeout time.Duration
@@ -57,13 +56,12 @@ type Config struct {
 func DefaultConfig(self string) Config {
 	return Config{
 		Layout:         layout.Default(),
-		AgentUser:      "agent",
+		RootUser:       "root",
 		ProviderUser:   "agent-provider",
 		Self:           self,
 		System:         newExecSystem(),
 		LookupUser:     osuser.Lookup,
 		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
-		OwnerUID:       0,
 		Poll:           time.Second,
 		CommandTimeout: 120 * time.Second,
 		RetryBase:      2 * time.Second,
@@ -89,15 +87,15 @@ var (
 type daemon struct {
 	cfg      Config
 	runner   *plugin.Runner
-	main     *agent
+	root     *agent // the top of the tree: no loop, never in agents
 	pool     *pool
-	selfUser string // the daemon's own user name, for a main agent run without changing identity
+	selfUser string // the daemon's own user name, for an agent run without changing identity
 
 	mu sync.Mutex
 	// stop is Run's context. Once it is cancelled the daemon drains: no new
 	// runs start, and active runs finish before it exits, up to DrainTimeout.
 	stop        context.Context
-	agents      map[string]*agent // by id, main included
+	agents      map[string]*agent // by id; root is not among them
 	delivered   *delivered
 	settings    layout.Settings // last good settings.json
 	settingsErr string
@@ -131,8 +129,8 @@ func Run(ctx context.Context, cfg Config) error {
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username
 	}
-	d.main = newMain(d)
-	mainCred, err := d.main.cred()
+	d.root = &agent{d: d, name: "root", home: cfg.RootHome(), user: cfg.RootUser, done: make(chan struct{})}
+	rootCred, err := d.root.cred()
 	if err != nil {
 		return err
 	}
@@ -143,29 +141,21 @@ func Run(ctx context.Context, cfg Config) error {
 	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
 	}
-	if d.main.fs, err = fsio.Start(cfg.Self, mainCred); err != nil {
+	if d.root.fs, err = fsio.Start(cfg.Self, rootCred); err != nil {
 		return err
 	}
 	defer d.closeHelpers()
-	if err := journal.Secure(cfg.JournalDir(d.main.id), d.main.gid()); err != nil {
-		cfg.Logger.Printf("main: journal permissions: %v", err)
-	}
-	d.secureOldLogs()
+	d.secureUnheldJournals(d.root.id)
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
-	d.deliverReleaseNotes()
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
-	d.mu.Lock()
-	d.start(d.main)
-	d.mu.Unlock()
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
 	for {
 		// Before reconcile, so a reclaim a crash interrupted is finished
 		// before the first admission, and one that failed is retried.
 		d.sweep()
-		d.deliverOwner()
 		d.reconcile()
 		d.collectMessages()
 		select {
@@ -177,28 +167,18 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-// secureOldLogs tightens what earlier releases left readable by every user,
-// before any subagent runs: the human's conversation, and the journals of
-// subagents that hold no user (removed, perhaps before users per subagent
-// existed), which go to the group of their nearest ancestor that holds one.
-// A held subagent's journals are set when it is admitted or reclaimed.
-// These paths are outside every agent home, so root opens them.
-func (d *daemon) secureOldLogs() {
-	if info, err := os.Lstat(d.cfg.MessagesFile()); err == nil && info.Mode().IsRegular() {
-		err = os.Chmod(d.cfg.MessagesFile(), 0o640)
-		if gid := d.main.gid(); err == nil && gid >= 0 {
-			err = os.Lchown(d.cfg.MessagesFile(), -1, gid)
-		}
-		if err != nil {
-			d.cfg.Logger.Printf("messages log permissions: %v", err)
-		}
-	}
-	d.secureUnheldJournals(d.main.id)
-}
-
-// secureUnheldJournals walks id's journal directory's subagents.
+// secureUnheldJournals tightens, before any agent runs, the journals of the
+// children of id ("" for root) that hold no user: removed, perhaps under an
+// earlier release that left them readable by every user. They go to the
+// group of their nearest ancestor that holds one, root's for a top-level
+// agent. Root's children's journal directories are the log root's; a held
+// agent's journals are set when it is admitted or reclaimed. These paths are
+// outside every agent home, so root opens them.
 func (d *daemon) secureUnheldJournals(id string) {
-	agents := filepath.Join(d.cfg.JournalDir(id), "agents")
+	agents := d.cfg.Log
+	if id != "" {
+		agents = filepath.Join(d.cfg.JournalDir(id), "agents")
+	}
 	items, err := os.ReadDir(agents)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
@@ -210,7 +190,7 @@ func (d *daemon) secureUnheldJournals(id string) {
 		if !item.IsDir() {
 			continue // not a journal directory; links are never followed
 		}
-		child := filepath.Join(id, "agents", item.Name())
+		child := joinID(id, item.Name())
 		if _, held := d.pool.entryOf(child); held {
 			d.secureUnheldJournals(child)
 			continue
@@ -226,8 +206,8 @@ func (d *daemon) secureUnheldJournals(id string) {
 }
 
 // poolUsers returns the configured pool users, or the max_agents pool users,
-// that exist, logging the ones that do not: subagents can only use the users
-// that resolve. The daemon and Migrate both use it, so they agree.
+// that exist, logging the ones that do not: agents can only use the users
+// that resolve.
 func poolUsers(cfg Config, maxAgents int) []string {
 	configured := cfg.PoolUsers
 	if configured == nil {
@@ -242,7 +222,7 @@ func poolUsers(cfg Config, maxAgents int) []string {
 		}
 	}
 	if len(missing) > 0 {
-		cfg.Logger.Printf("pool users not found: %s; subagents are limited to %d", strings.Join(missing, ", "), len(users))
+		cfg.Logger.Printf("pool users not found: %s; agents are limited to %d", strings.Join(missing, ", "), len(users))
 	}
 	return users
 }
@@ -267,13 +247,11 @@ func (d *daemon) shutdown() {
 	<-finished
 }
 
-// closeHelpers stops the helpers of every agent still in the tree.
+// closeHelpers stops root's helper and those of every agent still in the tree.
 func (d *daemon) closeHelpers() {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if _, ok := d.agents[d.main.id]; !ok {
-		d.main.fs.Close() // its loop never started
-	}
+	d.root.fs.Close()
 	for _, a := range d.agents {
 		a.fs.Close()
 	}
@@ -296,9 +274,10 @@ func (d *daemon) start(a *agent) {
 	}()
 }
 
-// reconcile walks the tree breadth-first from the main agent, scanning each
-// agent's home through its own helper. Known agents are kept, new control
-// directories are admitted, and agents no longer reached are removed.
+// reconcile walks the tree breadth-first from root, scanning each node's
+// home (RootHome for root) through its own helper. Known agents are kept,
+// new control directories are admitted, and agents no longer reached are
+// removed.
 func (d *daemon) reconcile() {
 	d.loadSettings()
 	d.mu.Lock()
@@ -307,9 +286,9 @@ func (d *daemon) reconcile() {
 		known[id] = a
 	}
 	d.mu.Unlock()
-	present := map[string]*agent{d.main.id: d.main}
+	present := map[string]*agent{}
 	seen, unscanned := map[string]bool{}, map[string]bool{}
-	tree := []*agent{d.main}
+	tree := []*agent{d.root}
 	for i := 0; i < len(tree); i++ {
 		a := tree[i]
 		ctrls, err := a.fs.Scan(a.home)
@@ -337,7 +316,7 @@ func (d *daemon) reconcile() {
 					continue
 				}
 			} else if controlDirGone(a, ctrl, c.ctrlID) {
-				// Created again since admission: the old subagent is
+				// Created again since admission: the old agent is
 				// removed below, and the new one admitted once its user
 				// is reclaimed.
 				continue
@@ -385,21 +364,21 @@ func (d *daemon) reconcile() {
 	d.remove(gone)
 }
 
-// childName names the subagent at ctrl, a control directory of parent, by
-// its path under main's agents/: research, research/agents/scraper.
-func childName(parent *agent, ctrl string) string {
-	if parent.parent == nil {
-		return filepath.Base(ctrl)
-	}
-	return parent.name + "/agents/" + filepath.Base(ctrl)
+// childID is the identity of the agent at ctrl, a control directory of
+// parent: its path from root, main or main/agents/research. It keys
+// journals, the pool and deliveries, so a child's journals sit inside its
+// parent's journal directory whichever pool user holds the parent.
+func (d *daemon) childID(parent *agent, ctrl string) string {
+	return joinID(parent.id, filepath.Base(ctrl))
 }
 
-// childID is a subagent's identity: its control directory's path as seen
-// from the main agent. It keys journals, the pool and deliveries, so a
-// grandchild's journals sit inside its parent's journal directory whichever
-// pool user holds the parent. For a direct child it is the control directory.
-func (d *daemon) childID(parent *agent, ctrl string) string {
-	return filepath.Join(d.cfg.Home, "agents", childName(parent, ctrl))
+// joinID is the id of the child name of the agent with id parent: root's id
+// is "", so its children's ids are their names.
+func joinID(parent, name string) string {
+	if parent == "" {
+		return name
+	}
+	return parent + "/agents/" + name
 }
 
 // validControlDir accepts only home/agents/NAME with one clean component.

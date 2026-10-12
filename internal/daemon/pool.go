@@ -23,7 +23,7 @@ type poolEntry struct {
 	State string `json:"state"`
 }
 
-// pool records which pool user each subagent holds. Every change is persisted
+// pool records which pool user each agent holds. Every change is persisted
 // before it is reported, so a restart sees the same assignments.
 type pool struct {
 	mu     sync.Mutex
@@ -68,7 +68,7 @@ func (p *pool) entryOf(agentID string) (poolEntry, bool) {
 	return poolEntry{}, false
 }
 
-// hasDescendants reports whether any subagent below agentID still holds a user.
+// hasDescendants reports whether any agent below agentID still holds a user.
 func (p *pool) hasDescendants(agentID string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()

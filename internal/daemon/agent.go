@@ -14,20 +14,20 @@ import (
 	"github.com/SEAN-7/bot/internal/proto"
 )
 
-// agent is one node of the tree: the main agent, or a subagent admitted
-// from a control directory under its parent's home.
+// agent is one node of the tree: root, or an agent admitted from a control
+// directory in its parent's home (RootHome for root's children).
 type agent struct {
 	d      *daemon
-	id     string // main home, or the control directory as seen from main: keys journals, pool and deliveries
-	name   string // "main", or the path under main's agents/ (research/agents/scraper)
-	home   string
-	ctrl   string // the real control directory, in the parent's home; "" for main
-	ctrlID fileID // ctrl as admitted: a directory created again there is another subagent
-	user   string // cfg.AgentUser for main, a pool user for subagents
-	parent *agent
+	id     string       // the path from root (main, main/agents/research), "" for root: keys journals, pool and deliveries
+	name   string       // the id, or "root", in the service log
+	home   string       // RootHome for root
+	ctrl   string       // the real control directory, in the parent's home; "" for root
+	ctrlID fileID       // ctrl as admitted: a directory created again there is another agent
+	user   string       // a pool user, or cfg.RootUser for root
+	parent *agent       // nil for root
 	fs     *fsio.Client // runs as user: every access to home goes through it
 	cancel context.CancelCauseFunc
-	done   chan struct{} // closed when loop returns
+	done   chan struct{} // closed when loop returns; root has no loop
 
 	failedConfig string // hash of a config.json already reported invalid
 	failedOwner  string // the OWNER.md error already logged
@@ -40,10 +40,6 @@ type agent struct {
 type fileID struct{ dev, ino uint64 }
 
 func idOf(e fsio.Entry) fileID { return fileID{e.Dev, e.Ino} }
-
-func newMain(d *daemon) *agent {
-	return &agent{d: d, id: d.cfg.Home, name: "main", home: d.cfg.Home, user: d.cfg.AgentUser, done: make(chan struct{})}
-}
 
 // cred looks the user up on every call, so a command started after a group
 // membership change runs with the new groups.
@@ -75,7 +71,7 @@ func credUID(cred *syscall.Credential) int {
 	return int(cred.Uid)
 }
 
-// userName is the agent's user name, the daemon's own for a main agent
+// userName is the agent's user name, the daemon's own for an agent
 // configured to run without changing identity.
 func (a *agent) userName() string {
 	if a.user != "" {
@@ -85,13 +81,8 @@ func (a *agent) userName() string {
 }
 
 // ctl is where the agent's config.json and ERROR live, and the helper that
-// reaches them: a subagent's control directory belongs to its parent.
-func (a *agent) ctl() (*fsio.Client, string) {
-	if a.parent != nil {
-		return a.parent.fs, a.ctrl
-	}
-	return a.fs, a.home
-}
+// reaches them: its control directory belongs to its parent.
+func (a *agent) ctl() (*fsio.Client, string) { return a.parent.fs, a.ctrl }
 
 // conversation is what a follow-up needs to continue a run: the frozen system
 // sections and messages, so the provider's cached prefix stays identical.
