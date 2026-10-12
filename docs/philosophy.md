@@ -4,10 +4,11 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## Three ideas
 
-1. **An agent is a directory**: `README.md`, `TASK.md`, `config.json` and
-   `inbox/`. The main agent is `/home/agent`; subagents live under any agent's
-   `agents/` folder with the same layout. Creating the directory and dropping
-   a file in its inbox starts one; removing the directory stops it.
+1. **An agent is a user and a directory**: a home holding `README.md`,
+   `TASK.md` and `inbox/`. The main agent is `agent` at `/home/agent`. A
+   parent creates a subagent by writing a control directory under its
+   `agents/` folder; the harness gives it a user from a pool and a home.
+   Removing the control directory stops it.
 2. **Everything that happens is a file in an inbox**: owner messages,
    schedules, heartbeats, child reports, crash recovery and context resets.
    There is no other event channel.
@@ -16,15 +17,19 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## What the harness guarantees
 
-- Commands run as the unprivileged `agent` user, with a timeout that kills
-  the whole process group.
-- The agent cannot read provider credentials or alter its journals.
-- All daemon file access inside agent directories happens with the agent's
-  privileges, so a planted symlink reaches nothing the agent couldn't.
-- Messages sent with `agent send` are labelled as the owner's; nothing the
-  agent writes can carry that label.
-- The owner's standing instructions in `/etc/agent/OWNER.md` reach every
-  agent first on every run, and no agent can change them.
+- Commands run as the agent's own unprivileged user, with a timeout that
+  kills the whole process group.
+- Every agent has one owner: the human for the main agent, its parent for a
+  subagent. Messages between them are labelled with their sender; nothing an
+  agent writes can carry another's label.
+- An agent's standing instructions in its `OWNER.md` reach it first on every
+  run, and it cannot change them.
+- A subagent cannot change its parent's or siblings' files; its ancestors
+  can always read its journals.
+- No agent can read provider credentials or alter journals or conversation
+  logs.
+- All daemon file access inside agent homes happens with an agent's
+  privileges, so a planted symlink reaches nothing that agent couldn't.
 - Every model message and command result is journaled; an interrupted run is
   reported to the agent on restart.
 - Context resets and interruptions lose nothing that is on disk.
