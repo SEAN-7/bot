@@ -30,6 +30,8 @@ type Entry struct {
 	// at the same path is a different one.
 	Dev uint64 `json:"dev"`
 	Ino uint64 `json:"ino"`
+	// Target is a symlink's target, from stat only.
+	Target string `json:"target,omitempty"`
 }
 
 type request struct {
@@ -141,6 +143,11 @@ func handle(req request) (response, error) {
 			return response{}, err
 		}
 		e := entry(info)
+		if e.Type == "symlink" {
+			if e.Target, err = os.Readlink(req.Path); err != nil {
+				return response{}, err
+			}
+		}
 		return response{Entry: &e}, nil
 	}
 	return response{}, errors.New("unknown operation " + req.Op)

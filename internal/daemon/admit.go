@@ -67,6 +67,12 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err != nil {
 		return fail("file helper", err)
 	}
+	if fresh && c.ownsHome() {
+		// pool.json lost this assignment, but the home's journal link
+		// shows it is this agent's own: keep it.
+		c.logf("keeping %s: its journal link is this agent's", c.home)
+		fresh = false
+	}
 	if fresh {
 		if err := c.fs.Clear(c.home); err != nil {
 			return fail("clear home", err)
@@ -99,6 +105,13 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	d.mu.Unlock()
 	c.logf("admitted as %s", user)
 	return c
+}
+
+// ownsHome reports whether a's home already holds a journal link to a's own
+// journal directory, which only a run of this agent creates.
+func (a *agent) ownsHome() bool {
+	e, err := a.fs.Stat(filepath.Join(a.home, "journal"))
+	return err == nil && e.Type == "symlink" && e.Target == a.d.cfg.JournalDir(a.id)
 }
 
 // repairHomeLink puts back the home link in a subagent's control directory

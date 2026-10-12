@@ -407,3 +407,15 @@ func TestEntryIdentity(t *testing.T) {
 		t.Fatal("identity not stable")
 	}
 }
+
+func TestStatSymlinkTarget(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	link := filepath.Join(dir, "l")
+	os.Symlink("/some/where", link)
+	if e, err := c.Stat(link); err != nil || e.Type != "symlink" || e.Target != "/some/where" {
+		t.Fatalf("got %+v %v", e, err)
+	}
+	if e, err := c.Stat(dir); err != nil || e.Target != "" {
+		t.Fatalf("got %+v %v", e, err)
+	}
+}

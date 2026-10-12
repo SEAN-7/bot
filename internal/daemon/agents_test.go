@@ -329,3 +329,34 @@ func TestMissingPoolUsersLogged(t *testing.T) {
 		t.Fatalf("logged %d times:\n%s", n, h.logs)
 	}
 }
+
+// Defence in depth against a lost pool.json: a freshly assigned home whose
+// journal link already points at this agent's journals is this agent's own
+// home, so it is not cleared. Another agent's journal link does not count.
+func TestLostPoolKeepsOwnHome(t *testing.T) {
+	h := newHarness(t, done())
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	h.drop(home, "task.md", "work")
+	h.waitEnds(ctrl, 1)
+	work := filepath.Join(home, "work.txt")
+	os.WriteFile(work, []byte("mine"), 0o644)
+	other := filepath.Join(h.cfg.Homes, "agent-2")
+	os.MkdirAll(other, 0o755)
+	os.WriteFile(filepath.Join(other, "stale.txt"), []byte("old"), 0o644)
+	os.Symlink(h.cfg.JournalDir(filepath.Join(h.cfg.Home, "agents", "x")), filepath.Join(other, "journal"))
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	makeChild(t, h, "d", true)
+	h.start()
+	waitFor(t, "both admitted", func() bool {
+		return strings.Count(h.logs.String(), "c: admitted as agent-1") == 2 && strings.Contains(h.logs.String(), "d: admitted as agent-2")
+	})
+	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
+		t.Fatalf("own home cleared: %q %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(other, "stale.txt")); !os.IsNotExist(err) {
+		t.Fatal("a home with another agent's journal link was not cleared")
+	}
+}

@@ -130,7 +130,8 @@ with type and size), `read` (path, byte limit), `write` (atomic:
 dot-prefixed temporary file then rename), `rename`, `mkdir`, `remove`,
 `removeall` (recursive, never following symlinks), `symlink` (create or
 replace), `stat` (size, mtime, type, mode, owner uid, device and inode,
-without following symlinks for the final component).
+and a symlink's target, without following symlinks for the final
+component).
 
 **Shell commands** run as the agent's user with credentials set in the child
 before exec, so the change of working directory happens with that user's
@@ -170,8 +171,11 @@ agent user cannot read another user's process environment.
   symlinks.
 - **Admission.** For a new control directory, the daemon takes the lowest
   free pool user and records the assignment in `pool.json`, then: sets the
-  members of that user's group to the subagent's ancestors; seeds its home
-  with the seed `README.md`, `TASK.md` and `inbox/` (through its helper);
+  members of that user's group to the subagent's ancestors; clears what a
+  previous holder left in a newly assigned home (unless its `journal` link
+  already points at this subagent's journal directory, so a lost
+  `pool.json` cannot wipe a live subagent) and seeds it with the seed
+  `README.md`, `TASK.md` and `inbox/` (through its helper);
   enables lingering; creates its journal directory; and writes the `home`
   symlink into the control directory (through the parent's helper). An
   agent's identity is its control directory's path as seen from the main
