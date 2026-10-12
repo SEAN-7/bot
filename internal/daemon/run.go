@@ -26,7 +26,7 @@ type recorder interface {
 }
 
 func (a *agent) logf(format string, args ...any) {
-	a.d.cfg.Logger.Printf("%s: %s", a.d.rel(a.dir), fmt.Sprintf(format, args...))
+	a.d.cfg.Logger.Printf("%s: %s", a.name, fmt.Sprintf(format, args...))
 }
 
 // errConfig marks a problem the agent must fix in config.json, as opposed
@@ -39,7 +39,8 @@ type errConfig struct{ error }
 func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
 	var describe proto.DescribeResponse
-	data, _, err := d.fs.Read(filepath.Join(a.dir, "config.json"), 1<<20)
+	ctl, dir := a.ctl()
+	data, _, err := ctl.Read(filepath.Join(dir, "config.json"), 1<<20)
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 	if err != nil {
@@ -81,8 +82,8 @@ func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse
 		text := MsgConfigPrefix + err.Error()
 		a.logf("not starting: %s", text)
 		a.setError(text)
-		if parent := d.parent(a.dir); parent != "" {
-			if err := d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, d.rel(a.dir), text)); err != nil {
+		if a.parent != nil {
+			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, a.name, text)); err != nil {
 				a.logf("notify parent: %v", err)
 			}
 		}
@@ -100,12 +101,12 @@ func (a *agent) run(ctx context.Context) {
 	if !ok {
 		return
 	}
-	jdir := a.d.cfg.JournalDir(a.dir)
+	jdir := a.d.cfg.JournalDir(a.id)
 	if !strings.HasPrefix(jdir, filepath.Clean(a.d.cfg.Log)+"/") {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
 		return
 	}
-	j, err := journal.Create(jdir, time.Now(), -1)
+	j, err := journal.Create(jdir, time.Now(), a.gid())
 	if err != nil {
 		a.logf("journal: %v", err)
 		return
@@ -126,7 +127,7 @@ func (a *agent) stopReason(ctx context.Context) string {
 }
 
 func (a *agent) readSegment(name string) string {
-	data, _, err := a.d.fs.Read(filepath.Join(a.dir, name), segmentLimit)
+	data, _, err := a.fs.Read(filepath.Join(a.home, name), segmentLimit)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ""
 	} else if err != nil {
@@ -138,12 +139,12 @@ func (a *agent) readSegment(name string) string {
 func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int) string {
 	d := a.d
 	conv := a.takeConversation(cfg)
-	start := map[string]any{"agent": a.dir, "config": cfg, "context_tokens": contextTokens}
+	start := map[string]any{"agent": a.id, "config": cfg, "context_tokens": contextTokens}
 	if conv != nil {
 		start["continues"] = conv.journal
 	}
 	j.Record("start", start)
-	if err := d.fs.Symlink(d.cfg.JournalDir(a.dir), filepath.Join(a.dir, "journal")); err != nil {
+	if err := a.fs.Symlink(d.cfg.JournalDir(a.id), filepath.Join(a.home, "journal")); err != nil {
 		a.logf("journal link: %v", err)
 	}
 	var system []proto.Segment
@@ -176,7 +177,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 				a.setError(text)
 				return "context-guard"
 			}
-			if err := d.writeNote(a.dir, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
+			if err := d.writeNote(a, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
 				a.logf("reset note: %v", err)
 			}
 			return "context"
@@ -200,7 +201,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 				a.setError(text)
 				return "context-guard"
 			case used*100 >= 95*contextTokens:
-				if err := d.writeNote(a.dir, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
+				if err := d.writeNote(a, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
 					a.logf("reset note: %v", err)
 				}
 				return "context"
@@ -217,9 +218,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			a.conv = &conversation{cfg: cfg, system: system, messages: messages, calls: calls + n, warned: warned, ended: time.Now(), journal: j.Path()}
 			return "done"
 		}
-		result, runErr := shell.Run(ctx, *msg.Command, shell.Options{
-			Dir: a.dir, Home: a.dir, Env: shell.Env(a.dir, d.agentName, d.agentUID), User: d.agentCred, Timeout: d.cfg.CommandTimeout,
-		})
+		result, runErr := a.command(ctx, *msg.Command)
 		content, saved := a.toolContent(runID, n, result, runErr)
 		j.Record("result", map[string]any{"call_id": callID, "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content, "full_output": saved})
 		if ctx.Err() != nil {
@@ -298,19 +297,35 @@ const (
 	errGuardPrefix    = "Context is over"
 )
 
+// setError writes the agent's ERROR beside its config.json, where its owner
+// sees it: ~/ERROR for main, the control directory for a subagent.
 func (a *agent) setError(text string) {
-	if err := a.d.fs.Write(filepath.Join(a.dir, "ERROR"), []byte(text+"\n")); err != nil {
+	ctl, dir := a.ctl()
+	if err := ctl.Write(filepath.Join(dir, "ERROR"), []byte(text+"\n")); err != nil {
 		a.logf("write ERROR: %v", err)
 	}
 }
 
-// clearError removes ~/ERROR if it holds an error of the given kind.
+// clearError removes the agent's ERROR if it holds an error of the given kind.
 func (a *agent) clearError(prefix string) {
-	path := filepath.Join(a.dir, "ERROR")
-	data, _, err := a.d.fs.Read(path, 4096)
+	ctl, dir := a.ctl()
+	path := filepath.Join(dir, "ERROR")
+	data, _, err := ctl.Read(path, 4096)
 	if err == nil && strings.HasPrefix(string(data), prefix) {
-		a.d.fs.Remove(path)
+		ctl.Remove(path)
 	}
+}
+
+// command runs one model command in the agent's home as its user, looked up
+// now so that current group memberships apply.
+func (a *agent) command(ctx context.Context, command string) (shell.Result, error) {
+	cred, err := a.cred()
+	if err != nil {
+		return shell.Result{}, fmt.Errorf("look up user %s: %w", a.userName(), err)
+	}
+	return shell.Run(ctx, command, shell.Options{
+		Dir: a.home, Home: a.home, Env: shell.Env(a.home, a.userName(), credUID(cred)), User: cred, Timeout: a.d.cfg.CommandTimeout,
+	})
 }
 
 func seconds(d time.Duration) string {
@@ -335,10 +350,10 @@ func (a *agent) toolContent(runID string, n int, r shell.Result, err error) (str
 	if !clipped {
 		return content, ""
 	}
-	dir := filepath.Join(a.dir, ".outputs")
+	dir := filepath.Join(a.home, ".outputs")
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", runID, n))
-	if err := a.d.fs.Mkdir(dir); err == nil {
-		err = a.d.fs.Write(path, []byte(r.Output))
+	if err := a.fs.Mkdir(dir); err == nil {
+		err = a.fs.Write(path, []byte(r.Output))
 	}
 	if err != nil {
 		a.logf("save output: %v", err)

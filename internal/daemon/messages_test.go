@@ -47,9 +47,9 @@ func TestAgentMessageLogged(t *testing.T) {
 
 func TestSubagentMessageLabelled(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", sendMessage, 100), `{"match":"inbox/processed/task.md","text":"done"}`)
-	child := makeChild(t, h, "research", true)
-	h.drop(child, "task.md", "work")
+	ctrl := makeChild(t, h, "research", true)
 	h.start()
+	h.drop(h.childHome(ctrl), "task.md", "work")
 	waitFor(t, "subagent message", func() bool { return hasMessage(h, "agent", "research", "tests pass") })
 }
 

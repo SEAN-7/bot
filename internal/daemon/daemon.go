@@ -1,20 +1,20 @@
-// Package daemon runs one loop per agent directory under the main agent.
+// Package daemon runs one loop per agent: the main agent and every subagent
+// admitted from a control directory below it, each with its own user.
 package daemon
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"os/user"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
+	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
@@ -76,65 +76,80 @@ func DefaultConfig(self string) Config {
 	}
 }
 
-// errRemoved cancels an agent whose directory disappeared, as opposed to a
-// daemon shutdown, which leaves the run unclean for crash recovery.
+// errRemoved cancels an agent whose control directory disappeared, as
+// opposed to a daemon shutdown, which leaves the run unclean for crash recovery.
 var (
 	errRemoved = errors.New("agent directory removed")
-	errLimited = errors.New("agent limit reached")
 	errDrained = errors.New("drain deadline reached")
 )
 
 type daemon struct {
-	cfg       Config
-	fs        *fsio.Client
-	runner    *plugin.Runner
-	agentCred *syscall.Credential
-	agentName string
-	agentUID  int
+	cfg      Config
+	runner   *plugin.Runner
+	main     *agent
+	pool     *pool
+	selfUser string // the daemon's own user name, for a main agent run without changing identity
 
 	mu sync.Mutex
 	// stop is Run's context. Once it is cancelled the daemon drains: no new
 	// runs start, and active runs finish before it exits, up to DrainTimeout.
 	stop        context.Context
-	agents      map[string]*agent
+	agents      map[string]*agent // by id, main included
 	delivered   *delivered
 	settings    layout.Settings // last good settings.json
 	settingsErr string
-	limited     map[string]bool // agents held back by max_agents, already reported
+	limited     map[string]bool   // control directories held back by max_agents, already reported
+	admitErrs   map[string]string // the last admission error logged per control directory
 	wg          sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, stop: ctx}
-	d.settings, _ = layout.LoadSettings("")
-	var err error
-	if d.agentCred, err = osuser.Lookup(cfg.AgentUser); err != nil {
-		return err
+	syscall.Umask(0o022)
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, stop: ctx}
+	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
+	if u, err := user.Current(); err == nil {
+		d.selfUser = u.Username
 	}
-	providerCred, err := osuser.Lookup(cfg.ProviderUser)
+	d.main = newMain(d)
+	mainCred, err := d.main.cred()
 	if err != nil {
 		return err
 	}
-	d.agentName, d.agentUID = cfg.AgentUser, os.Getuid()
-	if d.agentCred != nil {
-		d.agentUID = int(d.agentCred.Uid)
-	} else if u, err := user.Current(); err == nil {
-		d.agentName = u.Username
-	}
-	if d.fs, err = fsio.Start(cfg.Self, d.agentCred); err != nil {
+	providerCred, err := cfg.LookupUser(cfg.ProviderUser)
+	if err != nil {
 		return err
 	}
-	defer d.fs.Close()
+	users := cfg.PoolUsers
+	if users == nil {
+		for _, u := range layout.PoolUsers(d.settings.MaxAgents) {
+			if _, err := cfg.LookupUser(u); err == nil {
+				users = append(users, u)
+			}
+		}
+	}
+	if d.pool, err = loadPool(cfg.PoolFile(), users); err != nil {
+		return err
+	}
+	if d.main.fs, err = fsio.Start(cfg.Self, mainCred); err != nil {
+		return err
+	}
+	defer d.closeHelpers()
+	if err := journal.Secure(cfg.JournalDir(d.main.id), d.main.gid()); err != nil {
+		cfg.Logger.Printf("main: journal permissions: %v", err)
+	}
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
 	d.deliverReleaseNotes()
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
+	d.mu.Lock()
+	d.start(d.main)
+	d.mu.Unlock()
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
 	for {
 		d.deliverOwner()
-		d.collectMessages(d.reconcile(ctx))
+		d.collectMessages(d.reconcile())
 		select {
 		case <-ctx.Done():
 			d.shutdown()
@@ -164,143 +179,137 @@ func (d *daemon) shutdown() {
 	<-finished
 }
 
+// closeHelpers stops the helpers of every agent still in the tree.
+func (d *daemon) closeHelpers() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if _, ok := d.agents[d.main.id]; !ok {
+		d.main.fs.Close() // its loop never started
+	}
+	for _, a := range d.agents {
+		a.fs.Close()
+	}
+}
+
 // draining is true from the moment a stop is requested, with no poll in between.
 func (d *daemon) draining() bool { return d.stop.Err() != nil }
 
-// reconcile starts loops for new agent directories and stops removed ones,
-// returning the admitted agents.
-func (d *daemon) reconcile(ctx context.Context) []string {
-	dirs, err := d.fs.Scan(d.cfg.Home)
-	if err != nil {
-		d.cfg.Logger.Printf("scan %s: %v", d.cfg.Home, err)
-		return nil
+// start runs a's loop until it is cancelled or the daemon stops. The caller
+// holds d.mu.
+func (d *daemon) start(a *agent) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	a.cancel = cancel
+	d.agents[a.id] = a
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer close(a.done)
+		a.loop(ctx)
+	}()
+}
+
+// reconcile walks the tree breadth-first from the main agent, scanning each
+// agent's home through its own helper. Known agents are kept, new control
+// directories are admitted, and agents no longer reached are stopped. It
+// returns the agents in the tree.
+func (d *daemon) reconcile() []*agent {
+	d.loadSettings()
+	d.mu.Lock()
+	known := make(map[string]*agent, len(d.agents))
+	for id, a := range d.agents {
+		known[id] = a
 	}
-	var valid []string
-	for _, dir := range dirs {
-		if validAgentDir(d.cfg.Home, dir) {
-			valid = append(valid, dir)
-		} else {
-			d.cfg.Logger.Printf("ignoring unexpected agent path %q", dir)
+	d.mu.Unlock()
+	present := map[string]*agent{d.main.id: d.main}
+	seen, unscanned := map[string]bool{}, map[string]bool{}
+	tree := []*agent{d.main}
+	for i := 0; i < len(tree); i++ {
+		a := tree[i]
+		ctrls, err := a.fs.Scan(a.home)
+		if err != nil {
+			// Keep what is running rather than treat a failing helper as removal.
+			a.logf("scan: %v", err)
+			unscanned[a.home] = true
+			for _, c := range known {
+				if c.parent == a {
+					present[c.id] = c
+					tree = append(tree, c)
+				}
+			}
+			continue
+		}
+		for _, ctrl := range ctrls {
+			if !validControlDir(a.home, ctrl) {
+				a.logf("ignoring unexpected agent path %q", ctrl)
+				continue
+			}
+			seen[ctrl] = true
+			c := known[ctrl]
+			if c == nil {
+				if c = d.admit(a, ctrl); c == nil {
+					continue
+				}
+			}
+			present[ctrl] = c
+			tree = append(tree, c)
 		}
 	}
-	exists, present := map[string]bool{}, map[string]bool{}
-	for _, dir := range valid {
-		exists[dir] = true
+	// Forget what was reported for directories that are gone, so they are
+	// reported again if they come back.
+	vanished := func(ctrl string) bool { return !seen[ctrl] && !unscanned[filepath.Dir(filepath.Dir(ctrl))] }
+	for ctrl := range d.limited {
+		if vanished(ctrl) {
+			delete(d.limited, ctrl)
+		}
 	}
-	admitted := d.admit(valid)
-	for _, dir := range admitted {
-		present[dir] = true
+	for ctrl := range d.admitErrs {
+		if vanished(ctrl) {
+			delete(d.admitErrs, ctrl)
+		}
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	for dir, a := range d.agents {
-		if !present[dir] {
-			if exists[dir] {
-				a.cancel(errLimited) // left unclean: resumed when admitted again
-			} else {
-				a.cancel(errRemoved)
+	var gone []*agent
+	for id, a := range d.agents {
+		if present[id] == nil {
+			a.cancel(errRemoved)
+			delete(d.agents, id)
+			gone = append(gone, a)
+		}
+	}
+	d.mu.Unlock()
+	if len(gone) > 0 {
+		// A removed child may still use its removed parent's helper (its
+		// control directory), so close them only once all have stopped.
+		go func() {
+			for _, a := range gone {
+				<-a.done
 			}
-			delete(d.agents, dir)
-		}
+			for _, a := range gone {
+				a.fs.Close()
+			}
+		}()
 	}
-	for dir := range present {
-		if _, ok := d.agents[dir]; !ok && ctx.Err() == nil {
-			a := newAgent(d, dir)
-			actx, cancel := context.WithCancelCause(context.Background())
-			a.cancel = cancel
-			d.agents[dir] = a
-			d.wg.Add(1)
-			go func() {
-				defer d.wg.Done()
-				a.loop(actx)
-			}()
-		}
-	}
-	return admitted
+	return tree
 }
 
-// validAgentDir accepts home and home/agents/NAME[/agents/NAME...] with clean
-// components. Scan results come from a process the agent user could tamper
-// with, and journal paths are derived from them.
-func validAgentDir(home, dir string) bool {
-	if dir == home {
-		return true
-	}
-	if filepath.Clean(dir) != dir || !strings.HasPrefix(dir, home+"/") {
-		return false
-	}
-	parts := strings.Split(strings.TrimPrefix(dir, home+"/"), "/")
-	if len(parts)%2 != 0 {
-		return false
-	}
-	for i, part := range parts {
-		if i%2 == 0 && part != "agents" || part == "" || part == "." || part == ".." {
-			return false
-		}
-	}
-	return true
+// validControlDir accepts only home/agents/NAME with one clean component.
+// Scan results come from a process the agent user could tamper with, and
+// journal paths are derived from them.
+func validControlDir(home, dir string) bool {
+	base := filepath.Base(dir)
+	return base != "." && base != ".." && base != "/" && dir == filepath.Join(home, "agents", base)
 }
 
-// admit applies max_agents in scan order. Each excess agent gets an ERROR
-// and its parent one note; both clear when the agent is admitted later.
-func (d *daemon) admit(dirs []string) []string {
+// loadSettings rereads settings.json, keeping the last good settings when it
+// is malformed: a half-written file must not stop agents.
+func (d *daemon) loadSettings() {
 	settings, err := layout.LoadSettings(d.cfg.SettingsFile())
 	if err != nil {
-		// Keep the last good settings: a half-written file must not stop agents.
 		if msg := err.Error(); msg != d.settingsErr {
 			d.settingsErr = msg
 			d.cfg.Logger.Printf("settings.json: %v; keeping max_agents=%d", err, d.settings.MaxAgents)
 		}
-		settings = d.settings
-	} else {
-		d.settings, d.settingsErr = settings, ""
+		return
 	}
-	if len(dirs) <= settings.MaxAgents {
-		d.clearLimited(dirs)
-		return dirs
-	}
-	admitted, excess := dirs[:settings.MaxAgents], dirs[settings.MaxAgents:]
-	d.clearLimited(admitted)
-	for _, dir := range excess {
-		if d.limited[dir] {
-			continue
-		}
-		d.limited[dir] = true
-		d.cfg.Logger.Printf("%s: not started: agent limit reached (max_agents=%d)", d.rel(dir), settings.MaxAgents)
-		if err := d.fs.Write(filepath.Join(dir, "ERROR"), []byte(fmt.Sprintf(MsgLimitFmt, settings.MaxAgents)+"\n")); err != nil {
-			d.cfg.Logger.Printf("%s: write ERROR: %v", d.rel(dir), err)
-		}
-		if parent := d.parent(dir); parent != "" {
-			d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgLimitParentFmt, d.rel(dir), settings.MaxAgents))
-		}
-	}
-	return admitted
-}
-
-func (d *daemon) clearLimited(dirs []string) {
-	for _, dir := range dirs {
-		if d.limited[dir] {
-			delete(d.limited, dir)
-			path := filepath.Join(dir, "ERROR")
-			if data, _, err := d.fs.Read(path, 4096); err == nil && strings.HasPrefix(string(data), "Agent limit reached") {
-				d.fs.Remove(path)
-			}
-		}
-	}
-}
-
-// rel names an agent for logs and notes, relative to the main agent.
-func (d *daemon) rel(dir string) string {
-	if dir == d.cfg.Home {
-		return "main"
-	}
-	return strings.TrimPrefix(dir, filepath.Join(d.cfg.Home, "agents")+"/")
-}
-
-// parent returns the agent that owns dir's agents/ folder, or "" for main.
-func (d *daemon) parent(dir string) string {
-	if dir == d.cfg.Home {
-		return ""
-	}
-	return filepath.Dir(filepath.Dir(dir))
+	d.settings, d.settingsErr = settings, ""
 }

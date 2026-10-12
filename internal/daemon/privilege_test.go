@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
 )
 
@@ -74,6 +75,7 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	puid, _ := strconv.Atoi(pu.Uid)
 	os.Chown(replayDir, puid, pgid)
 	h.cfg.AgentUser, h.cfg.ProviderUser = name, provider
+	h.cfg.LookupUser = osuser.Lookup
 	return h, name
 }
 

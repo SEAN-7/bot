@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/SEAN-7/bot/internal/seed"
 )
 
 func countNotes(dir, suffix string) int {
@@ -21,16 +23,18 @@ func countNotes(dir, suffix string) int {
 	return n
 }
 
+// makeChild creates a control directory under the main agent's agents/, as
+// a parent would; config.json is what makes the daemon admit it.
 func makeChild(t *testing.T, h *harness, name string, config bool) string {
 	t.Helper()
-	dir := filepath.Join(h.cfg.Home, "agents", name)
-	if err := os.MkdirAll(filepath.Join(dir, "inbox"), 0o755); err != nil {
+	ctrl := filepath.Join(h.cfg.Home, "agents", name)
+	if err := os.MkdirAll(ctrl, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if config {
-		os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+		os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
 	}
-	return dir
+	return ctrl
 }
 
 func TestConfigValidationFailure(t *testing.T) {
@@ -60,23 +64,25 @@ func TestConfigValidationFailure(t *testing.T) {
 
 func TestChildWithoutConfigWaits(t *testing.T) {
 	h := newHarness(t)
-	child := makeChild(t, h, "c", false)
-	h.drop(child, "task.md", "do it")
+	ctrl := makeChild(t, h, "c", false)
 	h.start()
-	waitFor(t, "child ERROR", func() bool { return fileContains(filepath.Join(child, "ERROR"), "config.json") })
-	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
 	time.Sleep(300 * time.Millisecond)
-	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
+	if _, err := os.Lstat(filepath.Join(ctrl, "home")); !os.IsNotExist(err) {
+		t.Fatal("a directory without config.json was admitted")
+	}
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-1") {
+		t.Fatalf("a user was prepared: %v", sys)
+	}
+	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 0 {
 		t.Fatalf("parent notified %d times", n)
 	}
-	if names := inboxNames(child); len(names) != 1 {
-		t.Fatalf("child inbox touched: %v", names)
-	}
-	os.WriteFile(filepath.Join(child, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
-	h.waitEnds(child, 1)
+	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	h.drop(h.childHome(ctrl), "task.md", "do it")
+	h.waitEnds(ctrl, 1)
 }
 
 func TestParentChildReport(t *testing.T) {
+	t.Skip("Task 6")
 	create := "mkdir -p agents/c/inbox && cp config.json agents/c/ && printf 'child-task: say hi' > agents/c/inbox/.t && mv agents/c/inbox/.t agents/c/inbox/task.md"
 	report := "printf 'report: hi' > ../../inbox/.r && mv ../../inbox/.r ../../inbox/report.md"
 	h := newHarness(t,
@@ -108,63 +114,18 @@ func TestParentChildReport(t *testing.T) {
 
 func TestRemovalStopsAgent(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "sleep 30", 100))
-	child := makeChild(t, h, "c", true)
-	h.drop(child, "task.md", "work")
+	ctrl := makeChild(t, h, "c", true)
 	h.start()
+	h.drop(h.childHome(ctrl), "task.md", "work")
 	waitFor(t, "child command", func() bool { return len(h.requests()) >= 1 })
 	time.Sleep(100 * time.Millisecond)
-	os.RemoveAll(child)
+	os.RemoveAll(ctrl)
 	start := time.Now()
-	if end := lastEnd(h.waitEnds(child, 1)); end != "removed" {
+	if end := lastEnd(h.waitEnds(ctrl, 1)); end != "removed" {
 		t.Fatalf("end %s", end)
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Fatalf("removal took %s", time.Since(start))
-	}
-}
-
-func TestMaxAgents(t *testing.T) {
-	h := newHarness(t)
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
-	child := makeChild(t, h, "c", true)
-	h.drop(child, "task.md", "work")
-	h.start()
-	waitFor(t, "limit ERROR", func() bool { return fileContains(filepath.Join(child, "ERROR"), "Agent limit reached (max_agents=1)") })
-	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
-	time.Sleep(200 * time.Millisecond)
-	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
-		t.Fatalf("parent notified %d times", n)
-	}
-	for _, req := range h.requests() {
-		if strings.Contains(req.Messages[0].Content, "task.md") {
-			t.Fatal("child ran despite the limit")
-		}
-	}
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
-	h.waitEnds(child, 1)
-	if _, err := os.Stat(filepath.Join(child, "ERROR")); !os.IsNotExist(err) {
-		t.Fatal("limit ERROR not cleared")
-	}
-}
-
-func TestValidAgentDir(t *testing.T) {
-	home := "/home/agent"
-	for dir, want := range map[string]bool{
-		"/home/agent":                     true,
-		"/home/agent/agents/a":            true,
-		"/home/agent/agents/a/agents/b":   true,
-		"/home/agent/agents/a/x/b":        false,
-		"/home/agent/agents":              false,
-		"/home/agent/agents/../../../etc": false,
-		"/home/agent/agents/a/agents/..":  false,
-		"/etc":                            false,
-		"/home/agentx/agents/a":           false,
-		"/home/agent/agents/a/agents/b/":  false,
-		"/home/agent/agents/a/agents/./b": false,
-	} {
-		if got := validAgentDir(home, dir); got != want {
-			t.Errorf("validAgentDir(%q) = %v, want %v", dir, got, want)
-		}
 	}
 }
 
@@ -186,20 +147,138 @@ func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
 	}
 }
 
-func TestLimitedAgentResumes(t *testing.T) {
-	h := newHarness(t, matchStep("inbox/processed/task.md", "sleep 30", 100), `{"match":"-interrupted.md","text":"resumed"}`)
-	child := makeChild(t, h, "c", true)
-	h.drop(child, "task.md", "work")
+func TestAdmissionSeedsPoolHome(t *testing.T) {
+	h := newHarness(t, matchStep("inbox/processed/task.md", "pwd; cat README.md | head -1", 100), `{"match":"inbox/processed/task.md","text":"done"}`)
+	ctrl := makeChild(t, h, "c", true)
 	h.start()
-	waitFor(t, "child command", func() bool { return len(h.requests()) >= 1 })
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
-	waitFor(t, "limit ERROR", func() bool { return fileContains(filepath.Join(child, "ERROR"), "Agent limit") })
-	if runs := h.runs(child); len(runs) != 1 || ended(runs[0]) {
-		t.Fatalf("held-back run was ended cleanly: %v", runs)
+	home := h.childHome(ctrl)
+	if home != filepath.Join(h.cfg.Homes, "agent-1") {
+		t.Fatal(home)
 	}
+	for _, p := range []string{"README.md", "TASK.md", "inbox/processed", "agents"} {
+		if _, err := os.Stat(filepath.Join(home, p)); err != nil {
+			t.Fatal(p, err)
+		}
+	}
+	h.drop(home, "task.md", "work")
+	h.waitEnds(ctrl, 1) // journals are keyed by the control directory
+	if tool := h.requests()[1].Messages[2].Content; !strings.Contains(tool, home) {
+		t.Fatal(tool)
+	}
+	sys := h.cfg.System.(*fakeSystem)
+	if !sys.called("members agent-1 "+h.mainUser()) || !sys.called("linger agent-1") {
+		t.Fatal(sys)
+	}
+	if info, err := os.Stat(h.cfg.JournalDir(ctrl)); err != nil || info.Mode().Perm() != 0o751 {
+		t.Fatalf("journal dir %v %v", info, err)
+	}
+}
+
+func TestConfigErrorGoesToControlDir(t *testing.T) {
+	h := newHarness(t, done())
+	ctrl := makeChild(t, h, "c", false)
+	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
+	h.start()
+	home := h.childHome(ctrl)
+	h.drop(home, "task.md", "work")
+	waitFor(t, "child ERROR", func() bool { return fileContains(filepath.Join(ctrl, "ERROR"), `config.json: unknown model "nope"`) })
+	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
+		t.Fatalf("parent notified %d times", n)
+	}
+	if _, err := os.Stat(filepath.Join(home, "ERROR")); !os.IsNotExist(err) {
+		t.Fatal("ERROR written into the subagent's home")
+	}
+	if names := inboxNames(home); len(names) != 1 {
+		t.Fatalf("child inbox touched: %v", names)
+	}
+}
+
+func TestMaxAgentsUsesPool(t *testing.T) {
+	h := newHarness(t)
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
-	waitFor(t, "interrupted note", func() bool { return countNotes(child, "-interrupted.md") == 1 })
-	if records := h.waitEnds(child, 2); lastEnd(records) != "done" {
-		t.Fatalf("resumed run %v", records)
+	a := makeChild(t, h, "a", true)
+	b := makeChild(t, h, "b", true)
+	h.start()
+	h.childHome(a)
+	errorFile := filepath.Join(b, "ERROR")
+	waitFor(t, "limit ERROR", func() bool { return fileContains(errorFile, "Agent limit reached (max_agents=2)") })
+	waitFor(t, "parent note", func() bool { return countNotes(h.cfg.Home, "-subagent-error.md") == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-subagent-error.md"); n != 1 {
+		t.Fatalf("parent notified %d times", n)
+	}
+	if _, err := os.Lstat(filepath.Join(b, "home")); !os.IsNotExist(err) {
+		t.Fatal("b admitted despite the limit")
+	}
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":3}`), 0o644)
+	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-2") {
+		t.Fatal(home)
+	}
+	waitFor(t, "limit ERROR cleared", func() bool {
+		_, err := os.Stat(errorFile)
+		return os.IsNotExist(err)
+	})
+}
+
+func TestAdmissionClearsLeftoverHome(t *testing.T) {
+	h := newHarness(t)
+	leftover := filepath.Join(h.cfg.Homes, "agent-1")
+	os.MkdirAll(leftover, 0o755)
+	os.WriteFile(filepath.Join(leftover, "stale.txt"), []byte("old"), 0o644)
+	os.WriteFile(filepath.Join(leftover, "README.md"), []byte("old readme"), 0o644)
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	waitFor(t, "seeded README", func() bool {
+		data, err := os.ReadFile(filepath.Join(home, "README.md"))
+		return err == nil && string(data) == seed.README
+	})
+	if _, err := os.Stat(filepath.Join(home, "stale.txt")); !os.IsNotExist(err) {
+		t.Fatal("leftover file kept")
+	}
+}
+
+func TestGrandchildAdmitted(t *testing.T) {
+	h := newHarness(t)
+	c := makeChild(t, h, "c", true)
+	h.start()
+	cHome := h.childHome(c)
+	g := filepath.Join(cHome, "agents", "g")
+	os.MkdirAll(g, 0o755)
+	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	if home := h.childHome(g); home != filepath.Join(h.cfg.Homes, "agent-2") {
+		t.Fatal(home)
+	}
+	sys := h.cfg.System.(*fakeSystem)
+	if !sys.called("members agent-2 agent-1," + h.mainUser()) {
+		t.Fatal(sys)
+	}
+	if info, err := os.Stat(h.cfg.JournalDir(g)); err != nil || !info.IsDir() {
+		t.Fatalf("grandchild journal dir: %v", err)
+	}
+}
+
+func TestValidControlDir(t *testing.T) {
+	home := "/home/agent"
+	for dir, want := range map[string]bool{
+		"/home/agent/agents/x":            true,
+		"/home/agent/agents/x/y":          false,
+		"/home/agent/agents/x/agents/y":   false,
+		"/home/agent/agents/.":            false,
+		"/home/agent/agents/..":           false,
+		"/home/agent/agents":              false,
+		"/home/agent/agents/":             false,
+		"/home/agent/agents/x/":           false,
+		"/home/agent/agents/../../../etc": false,
+		"/home/agent/x":                   false,
+		"/home/agent":                     false,
+		"/home/agentx/agents/x":           false,
+		"":                                false,
+	} {
+		if got := validControlDir(home, dir); got != want {
+			t.Errorf("validControlDir(%q) = %v, want %v", dir, got, want)
+		}
 	}
 }

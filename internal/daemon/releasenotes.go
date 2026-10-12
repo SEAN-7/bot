@@ -37,7 +37,7 @@ func (d *daemon) deliverReleaseNotes() {
 	}
 	if len(sections) > 0 {
 		text := fmt.Sprintf("The harness was upgraded to v%s. What changed for you:\n\n%s\n", d.cfg.Version, strings.Join(sections, "\n\n"))
-		if err := d.writeNote(d.cfg.Home, "harness-update", text); err != nil {
+		if err := d.writeNote(d.main, "harness-update", text); err != nil {
 			d.cfg.Logger.Printf("release notes: %v", err)
 			return // retried at the next start
 		}

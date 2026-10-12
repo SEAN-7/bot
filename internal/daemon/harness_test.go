@@ -9,13 +9,16 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
+	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
@@ -79,8 +82,9 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := layout.Layout{Home: filepath.Join(root, "home", "agent"), Etc: filepath.Join(root, "etc", "agent"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
-	for _, dir := range []string{l.Plugins(), l.Credentials(), l.OwnerSpool(), l.Log, filepath.Join(l.Home, "inbox")} {
+	l := layout.Layout{Home: filepath.Join(root, "home", "agent"), Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc", "agent"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
+	tmp := filepath.Join(root, "tmp")
+	for _, dir := range []string{l.Plugins(), l.Credentials(), l.OwnerSpool(), l.Log, filepath.Join(l.Home, "inbox"), tmp} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -97,6 +101,12 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg = DefaultConfig(self)
 	h.cfg.Layout = l
 	h.cfg.AgentUser, h.cfg.ProviderUser = "", ""
+	// Every pool user resolves to the current user, so all helpers run as us.
+	h.cfg.PoolUsers = []string{"agent-1", "agent-2", "agent-3"}
+	h.cfg.LookupUser = func(string) (*syscall.Credential, error) { return nil, nil }
+	h.cfg.System = &fakeSystem{}
+	h.cfg.TmpDirs = []string{tmp}
+	h.cfg.OwnerUID = os.Getuid()
 	h.cfg.Poll = 10 * time.Millisecond
 	h.cfg.CommandTimeout = 2 * time.Second
 	h.cfg.RetryBase, h.cfg.RetryMax = 10*time.Millisecond, 50*time.Millisecond
@@ -140,13 +150,13 @@ func (h *harness) stop() {
 }
 
 // drop delivers a message atomically, as the seed README advises.
-func (h *harness) drop(agentDir, name, text string) {
+func (h *harness) drop(home, name, text string) {
 	h.t.Helper()
-	temp := filepath.Join(agentDir, "inbox", "."+name)
+	temp := filepath.Join(home, "inbox", "."+name)
 	if err := os.WriteFile(temp, []byte(text), 0o644); err != nil {
 		h.t.Fatal(err)
 	}
-	if err := os.Rename(temp, filepath.Join(agentDir, "inbox", name)); err != nil {
+	if err := os.Rename(temp, filepath.Join(home, "inbox", name)); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -163,11 +173,42 @@ func readRecords(path string) []map[string]any {
 	return out
 }
 
-// runs returns every journal file for agentDir in order.
-func (h *harness) runs(agentDir string) []string {
-	matches, _ := filepath.Glob(filepath.Join(h.cfg.JournalDir(agentDir), "*.jsonl"))
-	sort.Strings(matches)
-	return matches
+// runs returns every run journal of the agent in order. Journals are keyed
+// by the agent's id: the main home, or a subagent's control directory.
+func (h *harness) runs(agentID string) []string {
+	matches, _ := filepath.Glob(filepath.Join(h.cfg.JournalDir(agentID), "*.jsonl"))
+	var runs []string
+	for _, m := range matches {
+		if journal.IsRun(filepath.Base(m)) {
+			runs = append(runs, m)
+		}
+	}
+	sort.Strings(runs)
+	return runs
+}
+
+// childHome waits for the daemon to admit the subagent at ctrl and returns
+// its home, the target of ctrl/home.
+func (h *harness) childHome(ctrl string) string {
+	h.t.Helper()
+	var home string
+	waitFor(h.t, "admission of "+ctrl, func() bool {
+		home, _ = os.Readlink(filepath.Join(ctrl, "home"))
+		return home != ""
+	})
+	return home
+}
+
+// mainUser is the main agent's user name as the daemon reports it.
+func (h *harness) mainUser() string {
+	if h.cfg.AgentUser != "" {
+		return h.cfg.AgentUser
+	}
+	u, err := user.Current()
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return u.Username
 }
 
 func ended(path string) bool {
@@ -175,13 +216,13 @@ func ended(path string) bool {
 	return len(records) > 0 && records[len(records)-1]["type"] == "end"
 }
 
-// waitEnds waits until n runs of agentDir have ended and returns the records
+// waitEnds waits until n runs of the agent have ended and returns the records
 // of the n-th run.
-func (h *harness) waitEnds(agentDir string, n int) []map[string]any {
+func (h *harness) waitEnds(agentID string, n int) []map[string]any {
 	h.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		runs := h.runs(agentDir)
+		runs := h.runs(agentID)
 		count := 0
 		for _, run := range runs {
 			if ended(run) {
@@ -193,7 +234,7 @@ func (h *harness) waitEnds(agentDir string, n int) []map[string]any {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	h.t.Fatalf("timed out waiting for %d ended runs of %s; logs:\n%s", n, agentDir, h.logs)
+	h.t.Fatalf("timed out waiting for %d ended runs of %s; logs:\n%s", n, agentID, h.logs)
 	return nil
 }
 

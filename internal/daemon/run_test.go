@@ -152,10 +152,12 @@ func TestVanishedInboxDoesNotCallModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	d := &daemon{cfg: h.cfg, fs: fs, delivered: &delivered{pending: map[string]bool{}},
+	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]bool{}},
 		runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
+	main := newMain(d)
+	main.fs = fs
 	// The loop saw a file, but it vanished before the run collected it.
-	newAgent(d, h.cfg.Home).run(context.Background())
+	main.run(context.Background())
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("model called %d times with nothing to say", n)
 	}

@@ -124,11 +124,11 @@ func (d *daemon) deliverOwner() {
 		}
 		sum := sha256.Sum256(data)
 		name := noteName("owner", time.Now())
-		if err := d.delivered.add(d.cfg.Home, name, hex.EncodeToString(sum[:])); err != nil {
+		if err := d.delivered.add(d.main.id, name, hex.EncodeToString(sum[:])); err != nil {
 			d.cfg.Logger.Printf("owner delivery record: %v", err)
 			continue
 		}
-		if err := d.fs.Write(filepath.Join(d.cfg.Home, "inbox", name), data); err != nil {
+		if err := d.main.fs.Write(filepath.Join(d.main.home, "inbox", name), data); err != nil {
 			d.cfg.Logger.Printf("owner delivery: %v", err)
 			continue
 		}

@@ -39,14 +39,14 @@ func (d *daemon) appendMessage(record map[string]any) error {
 // collectMessages moves each agent's queued `agent message` files into the
 // owner conversation. Appending before removing means a crash can only
 // duplicate a message, never lose one.
-func (d *daemon) collectMessages(dirs []string) {
-	for _, dir := range dirs {
-		spool := filepath.Join(dir, ".messages")
-		entries, err := d.fs.List(spool)
+func (d *daemon) collectMessages(agents []*agent) {
+	for _, a := range agents {
+		spool := filepath.Join(a.home, ".messages")
+		entries, err := a.fs.List(spool)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
-			d.cfg.Logger.Printf("%s: messages: %v", d.rel(dir), err)
+			d.cfg.Logger.Printf("%s: messages: %v", a.name, err)
 			continue
 		}
 		var names []string
@@ -58,21 +58,21 @@ func (d *daemon) collectMessages(dirs []string) {
 		sort.Strings(names)
 		for _, name := range names {
 			path := filepath.Join(spool, name)
-			data, size, err := d.fs.Read(path, messageLimit)
+			data, size, err := a.fs.Read(path, messageLimit)
 			if err != nil {
-				d.cfg.Logger.Printf("%s: message %s: %v", d.rel(dir), name, err)
+				d.cfg.Logger.Printf("%s: message %s: %v", a.name, name, err)
 				continue
 			}
 			text := strings.ToValidUTF8(string(data), "�")
 			if size > int64(len(data)) {
 				text += "\n[message truncated]"
 			}
-			if err := d.appendMessage(map[string]any{"from": "agent", "agent": d.rel(dir), "text": text}); err != nil {
+			if err := d.appendMessage(map[string]any{"from": "agent", "agent": a.name, "text": text}); err != nil {
 				d.cfg.Logger.Printf("messages log: %v", err)
 				return
 			}
-			if err := d.fs.Remove(path); err != nil {
-				d.cfg.Logger.Printf("%s: message %s: %v", d.rel(dir), name, err)
+			if err := a.fs.Remove(path); err != nil {
+				d.cfg.Logger.Printf("%s: message %s: %v", a.name, name, err)
 			}
 		}
 	}

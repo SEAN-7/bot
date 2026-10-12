@@ -43,18 +43,19 @@ func TestDrainFinishesActiveRun(t *testing.T) {
 
 func TestDrainStartsNoNewRun(t *testing.T) {
 	h := newHarness(t, step("sleep 1", 100), done(), done())
-	child := makeChild(t, h, "c", true)
+	ctrl := makeChild(t, h, "c", true)
 	h.drop(h.cfg.Home, "go.md", "go")
 	h.start()
+	home := h.childHome(ctrl)
 	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	finished := h.stopAsync()
 	h.drop(h.cfg.Home, "late.md", "arrived during shutdown")
-	h.drop(child, "task.md", "arrived during shutdown")
+	h.drop(home, "task.md", "arrived during shutdown")
 	<-finished
 	if names := inboxNames(h.cfg.Home); len(names) != 1 || names[0] != "late.md" {
 		t.Fatalf("message arriving during drain was consumed: %v", names)
 	}
-	if runs := h.runs(child); len(runs) != 0 {
+	if runs := h.runs(ctrl); len(runs) != 0 {
 		t.Fatalf("a new run started during drain: %v", runs)
 	}
 }
