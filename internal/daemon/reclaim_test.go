@@ -182,6 +182,21 @@ func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 	}
 }
 
+// removeControlDir removes a child's control directory the way agent remove
+// does: the daemon restores a missing home link in a known child's directory
+// every poll, which races a plain RemoveAll, so it is renamed out of agents/
+// first.
+func removeControlDir(t *testing.T, ctrl string) {
+	t.Helper()
+	gone := filepath.Join(filepath.Dir(filepath.Dir(ctrl)), ".removed-"+filepath.Base(ctrl)+"-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
+	if err := os.Rename(ctrl, gone); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(gone); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWaitingChildAdmittedWhenUserFrees(t *testing.T) {
 	h := newHarness(t)
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
@@ -192,7 +207,7 @@ func TestWaitingChildAdmittedWhenUserFrees(t *testing.T) {
 	errorFile := filepath.Join(b, "ERROR")
 	waitFor(t, "limit ERROR", func() bool { return fileContains(errorFile, "Agent limit reached (max_agents=2)") })
 	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
-	os.RemoveAll(a)
+	removeControlDir(t, a)
 	if home := h.childHome(b); home != aHome {
 		t.Fatalf("b got %s, want the freed %s", home, aHome)
 	}

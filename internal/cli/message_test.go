@@ -122,14 +122,59 @@ func TestSendChildRejectsBadNames(t *testing.T) {
 	}
 }
 
-func TestSendChildNeedsConfig(t *testing.T) {
+func TestSendChildNeedsDirectory(t *testing.T) {
 	home := t.TempDir()
 	err := SendChild(home, "ghost", "go", time.Now())
-	if err == nil || !strings.Contains(err.Error(), `no subagent "ghost" (expected ~/agents/ghost/config.json)`) {
-		t.Fatalf("got %v", err)
+	if want := `no subagent "ghost" (expected ` + home + `/agents/ghost/)`; err == nil || err.Error() != want {
+		t.Fatalf("got %v, want %s", err, want)
+	}
+	os.MkdirAll(filepath.Join(home, "agents"), 0o755)
+	os.WriteFile(filepath.Join(home, "agents", "file"), []byte("{}"), 0o644)
+	if err := SendChild(home, "file", "go", time.Now()); err == nil {
+		t.Fatal("a plain file accepted")
 	}
 	if err := SendChild("", "ghost", "go", time.Now()); err == nil {
-		t.Fatal("missing HOME accepted")
+		t.Fatal("missing base accepted")
+	}
+}
+
+// TestSendChildAfterAdmission: an admitted child's config.json lives in its
+// own home, so its control directory holds only the daemon's files.
+func TestSendChildAfterAdmission(t *testing.T) {
+	home := t.TempDir()
+	mustLink(t, t.TempDir(), filepath.Join(home, "agents", "x", "home"))
+	os.WriteFile(filepath.Join(home, "agents", "x", "OWNER.md"), []byte("me"), 0o644)
+	if err := SendChild(home, "x", "hello", time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".messages", "agents", "x", "20261012T090000.000000000Z.md"))
+	if err != nil || string(data) != "hello" {
+		t.Fatal(string(data), err)
+	}
+}
+
+// TestSendChildRootSpoolPrivate: root's spool sits in /etc/agent, which every
+// user may traverse, so root's directories and files are readable by root alone.
+func TestSendChildRootSpoolPrivate(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("the spool is private for root only")
+	}
+	base := t.TempDir()
+	agentWithConfig(t, base, "main")
+	if err := SendChild(base, "main", "secret", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	spool := filepath.Join(base, ".messages", "agents", "main")
+	entries, _ := os.ReadDir(spool)
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(base, ".messages"):           0o700,
+		filepath.Join(base, ".messages", "agents"): 0o700,
+		spool:                                   0o700,
+		filepath.Join(spool, entries[0].Name()): 0o600,
+	} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", path, info.Mode().Perm(), err, want)
+		}
 	}
 }
 
@@ -173,14 +218,12 @@ func TestTargetRootAndDescendants(t *testing.T) {
 	mustLink(t, pool, filepath.Join(mainHome, "agents", "research", "home"))
 	child, grand := "main/agents/research", "main/agents/research/agents/x"
 
-	// Root names its agents under RootHome; with no name it means main.
-	for _, name := range []string{"", "main"} {
-		j, e, c, err := Target(l, true, "/root", name)
-		if err != nil || j != l.JournalDir("main") || e != filepath.Join(mainCtrl, "ERROR") || c != l.ConversationFile("main") {
-			t.Fatal(name, j, e, c, err)
-		}
+	// Root names its agents under RootHome.
+	j, e, c, err := Target(l, true, "/root", "main")
+	if err != nil || j != l.JournalDir("main") || e != filepath.Join(mainCtrl, "ERROR") || c != l.ConversationFile("main") {
+		t.Fatal(j, e, c, err)
 	}
-	j, e, c, err := Target(l, true, "/root", "main/agents/research")
+	j, e, c, err = Target(l, true, "/root", "main/agents/research")
 	if err != nil || j != l.JournalDir(child) || e != filepath.Join(mainHome, "agents", "research", "ERROR") || c != l.ConversationFile(child) {
 		t.Fatal(j, e, c, err)
 	}
@@ -198,19 +241,28 @@ func TestTargetRootAndDescendants(t *testing.T) {
 	}
 }
 
-func TestTargetSubagentSelf(t *testing.T) {
+func TestTargetRootNeedsName(t *testing.T) {
+	_, _, _, err := Target(tempLayout(t), true, "", "")
+	if want := "root has no owner; name an agent, for example: agent messages main"; err == nil || err.Error() != want {
+		t.Fatalf("got %v", err)
+	}
+}
+
+// TestTargetSelfFromJournal: a subagent finds its relative id from where
+// ~/journal points, and never reports an ERROR file (its own is in its parent's
+// control directory).
+func TestTargetSelfFromJournal(t *testing.T) {
 	l := tempLayout(t)
 	home := resolved(t)
-	jdir := l.JournalDir("main/agents/research")
+	jdir := l.JournalDir("main/agents/x")
 	os.MkdirAll(jdir, 0o755)
 	mustLink(t, jdir, filepath.Join(home, "journal"))
-	want, _ := filepath.EvalSymlinks(jdir)
 	j, e, c, err := Target(l, false, home, "")
-	if err != nil || j != want || e != "" || c != filepath.Join(want, "messages.jsonl") {
+	if err != nil || j != jdir || e != "" || c != filepath.Join(l.Log, "main", "agents", "x", "messages.jsonl") {
 		t.Fatal(j, e, c, err)
 	}
-	if !strings.HasSuffix(c, strings.TrimPrefix(l.ConversationFile("main/agents/research"), l.Log)) {
-		t.Fatalf("conversation %s differs from the daemon's", c)
+	if id, err := idFromJournal(l, home); err != nil || id != "main/agents/x" {
+		t.Fatal(id, err)
 	}
 }
 

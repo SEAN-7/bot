@@ -766,7 +766,7 @@ func TestPrivilegeLostPoolNewAgentSkipsLiveHome(t *testing.T) {
 // read by another pool user.
 func TestPrivilegeRootSpoolPrivate(t *testing.T) {
 	h, _ := rootHarness(t)
-	if err := cli.Send(h.cfg.Layout, "owner secret", time.Now()); err != nil {
+	if err := cli.SendChild(h.cfg.RootHome(), "main", "owner secret", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")

@@ -22,45 +22,6 @@ func tempLayout(t *testing.T) layout.Layout {
 	return layout.Layout{Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
 }
 
-func TestSendRequiresRoot(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("running as root")
-	}
-	if err := Send(tempLayout(t), "hi", time.Now()); err == nil || !strings.Contains(err.Error(), "sudo") {
-		t.Fatalf("got %v", err)
-	}
-}
-
-// TestSendWritesSpool: root's message for main goes to root's spool for it.
-func TestSendWritesSpool(t *testing.T) {
-	l := tempLayout(t)
-	ctrl := filepath.Join(l.RootHome(), "agents", "main")
-	os.MkdirAll(ctrl, 0o700)
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte("{}"), 0o644)
-	if err := send(l, "hello agent", time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	spool := filepath.Join(l.RootHome(), ".messages", "agents", "main")
-	entries, _ := os.ReadDir(spool)
-	if len(entries) != 1 || strings.HasPrefix(entries[0].Name(), ".") || !strings.HasSuffix(entries[0].Name(), ".md") {
-		t.Fatalf("spool %v", entries)
-	}
-	if data, _ := os.ReadFile(filepath.Join(spool, entries[0].Name())); string(data) != "hello agent" {
-		t.Fatalf("content %q", data)
-	}
-	// /etc/agent is traversable by every user: root's spool keeps them out.
-	for path, want := range map[string]os.FileMode{
-		filepath.Join(l.RootHome(), ".messages"):           0o700,
-		filepath.Join(l.RootHome(), ".messages", "agents"): 0o700,
-		spool:                                   0o700,
-		filepath.Join(spool, entries[0].Name()): 0o600,
-	} {
-		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != want {
-			t.Errorf("%s: %v %v, want %v", path, info.Mode().Perm(), err, want)
-		}
-	}
-}
-
 func TestFormat(t *testing.T) {
 	stamp := "2026-10-11T09:30:15Z"
 	clock := time.Date(2026, 10, 11, 9, 30, 15, 0, time.UTC).Local().Format("15:04:05")

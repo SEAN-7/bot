@@ -1,3 +1,4 @@
+// Package cli implements the agent command's subcommands.
 package cli
 
 import (
@@ -33,27 +34,25 @@ func cleanName(name string) bool {
 	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
 }
 
-// SendChild queues a message from the agent whose directory is home to its
-// direct child name. The daemon delivers it as the owner's, and records it in
-// the child's conversation.
-func SendChild(home, name, text string, now time.Time) error {
-	return sendChild(home, name, text, now, false)
-}
-
-// sendChild is SendChild with a private spool for root, whose spool sits in
-// /etc/agent, which every user may traverse; an agent's home already keeps
-// other users out.
-func sendChild(home, name, text string, now time.Time, private bool) error {
-	if home == "" {
+// SendChild queues a message to the direct child name of the agent whose
+// agents/ directory is in base: the agent's home, or root's RootHome. The
+// daemon delivers it as the owner's, and records it in the child's
+// conversation. The child's control directory is all there is to check: once
+// the child is admitted its config.json is in its own home.
+func SendChild(base, name, text string, now time.Time) error {
+	if base == "" {
 		return errors.New("HOME is not set; run agent send from an agent's shell")
 	}
 	if !cleanName(name) {
-		return fmt.Errorf("%q is not a direct subagent name; use one name from ~/agents", name)
+		return fmt.Errorf("%q is not a direct subagent name; use one name from the agent's agents directory", name)
 	}
-	if info, err := os.Stat(filepath.Join(home, "agents", name, "config.json")); err != nil || !info.Mode().IsRegular() {
-		return fmt.Errorf("no subagent %q (expected ~/agents/%s/config.json)", name, name)
+	if info, err := os.Stat(filepath.Join(base, "agents", name)); err != nil || !info.IsDir() {
+		return fmt.Errorf("no subagent %q (expected %s/agents/%s/)", name, base, name)
 	}
-	return queue(filepath.Join(home, ".messages", "agents", name), text, now, private)
+	// Root's spool sits in /etc/agent, which every user may traverse, so it
+	// is private; an agent's home already keeps other users out. Only root
+	// runs as root.
+	return queue(filepath.Join(base, ".messages", "agents", name), text, now, os.Geteuid() == 0)
 }
 
 // queue writes one message into a spool directory with an atomic dot-name
@@ -84,19 +83,19 @@ func queue(dir, text string, now time.Time, private bool) error {
 // Target resolves whose journal and conversation to show. name is "" for the
 // caller's own, or a descendant relative to the caller ("research" or
 // "research/agents/scraper"). root is true for the human, whose agents are
-// root's, under RootHome; root has no journal of its own, so for root ""
-// names main. journalDir and conversation follow the agent's id, its path
-// from root (its parent's id plus "/agents/NAME"); errorFile is in the real
+// root's, under RootHome; root has no journal of its own, so it must name an
+// agent. journalDir and conversation follow the agent's id, its path from
+// root (its parent's id plus "/agents/NAME"); errorFile is in the real
 // control directory, which can sit under another agent's home, and is empty
 // for an agent asking about itself because its ERROR is in its parent's.
 func Target(l layout.Layout, root bool, home, name string) (journalDir, errorFile, conversation string, err error) {
 	var id, base string // the caller's agent id ("" for root), and where its agents/ directory is
 	switch {
 	case root:
-		base = l.RootHome()
 		if name == "" {
-			name = "main"
+			return "", "", "", errors.New("root has no owner; name an agent, for example: agent messages main")
 		}
+		base = l.RootHome()
 	case home == "":
 		return "", "", "", errors.New("HOME is not set; run this from an agent's shell")
 	default:
@@ -106,11 +105,7 @@ func Target(l layout.Layout, root bool, home, name string) (journalDir, errorFil
 		base = home
 	}
 	if name == "" {
-		journalDir, err = filepath.EvalSymlinks(filepath.Join(home, "journal"))
-		if err != nil {
-			return "", "", "", err
-		}
-		return journalDir, "", filepath.Join(journalDir, "messages.jsonl"), nil
+		return l.JournalDir(id), "", l.ConversationFile(id), nil
 	}
 	parts := strings.Split(name, "/agents/")
 	for _, part := range parts {

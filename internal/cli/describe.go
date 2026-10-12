@@ -47,6 +47,19 @@ func RefreshCache(ctx context.Context, l layout.Layout, r *plugin.Runner) (provi
 	return cache, os.Rename(temp, l.ProvidersCache())
 }
 
+// LoadProviders reads the cache of describe responses RefreshCache writes.
+func LoadProviders(l layout.Layout) (map[string]proto.DescribeResponse, error) {
+	data, err := os.ReadFile(l.ProvidersCache())
+	if err != nil {
+		return nil, fmt.Errorf("no provider cache yet (run as root once): %w", err)
+	}
+	var cache providersCache
+	if err := json.Unmarshal(data, &cache); err != nil {
+		return nil, err
+	}
+	return cache.Providers, nil
+}
+
 // Describe prints providers, models and options: live as root, otherwise
 // from the cache.
 func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool, w io.Writer) error {
@@ -57,13 +70,11 @@ func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool,
 			return err
 		}
 	} else {
-		data, err := os.ReadFile(l.ProvidersCache())
+		providers, err := LoadProviders(l)
 		if err != nil {
-			return fmt.Errorf("no provider cache yet (run as root once): %w", err)
-		}
-		if err := json.Unmarshal(data, &cache); err != nil {
 			return err
 		}
+		cache.Providers = providers
 	}
 	names := make([]string, 0, len(cache.Providers))
 	for name := range cache.Providers {

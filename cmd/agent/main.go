@@ -28,18 +28,6 @@ import (
 	"github.com/SEAN-7/bot/internal/version"
 )
 
-const usage = `Usage:
-  agent daemon                      run the service (root)
-  agent send "text"                 send an owner message to the main agent (root)
-  agent send NAME "text"            (agents) send a message to your subagent NAME
-  agent log [NAME]                  follow an agent's journal (NAME under ~/agents)
-  agent message "text"|-            (agents) send a message to the owner; - reads stdin
-  agent messages [NAME]             show a conversation (yours, or subagent NAME's) and follow it
-  agent provider install NAME|URL   install a provider plugin (root; URL needs --sha256)
-  agent provider describe           show providers, models and options
-  agent version
-`
-
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "agent:", err)
@@ -49,7 +37,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		fmt.Print(usage)
+		io.WriteString(os.Stdout, cli.Usage)
 		return nil
 	}
 	l := layout.Default()
@@ -65,38 +53,45 @@ func run(args []string) error {
 			return err
 		}
 		return daemon.Run(ctx, daemon.DefaultConfig(self))
+	case "new":
+		return newAgent(l, args[1:])
+	case "remove":
+		if len(args) != 2 {
+			return errors.New("usage: agent remove NAME")
+		}
+		if err := cli.Remove(l, os.Geteuid() == 0, os.Getenv("HOME"), args[1]); err != nil {
+			return err
+		}
+		fmt.Printf("Removed %s.\n", args[1])
+		return nil
 	case "send":
 		root := os.Geteuid() == 0
-		switch {
-		case root && len(args) == 2:
-			if err := cli.Send(l, args[1], time.Now()); err != nil {
-				return err
-			}
-			fmt.Println("Sent.")
-			return nil
-		case root && len(args) == 3:
-			return errors.New(`the human sends only to the main agent: agent send "text"`)
-		case !root && len(args) == 2:
-			return errors.New(`agent send needs root; agents use agent send NAME "text"`)
-		case !root && len(args) == 3:
-			if err := cli.SendChild(os.Getenv("HOME"), args[1], args[2], time.Now()); err != nil {
-				return err
-			}
-			fmt.Printf("Queued for %s.\n", args[1])
-			return nil
+		if len(args) == 2 && root {
+			return errors.New(`name an agent: sudo agent send NAME "text"`)
 		}
-		return errors.New(`usage: agent send "text" (root) or agent send NAME "text" (agents)`)
+		if len(args) != 3 {
+			return errors.New(`usage: agent send NAME "text" (or - to read stdin)`)
+		}
+		text, err := messageText(args[2])
+		if err != nil {
+			return err
+		}
+		base, err := cli.Base(l, root, os.Getenv("HOME"))
+		if err != nil {
+			return err
+		}
+		if err := cli.SendChild(base, args[1], text, time.Now()); err != nil {
+			return err
+		}
+		fmt.Printf("Queued for %s.\n", args[1])
+		return nil
 	case "message":
 		if len(args) != 2 {
 			return errors.New(`usage: agent message "text" (or - to read stdin)`)
 		}
-		text := args[1]
-		if text == "-" {
-			data, err := io.ReadAll(io.LimitReader(os.Stdin, cli.MessageLimit+1))
-			if err != nil {
-				return err
-			}
-			text = string(data)
+		text, err := messageText(args[1])
+		if err != nil {
+			return err
 		}
 		if err := cli.Message(os.Getenv("HOME"), text, time.Now()); err != nil {
 			return err
@@ -143,10 +138,43 @@ func run(args []string) error {
 	case "_migrate":
 		return errors.New("agent _migrate is not available in this build")
 	case "help", "-h", "--help":
-		fmt.Print(usage)
+		io.WriteString(os.Stdout, cli.Usage+cli.SharingHelp)
 		return nil
 	}
-	return fmt.Errorf("unknown command %q\n%s", args[0], usage)
+	return fmt.Errorf("unknown command %q\n%s", args[0], cli.Usage)
+}
+
+// messageText is text, or all of stdin for "-".
+func messageText(text string) (string, error) {
+	if text != "-" {
+		return text, nil
+	}
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, cli.MessageLimit+1))
+	return string(data), err
+}
+
+// options collects repeated --option flags.
+type options []string
+
+func (o *options) String() string     { return strings.Join(*o, ",") }
+func (o *options) Set(v string) error { *o = append(*o, v); return nil }
+
+func newAgent(l layout.Layout, args []string) error {
+	flags := flag.NewFlagSet("new", flag.ContinueOnError)
+	var o cli.NewOptions
+	var opts options
+	flags.StringVar(&o.Provider, "provider", "", "provider (default: from your config, or the only one installed)")
+	flags.StringVar(&o.Model, "model", "", "model (default: from your config; root must choose)")
+	flags.Var(&opts, "option", "model option k=v (repeatable)")
+	if err := flags.Parse(reorder(args)); err != nil {
+		return err
+	}
+	if flags.NArg() != 1 {
+		return errors.New("usage: agent new NAME [--provider P] [--model M] [--option k=v]...")
+	}
+	o.Options = opts
+	o.Wait, o.Poll = 10*time.Second, 200*time.Millisecond
+	return cli.New(l, os.Geteuid() == 0, os.Getenv("HOME"), flags.Arg(0), o, os.Stdout)
 }
 
 func runner(l layout.Layout) (*plugin.Runner, error) {
