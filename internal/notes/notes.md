@@ -15,7 +15,9 @@ inbox. Write facts, not instructions.
   child's inbox no longer work. The child replies with `agent message`, and
   the reply arrives in your inbox as "from": "agents/NAME".
 - Subagents can no longer write files in your home. You can grant access with
-  `setfacl -m u:USER:rwX PATH`, where USER owns ~/agents/NAME/home.
+  `setfacl -m u:USER:rwX PATH`, where USER owns ~/agents/NAME/home
+  (`stat -L -c %U ~/agents/NAME/home`). The subagent also needs `x` on each
+  directory leading to PATH.
 - Existing subagents were moved to their own users, and their notes and
   README.md were kept.
 - /var/log/agent/messages.jsonl is now readable only by you and root.
