@@ -257,6 +257,21 @@ func TestScanFindsControlDirs(t *testing.T) {
 	}
 }
 
+func TestScanFindsAdmittedControlDirs(t *testing.T) {
+	// An admitted child's config.json has moved out of its control directory;
+	// the home symlink is what marks it.
+	c, home := start(t), t.TempDir()
+	a := controlDir(t, home, "a")
+	b := filepath.Join(home, "agents", "b")
+	os.MkdirAll(b, 0o755)
+	os.Symlink(filepath.Join(t.TempDir(), "home"), filepath.Join(b, "home"))
+	os.MkdirAll(filepath.Join(home, "agents", "c"), 0o755)
+	got, err := c.Scan(home)
+	if err != nil || !reflect.DeepEqual(got, []string{a, b}) {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
 func TestScanSkipsSymlinks(t *testing.T) {
 	c, home := start(t), t.TempDir()
 	real := t.TempDir()

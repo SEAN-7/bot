@@ -202,8 +202,9 @@ func write(path string, data []byte) error {
 }
 
 // scan returns the control directories <home>/agents/<name>, sorted: real
-// directories owned by this user, each holding a regular config.json. It looks
-// one level deep only; deeper agents belong to their own users.
+// directories owned by this user, each holding a regular config.json or, once
+// the agent is admitted and its config has moved, a home symlink. It looks one
+// level deep only; deeper agents belong to their own users.
 func scan(home string) ([]string, error) {
 	agents := filepath.Join(home, "agents")
 	if !ownedDir(agents) {
@@ -220,6 +221,8 @@ func scan(home string) ([]string, error) {
 			continue
 		}
 		if info, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil && info.Mode().IsRegular() {
+			found = append(found, dir)
+		} else if info, err := os.Lstat(filepath.Join(dir, "home")); err == nil && info.Mode()&os.ModeSymlink != 0 {
 			found = append(found, dir)
 		}
 	}
