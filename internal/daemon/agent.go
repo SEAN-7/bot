@@ -90,6 +90,7 @@ func (a *agent) ctl() (*fsio.Client, string) {
 // sections and messages, so the provider's cached prefix stays identical.
 type conversation struct {
 	cfg      plugin.Config
+	owner    string // the OWNER.md content the system sections were built with
 	system   []proto.Segment
 	messages []proto.Message
 	calls    int // call ids used so far
@@ -99,9 +100,10 @@ type conversation struct {
 }
 
 // takeConversation returns the previous conversation if this run may
-// continue it: it ended normally within ContinueWindow, the configuration is
-// unchanged, and the agent has not asked for a fresh start with ~/.reset.
-func (a *agent) takeConversation(cfg plugin.Config) *conversation {
+// continue it: it ended normally within ContinueWindow, the configuration and
+// OWNER.md are unchanged, and the agent has not asked for a fresh start with
+// ~/.reset.
+func (a *agent) takeConversation(cfg plugin.Config, owner string) *conversation {
 	c := a.conv
 	a.conv = nil
 	reset := filepath.Join(a.home, ".reset")
@@ -111,7 +113,7 @@ func (a *agent) takeConversation(cfg plugin.Config) *conversation {
 		}
 		return nil
 	}
-	if c == nil || time.Since(c.ended) > a.d.cfg.ContinueWindow || !reflect.DeepEqual(c.cfg, cfg) {
+	if c == nil || time.Since(c.ended) > a.d.cfg.ContinueWindow || !reflect.DeepEqual(c.cfg, cfg) || c.owner != owner {
 		return nil
 	}
 	return c

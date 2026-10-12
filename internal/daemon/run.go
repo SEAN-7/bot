@@ -101,6 +101,21 @@ func (a *agent) run(ctx context.Context) {
 	if !ok {
 		return
 	}
+	owner, err := a.readOwner()
+	if err != nil {
+		// Running without the owner's instructions would be worse than
+		// not running: report once per distinct problem and wait.
+		if text := err.Error(); text != a.failedOwner {
+			a.failedOwner = text
+			a.logf("not starting: %s%s", MsgOwnerPrefix, text)
+			a.setError(MsgOwnerPrefix + text)
+		}
+		return
+	}
+	// Cleared on every safe read, not only after a problem this daemon saw:
+	// the error may have been written before a restart.
+	a.failedOwner = ""
+	a.clearError(MsgOwnerPrefix)
 	jdir := a.d.cfg.JournalDir(a.id)
 	if !strings.HasPrefix(jdir, filepath.Clean(a.d.cfg.Log)+"/") {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
@@ -111,7 +126,7 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal: %v", err)
 		return
 	}
-	if reason := a.steps(ctx, j, cfg, plugin.ContextTokens(describe, cfg.Model)); reason != "" {
+	if reason := a.steps(ctx, j, cfg, plugin.ContextTokens(describe, cfg.Model), owner); reason != "" {
 		j.End(reason)
 	} else {
 		j.Close() // daemon shutdown: left unclean so recovery resumes the agent
@@ -136,9 +151,9 @@ func (a *agent) readSegment(name string) string {
 	return strings.ToValidUTF8(string(data), "�")
 }
 
-func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int) string {
+func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int, owner string) string {
 	d := a.d
-	conv := a.takeConversation(cfg)
+	conv := a.takeConversation(cfg, owner)
 	start := map[string]any{"agent": a.id, "config": cfg, "context_tokens": contextTokens}
 	if conv != nil {
 		start["continues"] = conv.journal
@@ -153,7 +168,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	if conv != nil {
 		system, messages, calls, warned = conv.system, conv.messages, conv.calls, conv.warned
 	} else {
-		system = []proto.Segment{{Text: SystemPrompt}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
+		system = []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
 	}
 	records, err := a.collectInbox(j)
 	if err != nil {
@@ -215,7 +230,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			a.clearError(errProviderPrefix)
 		}
 		if msg.Command == nil {
-			a.conv = &conversation{cfg: cfg, system: system, messages: messages, calls: calls + n, warned: warned, ended: time.Now(), journal: j.Path()}
+			a.conv = &conversation{cfg: cfg, owner: owner, system: system, messages: messages, calls: calls + n, warned: warned, ended: time.Now(), journal: j.Path()}
 			return "done"
 		}
 		result, runErr := a.command(ctx, *msg.Command)
