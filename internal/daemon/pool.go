@@ -62,12 +62,16 @@ func (p *pool) userOf(agentID string) string {
 }
 
 // assign returns agentID's user, giving it the first free one if it has none.
-// It returns "" when every user is taken or limit entries already exist.
+// It returns "" when every user is taken, limit entries already exist, or the
+// agent's user is being reclaimed: a reclaiming user is never handed out.
 func (p *pool) assign(agentID string, limit int) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, e := range p.byUser {
 		if e.Agent == agentID {
+			if e.State == poolReclaiming {
+				return "", nil
+			}
 			return e.User, nil
 		}
 	}
@@ -76,8 +80,11 @@ func (p *pool) assign(agentID string, limit int) (string, error) {
 	}
 	for _, u := range p.users {
 		if _, taken := p.byUser[u]; !taken {
-			p.byUser[u] = poolEntry{User: u, Agent: agentID, State: poolActive}
-			return u, p.save()
+			next := p.with(u, poolEntry{User: u, Agent: agentID, State: poolActive})
+			if err := p.commit(next); err != nil {
+				return "", err
+			}
+			return u, nil
 		}
 	}
 	return "", nil
@@ -91,8 +98,7 @@ func (p *pool) mark(user, state string) error {
 		return nil
 	}
 	e.State = state
-	p.byUser[user] = e
-	return p.save()
+	return p.commit(p.with(user, e))
 }
 
 func (p *pool) free(user string) error {
@@ -101,8 +107,19 @@ func (p *pool) free(user string) error {
 	if _, ok := p.byUser[user]; !ok {
 		return nil
 	}
-	delete(p.byUser, user)
-	return p.save()
+	next := p.with(user, poolEntry{})
+	delete(next, user)
+	return p.commit(next)
+}
+
+// with returns a copy of the pool's entries with e stored for user.
+func (p *pool) with(user string, e poolEntry) map[string]poolEntry {
+	next := make(map[string]poolEntry, len(p.byUser)+1)
+	for k, v := range p.byUser {
+		next[k] = v
+	}
+	next[user] = e
+	return next
 }
 
 func (p *pool) entries() []poolEntry {
@@ -111,35 +128,60 @@ func (p *pool) entries() []poolEntry {
 	return p.sorted()
 }
 
-func (p *pool) sorted() []poolEntry {
-	list := make([]poolEntry, 0, len(p.byUser))
-	for _, e := range p.byUser {
+func (p *pool) sorted() []poolEntry { return sortedEntries(p.byUser) }
+
+func sortedEntries(m map[string]poolEntry) []poolEntry {
+	list := make([]poolEntry, 0, len(m))
+	for _, e := range m {
 		list = append(list, e)
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].User < list[j].User })
 	return list
 }
 
-// save writes the pool through a temp file so a crash never leaves it torn.
-func (p *pool) save() error {
-	data, err := json.Marshal(p.sorted())
+// commit persists next and only then makes it the pool's state, so a failed
+// write leaves memory matching the file.
+func (p *pool) commit(next map[string]poolEntry) error {
+	if err := p.save(next); err != nil {
+		return err
+	}
+	p.byUser = next
+	return nil
+}
+
+// save writes the entries through a temp file, synced before the rename and
+// followed by a directory sync, so a crash never leaves a torn or lost file.
+func (p *pool) save(m map[string]poolEntry) error {
+	data, err := json.Marshal(sortedEntries(m))
 	if err != nil {
 		return err
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(p.path), ".pool-*")
+	dir := filepath.Dir(p.path)
+	tmp, err := os.CreateTemp(dir, ".pool-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(tmp.Name())
 	_, werr := tmp.Write(data)
+	if werr == nil {
+		werr = tmp.Chmod(0o600)
+	}
+	if werr == nil {
+		werr = tmp.Sync()
+	}
 	if cerr := tmp.Close(); werr == nil {
 		werr = cerr
 	}
 	if werr != nil {
 		return werr
 	}
-	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+	if err := os.Rename(tmp.Name(), p.path); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), p.path)
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

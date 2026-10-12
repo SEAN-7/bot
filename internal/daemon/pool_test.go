@@ -71,3 +71,62 @@ func TestPoolMissingFileIsEmpty(t *testing.T) {
 		t.Fatal(p, err)
 	}
 }
+
+func TestPoolSaveFailureLeavesMemoryUnchanged(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "lib")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p, _ := loadPool(filepath.Join(dir, "pool.json"), []string{"agent-1", "agent-2"})
+	if u, err := p.assign("/h/agents/a", 2); u != "agent-1" || err != nil {
+		t.Fatal(u, err)
+	}
+	if err := os.RemoveAll(dir); err != nil { // saves now fail
+		t.Fatal(err)
+	}
+	if u, err := p.assign("/h/agents/b", 2); u != "" || err == nil {
+		t.Fatalf("assign: %q %v", u, err)
+	}
+	if p.userOf("/h/agents/b") != "" || len(p.entries()) != 1 {
+		t.Fatal("failed assign left state behind", p.entries())
+	}
+	if err := p.mark("agent-1", poolReclaiming); err == nil {
+		t.Fatal("mark should fail")
+	}
+	if err := p.free("agent-1"); err == nil {
+		t.Fatal("free should fail")
+	}
+	if e := p.entries(); len(e) != 1 || e[0].State != poolActive {
+		t.Fatal(e)
+	}
+	// Once saving works again the unsaved user is still unassigned.
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if u, err := p.assign("/h/agents/b", 2); u != "agent-2" || err != nil {
+		t.Fatal(u, err)
+	}
+}
+
+func TestPoolReclaimingUserIsNeverHandedOut(t *testing.T) {
+	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
+	p.assign("/h/agents/a", 2)
+	p.mark("agent-1", poolReclaiming)
+	if u, err := p.assign("/h/agents/a", 2); u != "" || err != nil {
+		t.Fatalf("same agent: %q %v", u, err)
+	}
+	if p.userOf("/h/agents/a") != "agent-1" {
+		t.Fatal("userOf must still name the reclaiming user")
+	}
+	// A new agent skips the reclaiming user.
+	if u, _ := p.assign("/h/agents/b", 2); u != "agent-2" {
+		t.Fatal(u)
+	}
+	// The reclaiming entry still counts toward the limit.
+	q, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
+	q.assign("/h/agents/a", 1)
+	q.mark("agent-1", poolReclaiming)
+	if u, _ := q.assign("/h/agents/b", 1); u != "" {
+		t.Fatal(u)
+	}
+}
