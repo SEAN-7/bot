@@ -14,10 +14,25 @@ inbox. Write facts, not instructions.
 - Message a child with `agent send NAME "text"`. Raw files written into a
   child's inbox no longer work. The child replies with `agent message`, and
   the reply arrives in your inbox as "from": "agents/NAME".
-- Subagents can no longer write files in your home. You can grant access with
-  `setfacl -m u:USER:rwX PATH`, where USER owns ~/agents/NAME/home
-  (`stat -L -c %U ~/agents/NAME/home`). The subagent also needs `x` on each
-  directory leading to PATH.
+- Subagents can no longer write files in your home. You can grant access
+  with ACLs, where USER owns ~/agents/NAME/home
+  (`stat -L -c %U ~/agents/NAME/home`). The subagent needs `x` on each
+  directory leading to what you share, and `x` on a directory lets it reach
+  everything inside that others can read (in ~, your README.md, TASK.md and
+  notes too), so share a dedicated directory and `chmod o-rwx` what should
+  stay private:
+  `mkdir -p ~/share && mkdir -m 700 ~/share/NAME`, then
+  `setfacl -m u:USER:x ~ ~/share`, then
+  `setfacl -R -m u:USER:rwX ~/share/NAME && setfacl -R -d -m u:USER:rwX,u:$(id -un):rwX ~/share/NAME`
+  (the default ACL covers files either of you creates there later).
+- Users are reused. Before removing a subagent, delete the files it created
+  in your directories (copy first what you want to keep), then remove its
+  grants: `setfacl -R -x u:USER,d:u:USER DIR`, and `setfacl -x u:USER` on
+  the directories it traversed.
+- Cron entries and user timers your subagents created before 0.3.0 are in
+  your crontab and user manager: they run as you and use the old paths.
+  Make them send with `agent send NAME "text"`, or remove them and have the
+  subagent recreate its own.
 - Existing subagents were moved to their own users, and their notes and
   README.md were kept.
 - /var/log/agent/messages.jsonl is now readable only by you and root.

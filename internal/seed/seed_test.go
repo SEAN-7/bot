@@ -42,3 +42,14 @@ func TestSeedReadmeCoversTopics(t *testing.T) {
 		}
 	}
 }
+
+// Granting x on a directory exposes its other-readable entries, files a
+// subagent creates later need a default ACL, and users are reused.
+func TestSeedReadmeSharingRecipe(t *testing.T) {
+	for _, want := range []string{"chmod o-rwx", "setfacl -R -d -m u:USER:rwX,u:$(id -un):rwX", "Users are reused",
+		"setfacl -R -x u:USER,d:u:USER", "setfacl -x u:USER ~ ~/share", "find ~/share/NAME -user USER"} {
+		if !strings.Contains(README, want) {
+			t.Errorf("README lacks %q", want)
+		}
+	}
+}

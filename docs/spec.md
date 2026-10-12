@@ -110,7 +110,11 @@ it writes, and nobody else can traverse its home. A subagent can tighten its
 own files' modes; its journals stay readable by its ancestors regardless.
 Processes started before a membership change (an ancestor's user manager,
 for example) see the new group only after they restart; commands the
-harness runs always get current groups.
+harness runs always get current groups. Likewise, a process an ancestor
+started while it was a member of a subagent's group (its user manager,
+started at boot, for example) keeps that supplementary group after the
+subagent's user is reclaimed and reassigned, and with it read access to the
+new holder's home, until the process restarts.
 
 **All file access inside agent homes and control directories goes through
 unprivileged helpers.** The daemon starts one long-lived helper process per
@@ -145,7 +149,13 @@ Commands run with `/bin/bash -c` when bash exists, otherwise `/bin/sh -c`.
 
 **Sharing** between agents is explicit. A file's owner can grant another
 agent user access with `setfacl` (no root needed); the harness does nothing
-more.
+more. Granting `x` on a directory lets that user reach every entry inside
+it that others can read, so the seed README advises a dedicated share
+directory (and `chmod o-rwx` for private ones on the way), with a default
+ACL so that later files are shared too. Users are reused, so a parent
+deletes what a subagent created in its directories and removes its grants
+(`setfacl -R -x u:USER,d:u:USER DIR`, and `setfacl -x u:USER` on the
+directories it traversed) before removing the subagent.
 
 **Plugins** run as the dedicated system user `agent-provider`, with no login
 and no home directory. The daemon reads `/etc/agent/credentials/NAME.env` and

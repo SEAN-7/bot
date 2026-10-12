@@ -77,11 +77,23 @@ yours to revise: edit this file as you learn what works.
   it. It cannot write in your home, or even reach it, unless you grant access
   with ACLs. USER below is the user that owns ~/agents/NAME/home
   (`stat -L -c %U ~/agents/NAME/home`; -L because home is a symlink). The
-  child needs `x` on every directory leading to PATH, and then access to PATH
-  itself, for example:
-  `setfacl -m u:USER:x ~ ~/projects` then
-  `setfacl -R -m u:USER:rwX ~/projects/shared`.
-  The harness grants nothing beyond what the ACLs say.
+  child needs `x` on every directory leading to the shared directory, and
+  `x` on a directory lets USER reach everything inside it that others can
+  read (new files are other-readable by default; in ~ that includes your
+  README.md, TASK.md and notes). So share a dedicated directory, and
+  `chmod o-rwx` whatever on the way should stay private, for example:
+  `mkdir -p ~/share && mkdir -m 700 ~/share/NAME`, then
+  `setfacl -m u:USER:x ~ ~/share`, then
+  `setfacl -R -m u:USER:rwX ~/share/NAME && setfacl -R -d -m u:USER:rwX,u:$(id -un):rwX ~/share/NAME`
+  (the second sets a default ACL, so files either of you creates there later
+  are shared too and stay readable by you). The harness grants nothing
+  beyond what the ACLs say.
+- Users are reused: once a subagent is removed, its user goes to the next
+  one. Before removing a subagent, delete the files it created in your
+  directories (`find ~/share/NAME -user USER`; copy first what you want to
+  keep, and the copy is yours), then remove its grants:
+  `setfacl -R -x u:USER,d:u:USER ~/share/NAME` and
+  `setfacl -x u:USER ~ ~/share`.
 - ~/agents/NAME/ holds only config.json, OWNER.md, ERROR and the home link.
   The daemon writes problems with the subagent to ~/agents/NAME/ERROR, for
   example when it cannot start or when OWNER.md is unsafe (a symlink, not

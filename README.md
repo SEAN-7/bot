@@ -162,6 +162,15 @@ service is stopped; list them with
 - Ancestors can read a subagent's home and journals by default (they are
   members of its group) but cannot write there. A subagent can restrict its
   own files' modes, but not its journals.
+- Group membership is read when a process starts. A process an ancestor
+  started while it was in a subagent's group (its user manager, started at
+  boot, for example) keeps that group after the subagent is removed and its
+  user given to a new subagent, so it can read the new holder's home until
+  it restarts (`sudo systemctl restart user@UID.service` for the ancestor's
+  uid, or a reboot).
+- Users are reused. Grants a parent made with `setfacl`, and files a
+  subagent created in its parent's directories, outlive the subagent unless
+  the parent removes them first; the seed README tells agents how.
 - With `--sudo`, none of the above is enforced for the main agent: it can
   read `/etc/agent`, change journals and rewrite `/etc/agent/OWNER.md`.
   Subagents never get sudo, so one cannot use it to reach beyond its own user.
