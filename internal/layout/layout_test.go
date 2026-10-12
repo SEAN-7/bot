@@ -52,3 +52,38 @@ func TestPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestPoolUsers(t *testing.T) {
+	u := PoolUsers(16)
+	if len(u) != 15 || u[0] != "agent-1" || u[14] != "agent-15" {
+		t.Fatal(u)
+	}
+	if len(PoolUsers(1)) != 0 || len(PoolUsers(0)) != 0 {
+		t.Fatal("PoolUsers(1) should be empty")
+	}
+}
+
+func TestPoolPaths(t *testing.T) {
+	l := Default()
+	for got, want := range map[string]string{
+		l.Homes:               "/home",
+		l.PoolFile():          "/var/lib/agent/pool.json",
+		l.OwnerFile():         "/etc/agent/OWNER.md",
+		l.PoolHome("agent-3"): "/home/agent-3",
+	} {
+		if got != want {
+			t.Errorf("got %s want %s", got, want)
+		}
+	}
+}
+
+func TestConversationFile(t *testing.T) {
+	l := Default()
+	if got := l.ConversationFile(l.Home); got != l.MessagesFile() {
+		t.Fatalf("main: %s", got)
+	}
+	got := l.ConversationFile("/home/agent-1")
+	if got != "/var/log/agent/home/agent-1/messages.jsonl" {
+		t.Fatalf("child: %s", got)
+	}
+}

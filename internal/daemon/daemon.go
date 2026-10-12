@@ -28,6 +28,12 @@ type Config struct {
 	ProviderUser string // runs plugins; "" = current user
 	Self         string // this executable, re-run as the file helper
 
+	System     System                                    // root-only side effects; the real one by default
+	PoolUsers  []string                                  // subagent users; nil = the max_agents pool users that exist
+	LookupUser func(string) (*syscall.Credential, error) // resolves user names; osuser.Lookup by default
+	TmpDirs    []string                                  // shared directories swept when a user is reclaimed
+	OwnerUID   int                                       // owns the owner spool and OWNER.md
+
 	Poll           time.Duration
 	CommandTimeout time.Duration
 	RetryBase      time.Duration
@@ -51,6 +57,10 @@ func DefaultConfig(self string) Config {
 		AgentUser:      "agent",
 		ProviderUser:   "agent-provider",
 		Self:           self,
+		System:         newExecSystem(),
+		LookupUser:     osuser.Lookup,
+		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
+		OwnerUID:       0,
 		Poll:           time.Second,
 		CommandTimeout: 120 * time.Second,
 		RetryBase:      2 * time.Second,
