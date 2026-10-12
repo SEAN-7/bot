@@ -113,9 +113,10 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 // need systemd.
 type noLinger struct{ System }
 
-func (noLinger) EnableLinger(string) error    { return nil }
-func (noLinger) DisableLinger(string) error   { return nil }
-func (noLinger) StopUserManager(string) error { return nil }
+func (noLinger) EnableLinger(string) error     { return nil }
+func (noLinger) DisableLinger(string) error    { return nil }
+func (noLinger) StopUserManager(string) error  { return nil }
+func (noLinger) StartUserManager(string) error { return nil }
 
 // lookupIDs returns the uid and primary gid of a test user.
 func lookupIDs(t *testing.T, name string) (int, int) {

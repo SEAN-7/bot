@@ -43,11 +43,16 @@ func Migrate(cfg Config) (err error) {
 		}
 	}()
 	// Runs before the wrapping above: a failure before the rename leaves the
-	// previous release to run, with its services.
+	// previous release to run, with its services. Lingering alone does not
+	// restart a manager that was stopped while the user already lingered.
+	// Best effort: the error stays the plain one.
 	defer func() {
 		if err != nil && !m.partial && m.stopping {
 			if lerr := cfg.System.EnableLinger(cfg.LegacyUser); lerr != nil {
 				cfg.Logger.Printf("re-enabling lingering for %s: %v", cfg.LegacyUser, lerr)
+			}
+			if serr := cfg.System.StartUserManager(cfg.LegacyUser); serr != nil {
+				cfg.Logger.Printf("restarting the user manager of %s: %v", cfg.LegacyUser, serr)
 			}
 		}
 	}()

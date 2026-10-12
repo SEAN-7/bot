@@ -422,8 +422,8 @@ func TestMigrateFailureBeforeRenameIsNotPartial(t *testing.T) {
 			if !sys.users["agent"] || sys.users["agent-16"] {
 				t.Fatalf("renamed: %s", sys)
 			}
-			if !sys.inOrder(call, "linger agent") {
-				t.Fatalf("lingering not restored: %s", sys)
+			if !sys.inOrder(call, "linger agent", "start manager agent") {
+				t.Fatalf("lingering and user manager not restored: %s", sys)
 			}
 			if info, err := os.Lstat(filepath.Join(cfg.Homes, "agent")); err != nil || !info.IsDir() {
 				t.Fatalf("home %v %v", info, err)
@@ -442,6 +442,23 @@ func TestMigrateFailureBeforeRenameIsNotPartial(t *testing.T) {
 	}
 }
 
+// Restoring the user's services is best effort: its failures are logged and
+// leave the error plain.
+func TestMigrateRestoreFailureStaysPlain(t *testing.T) {
+	cfg, sys := legacyInstall(t)
+	sys.setFail("stop agent", errors.New("processes survived"))
+	sys.setFail("linger agent", errors.New("no logind"))
+	sys.setFail("start manager agent", errors.New("no systemd"))
+	err := Migrate(cfg)
+	var partial *PartialError
+	if err == nil || errors.As(err, &partial) || !strings.Contains(err.Error(), "processes survived") {
+		t.Fatalf("got %v", err)
+	}
+	if !sys.inOrder("linger agent", "start manager agent") {
+		t.Fatalf("restore not attempted: %s", sys)
+	}
+}
+
 // A rename that stopped after renaming the user is partial, and lingering
 // is left to the rerun, which finishes it.
 func TestMigrateFailedRenameAfterUsermodIsPartial(t *testing.T) {
@@ -452,8 +469,8 @@ func TestMigrateFailedRenameAfterUsermodIsPartial(t *testing.T) {
 	if !errors.As(err, &partial) {
 		t.Fatalf("got %v", err)
 	}
-	if sys.called("linger agent") {
-		t.Fatalf("lingering re-enabled for a renamed user: %s", sys)
+	if sys.called("linger agent") || sys.called("start manager agent") {
+		t.Fatalf("restored a renamed user: %s", sys)
 	}
 	sys.setFail("renamed agent agent-16", nil)
 	if err := Migrate(cfg); err != nil {

@@ -279,3 +279,26 @@ func TestExecSystemStopUserManager(t *testing.T) {
 		t.Fatalf("timeout: %v", err)
 	}
 }
+
+func TestExecSystemStartUserManager(t *testing.T) {
+	var calls [][]string
+	var fail error
+	s := &execSystem{
+		run: func(name string, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string{name}, args...))
+			return []byte("Failed to start"), fail
+		},
+		lookup: func(string) (*syscall.Credential, error) { return &syscall.Credential{Uid: 1001}, nil },
+	}
+	if err := s.StartUserManager("agent"); err != nil {
+		t.Fatal(err)
+	}
+	// Queued, not waited for: its units start on their own.
+	if want := []string{"systemctl", "start", "--no-block", "user@1001.service"}; !reflect.DeepEqual(calls[0], want) {
+		t.Fatal(calls[0])
+	}
+	fail = errors.New("exit status 1")
+	if err := s.StartUserManager("agent"); err == nil {
+		t.Fatal("failure not reported")
+	}
+}

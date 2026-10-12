@@ -76,7 +76,8 @@ func (s *fakeSystem) DisableLinger(user string) error { return s.record("unlinge
 func (s *fakeSystem) StopProcesses(user string) error { return s.record("stop " + user) }
 func (s *fakeSystem) RemoveCrontab(user string) error { return s.record("crontab " + user) }
 
-func (s *fakeSystem) StopUserManager(user string) error { return s.record("stop manager " + user) }
+func (s *fakeSystem) StopUserManager(user string) error  { return s.record("stop manager " + user) }
+func (s *fakeSystem) StartUserManager(user string) error { return s.record("start manager " + user) }
 
 // RenameUser fails before renaming as "rename OLD NEW" fails, and after
 // renaming the user as "renamed OLD NEW" does.

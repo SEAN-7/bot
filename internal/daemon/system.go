@@ -27,6 +27,8 @@ type System interface {
 	// StopUserManager stops the user's systemd instance and waits, for a
 	// bounded time, until its services have shut down.
 	StopUserManager(user string) error
+	// StartUserManager starts the user's systemd instance, without waiting.
+	StartUserManager(user string) error
 	// StopProcesses ends the user's systemd instance and every process it owns.
 	StopProcesses(user string) error
 	RemoveCrontab(user string) error
@@ -119,6 +121,19 @@ func (s *execSystem) StopUserManager(user string) error {
 		return fmt.Errorf("systemctl stop %s: %v: %s", unit, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// StartUserManager queues the start: the manager starts the user's units on
+// its own.
+func (s *execSystem) StartUserManager(user string) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	if cred == nil {
+		return fmt.Errorf("no such user %q", user)
+	}
+	return s.do("systemctl", "start", "--no-block", fmt.Sprintf("user@%d.service", cred.Uid))
 }
 
 func (s *execSystem) StopProcesses(user string) error {
