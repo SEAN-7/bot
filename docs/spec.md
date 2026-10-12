@@ -157,9 +157,12 @@ agent user cannot read another user's process environment.
 `agent daemon` runs as one systemd service (`Restart=always`, default
 `KillMode`) serving the whole tree.
 
-- Startup: require root, an existing `agent` user and the pool users; finish
-  any reclaim left in progress (see Reclaim); start the helpers; run crash
-  recovery; then poll about once a second.
+- Startup: require root, an existing `agent` user and the pool users;
+  tighten what earlier releases left readable (the human's conversation log
+  becomes `root:agent 0640`, and the journals of subagents that hold no
+  user get the journal modes and the group of their nearest ancestor that
+  holds one); finish any reclaim left in progress (see Reclaim); start the
+  helpers; run crash recovery; then poll about once a second.
 - **Discovery.** The main agent is `/home/agent`. A control directory is a
   real directory (not a symlink) at `<agent home>/agents/<name>`, owned by
   that agent's user, that contains a regular file `config.json`. The scan

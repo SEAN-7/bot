@@ -146,6 +146,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := journal.Secure(cfg.JournalDir(d.main.id), d.main.gid()); err != nil {
 		cfg.Logger.Printf("main: journal permissions: %v", err)
 	}
+	d.secureOldLogs()
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
@@ -168,6 +169,54 @@ func Run(ctx context.Context, cfg Config) error {
 			d.shutdown()
 			return nil
 		case <-ticker.C:
+		}
+	}
+}
+
+// secureOldLogs tightens what earlier releases left readable by every user,
+// before any subagent runs: the human's conversation, and the journals of
+// subagents that hold no user (removed, perhaps before users per subagent
+// existed), which go to the group of their nearest ancestor that holds one.
+// A held subagent's journals are set when it is admitted or reclaimed.
+// These paths are outside every agent home, so root opens them.
+func (d *daemon) secureOldLogs() {
+	if info, err := os.Lstat(d.cfg.MessagesFile()); err == nil && info.Mode().IsRegular() {
+		err = os.Chmod(d.cfg.MessagesFile(), 0o640)
+		if gid := d.main.gid(); err == nil && gid >= 0 {
+			err = os.Lchown(d.cfg.MessagesFile(), -1, gid)
+		}
+		if err != nil {
+			d.cfg.Logger.Printf("messages log permissions: %v", err)
+		}
+	}
+	d.secureUnheldJournals(d.main.id)
+}
+
+// secureUnheldJournals walks id's journal directory's subagents.
+func (d *daemon) secureUnheldJournals(id string) {
+	agents := filepath.Join(d.cfg.JournalDir(id), "agents")
+	items, err := os.ReadDir(agents)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			d.cfg.Logger.Printf("journal permissions: %v", err)
+		}
+		return
+	}
+	for _, item := range items {
+		if !item.IsDir() {
+			continue // not a journal directory; links are never followed
+		}
+		child := filepath.Join(id, "agents", item.Name())
+		if _, held := d.pool.entryOf(child); held {
+			d.secureUnheldJournals(child)
+			continue
+		}
+		gid, err := d.ancestorGid(child)
+		if err == nil {
+			err = journal.SecureTree(d.cfg.JournalDir(child), gid)
+		}
+		if err != nil {
+			d.cfg.Logger.Printf("%s: journal permissions: %v", child, err)
 		}
 	}
 }

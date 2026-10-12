@@ -715,3 +715,54 @@ func TestPrivilegeMigrateRefusesForeignControlDirectory(t *testing.T) {
 		})
 	}
 }
+
+// TestPrivilegeOldLogsUnreadable: what an earlier release left readable by
+// everyone (the human's conversation, 0644 root:root, and the journals of a
+// subagent removed before the upgrade) is tightened on start, so no
+// subagent can read it; an old removed grandchild's journals go to its
+// parent's group.
+func TestPrivilegeOldLogsUnreadable(t *testing.T) {
+	h, name := rootHarness(t)
+	_, mainGid := lookupIDs(t, name)
+	if err := os.WriteFile(h.cfg.MessagesFile(), []byte(`{"from":"owner","text":"human secret"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(h.cfg.MessagesFile(), 0o644)
+	const stamp = "20250101T000000.000000000Z.jsonl"
+	oldRun := func(id string) string {
+		dir := h.cfg.JournalDir(id)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		os.Chmod(dir, 0o755)
+		run := filepath.Join(dir, stamp)
+		if err := os.WriteFile(run, []byte(`{"type":"end"}`+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		os.Chmod(run, 0o644)
+		return run
+	}
+	ctrlA := rootChild(t, h, "a")
+	user := h.cfg.PoolUsers[0]
+	writePool(t, h, `[{"user":"`+user+`","agent":"`+ctrlA+`","state":"active"}]`)
+	removed := oldRun(filepath.Join(h.cfg.Home, "agents", "old"))
+	grandchild := oldRun(filepath.Join(ctrlA, "agents", "oldg"))
+	h.start()
+	homeA := h.childHome(ctrlA)
+	if got := ownerName(t, homeA); got != user {
+		t.Fatalf("a got %s, want its recorded %s", got, user)
+	}
+	_, gidA := lookupIDs(t, user)
+	statIs(t, h.cfg.MessagesFile(), 0, mainGid, 0o640)
+	statIs(t, removed, 0, mainGid, 0o640)
+	statIs(t, filepath.Dir(removed), 0, mainGid, fs.ModeDir|0o751)
+	statIs(t, grandchild, 0, gidA, 0o640)
+	h.setScript(matchStep("task-for-a", fmt.Sprintf("cat %s; echo mrc=$?; cat %s; echo orc=$?; ls %s; echo lrc=$?", h.cfg.MessagesFile(), removed, filepath.Dir(removed)), 100))
+	h.drop(homeA, "task.md", "task-for-a")
+	h.waitEnds(ctrlA, 1)
+	out := h.toolOutput("mrc=")
+	exitCodes(t, out, false, "mrc", "orc", "lrc")
+	if strings.Contains(out, "human secret") {
+		t.Fatal("subagent read the human's conversation")
+	}
+}

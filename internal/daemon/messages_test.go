@@ -326,3 +326,24 @@ func TestUnremovableMainMessageLoggedOnce(t *testing.T) {
 		t.Fatalf("message logged %d times", n)
 	}
 }
+
+// An upgrade leaves the human's conversation and the journals of subagents
+// removed under earlier releases world-readable; the daemon tightens them on
+// start, before any subagent runs.
+func TestStartTightensOldLogs(t *testing.T) {
+	h := newHarness(t)
+	os.WriteFile(h.cfg.MessagesFile(), []byte("{}\n"), 0o644)
+	os.Chmod(h.cfg.MessagesFile(), 0o644)
+	old := h.cfg.JournalDir(filepath.Join(h.cfg.Home, "agents", "old"))
+	run := filepath.Join(old, "20250101T000000.000000000Z.jsonl")
+	os.MkdirAll(filepath.Join(old, "agents", "older"), 0o755)
+	os.WriteFile(run, []byte("{}\n"), 0o644)
+	os.Chmod(run, 0o644)
+	h.start()
+	waitFor(t, "modes tightened", func() bool {
+		m, err1 := os.Stat(h.cfg.MessagesFile())
+		r, err2 := os.Stat(run)
+		o, err3 := os.Stat(filepath.Join(old, "agents", "older"))
+		return err1 == nil && err2 == nil && err3 == nil && m.Mode().Perm() == 0o640 && r.Mode().Perm() == 0o640 && o.Mode().Perm() == 0o751
+	})
+}
