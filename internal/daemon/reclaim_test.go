@@ -454,3 +454,34 @@ func TestHomeLinkRepaired(t *testing.T) {
 		t.Fatalf("admitted %d times", n)
 	}
 }
+
+// A link to a reclaimed home, such as the one an upgrade leaves at the old
+// agent's path, is removed with the home, so it never leads into the next
+// holder's; links to other homes stay.
+func TestReclaimRemovesHomeLinks(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	agentLink := filepath.Join(h.cfg.Homes, "agent")
+	otherLink := filepath.Join(h.cfg.Homes, "other")
+	if err := os.Symlink(h.cfg.PoolHome("agent-1"), agentLink); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(h.cfg.PoolHome("agent-4"), otherLink); err != nil {
+		t.Fatal(err)
+	}
+	removeControlDir(t, h.mainCtrl)
+	sys := h.cfg.System.(*fakeSystem)
+	waitFor(t, "pool entry freed", func() bool { return !strings.Contains(poolJSON(h), "agent-1") })
+	if !sys.called("members agent-1 ") {
+		t.Fatal(sys)
+	}
+	if _, err := os.Lstat(agentLink); !os.IsNotExist(err) {
+		t.Fatalf("link to the reclaimed home kept: %v", err)
+	}
+	if target, err := os.Readlink(otherLink); err != nil || target != h.cfg.PoolHome("agent-4") {
+		t.Fatalf("link to another home: %q %v", target, err)
+	}
+	if fi, err := os.Lstat(h.mainHome); err != nil || !fi.IsDir() {
+		t.Fatalf("the home itself: %v", err)
+	}
+}
