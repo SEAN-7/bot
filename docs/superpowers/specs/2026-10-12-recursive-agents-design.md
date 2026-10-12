@@ -44,13 +44,22 @@ overprescribed in the seed README: the lifecycle becomes commands listed by
   root and agents. It has no loop, no inbox and no owner. The daemon reaches
   `/etc/agent` through a helper running as root, its own user there.
 - Discovery: a control directory is a real directory (not a symlink) owned by
-  the parent's user (root for `/etc/agent/agents/`) that holds a regular
-  `config.json` (not yet admitted) or a `home` symlink and a `pool.json`
-  record (admitted, for example after a daemon restart). A `config.json` that
-  appears in an admitted agent's control directory is ignored: the child's
-  config is its own. Identity still includes the directory's device and
-  inode, so removing and recreating a directory between polls admits a new
-  agent.
+  the parent's user (root for `/etc/agent/agents/`). One the daemon does not
+  yet run is admitted, in this order:
+  1. with its own user, when `pool.json` records one for its id (a daemon
+     restart; a missing `home` link is restored);
+  2. with the user its `home` link names, when that user is free and its
+     home holds this agent's evidence (its journal link points at this
+     agent's journal directory, whose group is that user's, set only by the
+     daemon) — recovery after a lost `pool.json`, keeping the home;
+  3. with a fresh user, when it holds a regular `config.json`. A user whose
+     home holds another agent's evidence is never handed out, so a lost
+     `pool.json` cannot wipe a live home.
+  Otherwise it is left alone (it may still be being written). A
+  `config.json` that appears in an admitted agent's control directory is
+  ignored: the child's config is its own. Identity still includes the
+  directory's device and inode, so removing and recreating a directory
+  between polls admits a new agent.
 - Groups are unchanged in principle: each agent's ancestors (excluding root,
   which needs none) are members of its group.
 
