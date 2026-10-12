@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -513,13 +514,14 @@ func TestRestartKeepsAdmittedChild(t *testing.T) {
 	}
 }
 
-// After pool.json is lost every agent looks unheld on start, so its journals
-// are handed to its nearest held ancestor's group (root's, for main) before
-// admission asks whether a home is the agent's own. The group the journal
-// directory had must still count, or main's whole home, its children's
-// control directories included, is cleared. The harness's helpers run
-// without credentials, so the groups here come from LookupUser alone.
-func TestLostPoolKeepsJournalEvidence(t *testing.T) {
+// lostPoolMain sets up a start after pool.json was lost: main's journal
+// directory has the group of agent-1, main's user before, and main's home
+// links to it. LookupUser gives agent-1 and root different real groups of
+// the current user, so journalOwnedBy is meaningful; the harness's helpers
+// still run without credentials. It returns main's journal directory and
+// agent-1's group.
+func lostPoolMain(t *testing.T) (*daemon, *agent, string, int) {
+	t.Helper()
 	other := -1
 	groups, _ := os.Getgroups()
 	for _, g := range groups {
@@ -552,17 +554,65 @@ func TestLostPoolKeepsJournalEvidence(t *testing.T) {
 	}
 	os.MkdirAll(h.mainHome, 0o755)
 	os.Symlink(dir, filepath.Join(h.mainHome, "journal"))
-	d := &daemon{cfg: h.cfg}
+	d := &daemon{cfg: h.cfg, reclaimErrs: map[string]string{}}
 	var err error
 	if d.pool, err = loadPool(h.cfg.PoolFile(), h.cfg.PoolUsers); err != nil {
 		t.Fatal(err)
 	}
-	main := detachedMain(t, h, d)
+	return d, detachedMain(t, h, d), dir, other
+}
+
+// After pool.json is lost every agent looks unheld on start, so its journals
+// are handed to its nearest held ancestor's group (root's, for main) before
+// admission asks whether a home is the agent's own. The group the journal
+// directory had must still count, or main's whole home, its children's
+// control directories included, is cleared.
+func TestLostPoolKeepsJournalEvidence(t *testing.T) {
+	d, main, dir, other := lostPoolMain(t)
 	d.secureUnheldJournals(d.root.id)
 	if journalOwnedBy(dir, other) {
 		t.Fatal("unheld journals not handed to root's group")
 	}
 	if !main.ownsHome() {
 		t.Fatal("main's own home not recognised after a lost pool.json")
+	}
+}
+
+// The group remembered on start is evidence only until the daemon sets the
+// journal's group again: when main is admitted (here to a user whose group
+// is not agent-1's), or reclaimed (its journals go to root's group). Offered
+// agent-1 again, whose home another agent may have held since, main must not
+// trust a journal link there.
+func TestStaleJournalEvidenceIgnored(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		regroup func(d *daemon, id string) error
+	}{
+		{"admitted", func(d *daemon, id string) error { return d.secureJournal(id, os.Getgid()) }},
+		{"reclaimed", func(d *daemon, id string) error {
+			// Admitted to agent-2 (agent-1 being taken), then removed.
+			if _, err := d.pool.assign("other", 4); err != nil {
+				return err
+			}
+			if user, err := d.pool.assign(id, 4); err != nil || user != "agent-2" {
+				return fmt.Errorf("assigned %q: %v", user, err)
+			}
+			os.MkdirAll(d.cfg.PoolHome("agent-2"), 0o755)
+			return d.reclaim("agent-2", id)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, main, dir, other := lostPoolMain(t)
+			d.secureUnheldJournals(d.root.id)
+			if err := tc.regroup(d, main.id); err != nil {
+				t.Fatal(err)
+			}
+			if journalOwnedBy(dir, other) {
+				t.Fatal("journal not given another group")
+			}
+			if main.ownsHome() {
+				t.Fatal("a journal link trusted on a group the daemon has since changed")
+			}
+		})
 	}
 }

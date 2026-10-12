@@ -213,7 +213,8 @@ func (d *daemon) secureUnheldJournals(id string) {
 // rememberGroups records the group of every directory under dir that has
 // none recorded yet, before secureUnheldJournals hands dir to another group.
 // After a lost pool.json every agent looks unheld, and ownsHome still needs
-// the group the daemon gave its journal directory.
+// the group the daemon gave its journal directory, until admission or
+// reclaim sets it again (secureJournal, forgetGroups).
 func (d *daemon) rememberGroups(dir string) {
 	if d.journalGids == nil {
 		d.journalGids = map[string]int{}
@@ -233,6 +234,16 @@ func (d *daemon) rememberGroups(dir string) {
 		}
 		return nil
 	})
+}
+
+// forgetGroups drops the groups remembered on start for dir and everything
+// under it, once the daemon gives that tree to another group.
+func (d *daemon) forgetGroups(dir string) {
+	for path := range d.journalGids {
+		if path == dir || strings.HasPrefix(path, dir+"/") {
+			delete(d.journalGids, path)
+		}
+	}
 }
 
 // poolUsers returns the configured pool users, or the max_agents pool users,

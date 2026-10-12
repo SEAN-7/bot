@@ -94,7 +94,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := d.cfg.System.EnableLinger(user); err != nil {
 		return fail("linger", err)
 	}
-	if err := journal.Secure(d.cfg.JournalDir(id), c.gid()); err != nil {
+	if err := d.secureJournal(id, c.gid()); err != nil {
 		return fail("journal", err)
 	}
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
@@ -109,13 +109,25 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	return c
 }
 
+// secureJournal creates id's journal directory and gives it to group gid, as
+// admission does. The group remembered on start is then out of date, so
+// ownsHome reads the group from the directory from here on.
+func (d *daemon) secureJournal(id string, gid int) error {
+	dir := d.cfg.JournalDir(id)
+	if err := journal.Secure(dir, gid); err != nil {
+		return err
+	}
+	delete(d.journalGids, dir)
+	return nil
+}
+
 // ownsHome reports whether a's home already holds a journal link to a's own
 // journal directory, which only a run of this agent creates.
 //
 // The link lives in a home the previous holder of this user controlled, so
 // it is trusted only if the journal directory also carries this user's
 // group, which only the daemon sets: the group it had on start, if
-// secureUnheldJournals has changed it since.
+// secureUnheldJournals has changed it since and nothing has set it again.
 func (a *agent) ownsHome() bool {
 	e, err := a.fs.Stat(filepath.Join(a.home, "journal"))
 	dir := a.d.cfg.JournalDir(a.id)
