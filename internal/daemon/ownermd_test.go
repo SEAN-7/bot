@@ -147,8 +147,13 @@ func TestUnsafeOwnerStopsRun(t *testing.T) {
 				}
 			},
 			func(t *testing.T, owner string) {
-				os.Remove(owner)
-				os.WriteFile(owner, []byte("Be brief."), 0o644)
+				// Replaced in one step: a poll between removing the link
+				// and writing the file would run without an OWNER.md.
+				temp := owner + ".new"
+				os.WriteFile(temp, []byte("Be brief."), 0o644)
+				if err := os.Rename(temp, owner); err != nil {
+					t.Fatal(err)
+				}
 			}},
 		{"group-writable file", false, "is writable by group or others",
 			func(t *testing.T, owner string) {
