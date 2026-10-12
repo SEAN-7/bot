@@ -392,25 +392,36 @@ func TestRemovalTakesPausedDescendant(t *testing.T) {
 
 // A control directory removed and created again between two polls is a new
 // subagent: the old one is removed and reclaimed, and the new one admitted
-// with a cleared home. Here the old directory is emptied first (pausing the
-// agent) and the new one renamed over it, so no poll sees the path missing.
+// with a cleared home. Here the old directory is emptied (pausing the agent)
+// and the new one renamed over it, so no poll sees the path missing.
 func TestReplacedControlDirIsRemoveAndAdmit(t *testing.T) {
 	h := newHarness(t)
 	c := makeChild(t, h, "c", true)
 	h.start()
 	home := h.childHome(c)
 	os.WriteFile(filepath.Join(home, "notes.txt"), []byte("old agent's"), 0o644)
-	next := filepath.Join(h.cfg.Home, "agents", ".next")
+	next := filepath.Join(h.cfg.Home, "next") // outside agents/, same file system
 	os.MkdirAll(next, 0o755)
 	os.WriteFile(filepath.Join(next, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
-	items, _ := os.ReadDir(c)
-	for _, item := range items {
-		os.Remove(filepath.Join(c, item.Name()))
+	empty := func() {
+		items, _ := os.ReadDir(c)
+		for _, item := range items {
+			os.Remove(filepath.Join(c, item.Name()))
+		}
 	}
+	empty()
 	time.Sleep(5 * h.cfg.Poll)
-	// rename(2) replaces an empty directory atomically; os.Rename refuses to.
-	if err := syscall.Rename(next, c); err != nil {
-		t.Fatal(err)
+	// rename(2) replaces an empty directory atomically; os.Rename refuses
+	// to. The daemon may restore the home link in between: empty it again.
+	for i := 0; ; i++ {
+		err := syscall.Rename(next, c)
+		if err == nil {
+			break
+		}
+		if i == 100 || !errors.Is(err, syscall.ENOTEMPTY) && !errors.Is(err, syscall.EEXIST) {
+			t.Fatal(err)
+		}
+		empty()
 	}
 	waitFor(t, "readmitted", func() bool { return strings.Count(h.logs.String(), "c: admitted as") == 2 })
 	sys := h.cfg.System.(*fakeSystem)
