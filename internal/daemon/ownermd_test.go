@@ -376,7 +376,7 @@ func TestOwnerErrorSurvivesConfigError(t *testing.T) {
 	h := newHarness(t)
 	errorFile := unsafeOwner(t, h)
 	want, _ := os.ReadFile(errorFile)
-	config := filepath.Join(h.mainCtrl, "config.json")
+	config := filepath.Join(h.mainHome, "config.json")
 	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
 	waitFor(t, "config ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
 	os.WriteFile(config, []byte(testConfig), 0o644)

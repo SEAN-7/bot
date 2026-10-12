@@ -128,8 +128,8 @@ func lookupIDs(t *testing.T, name string) (int, int) {
 }
 
 // rootChild creates a control directory under main's agents/ as main's user
-// would, once main is admitted: the directory and its config.json belong to
-// that user.
+// would, once main is admitted: the directory and its starting config.json
+// belong to that user.
 func rootChild(t *testing.T, h *harness, name string) string {
 	t.Helper()
 	uid, gid := lookupIDs(t, h.cfg.PoolUsers[0])
@@ -302,13 +302,14 @@ func TestPrivilegeErrorSymlink(t *testing.T) {
 	original := secretFile(t, h, 0o644, "ORIGINAL")
 	h.start()
 	ctrl := rootChild(t, h, "c")
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
+	home := h.childHome(ctrl)
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
 	errorFile := filepath.Join(ctrl, "ERROR")
 	os.Symlink(original, errorFile)
 	u, _ := user.Lookup(name)
 	uid, _ := strconv.Atoi(u.Uid)
 	os.Lchown(errorFile, uid, -1)
-	h.drop(h.childHome(ctrl), "go.md", "go")
+	h.drop(home, "go.md", "go")
 	waitFor(t, "ERROR written", func() bool { return fileContains(errorFile, "config.json") })
 	if data, _ := os.ReadFile(original); string(data) != "ORIGINAL" {
 		t.Fatalf("privileged file overwritten: %q", data)
@@ -415,6 +416,15 @@ func TestPrivilegeSubagentIsolation(t *testing.T) {
 	for _, home := range []string{h.mainHome, homeA, homeB} {
 		uid, gid := lookupIDs(t, ownerName(t, home))
 		statIs(t, home, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
+		// The starting config moved into the home, written as its agent.
+		if got := ownerName(t, filepath.Join(home, "config.json")); got != ownerName(t, home) {
+			t.Fatalf("%s/config.json belongs to %s", home, got)
+		}
+	}
+	for _, ctrl := range []string{h.mainCtrl, ctrlA, ctrlB} {
+		if _, err := os.Lstat(filepath.Join(ctrl, "config.json")); !os.IsNotExist(err) {
+			t.Fatalf("config.json left in %s: %v", ctrl, err)
+		}
 	}
 	_, gidA := lookupIDs(t, ownerName(t, homeA))
 	statIs(t, journalA, 0, gidA, fs.ModeDir|0o751)
@@ -680,7 +690,8 @@ func TestPrivilegeOldLogsUnreadable(t *testing.T) {
 // home is kept only if its journal link and the journal directory's group
 // both say it is the newly assigned agent's. A previous holder that pointed
 // its journal link at a sibling's journals cannot pass its files on to that
-// sibling.
+// sibling. Without their pool records, main and d are found again once their
+// control directories hold a config.json again.
 func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
 	h, _ := rootHarness(t)
 	h.start()
@@ -706,6 +717,8 @@ func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
 	h.stop()
 	os.Remove(h.cfg.PoolFile())
 	os.RemoveAll(ctrlC)
+	writeConfig(t, h.mainCtrl)
+	writeConfig(t, ctrlD)
 	h.start()
 	waitFor(t, "d admitted as c's former user", func() bool {
 		return strings.Contains(h.logs.String(), "main/agents/d: admitted as "+userC)

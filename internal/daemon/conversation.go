@@ -243,23 +243,18 @@ func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 }
 
 // childWaits reports whether a message for a's child name should wait: its
-// control directory holds a config.json, so it may yet be admitted. Only a
-// child that certainly does not exist has its messages dropped.
+// control directory may yet be admitted, as reconcile would (admissible).
+// Only a child that certainly does not exist has its messages dropped.
 func (a *agent) childWaits(uid int, name string) bool {
 	ctrl := filepath.Join(a.home, "agents", name)
-	for _, p := range []struct{ path, kind string }{{ctrl, "dir"}, {filepath.Join(ctrl, "config.json"), "file"}} {
-		e, err := a.fs.Stat(p.path)
-		if errors.Is(err, fs.ErrNotExist) {
-			return false
-		} else if err != nil {
-			a.logf("messages for %s: %v", name, err)
-			return true
-		}
-		if e.Type != p.kind || e.UID != uid {
-			return false
-		}
+	e, err := a.fs.Stat(ctrl)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false
+	} else if err != nil {
+		a.logf("messages for %s: %v", name, err)
+		return true
 	}
-	return true
+	return e.Type == "dir" && e.UID == uid && a.d.admissible(a, ctrl)
 }
 
 // spoolFiles lists a spool's messages in name order: regular, non-dot files

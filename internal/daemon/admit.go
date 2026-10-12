@@ -91,6 +91,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := c.seed(); err != nil {
 		return fail("seed home", err)
 	}
+	if err := c.adoptConfig(); err != nil {
+		return fail("config", err)
+	}
 	if err := d.cfg.System.EnableLinger(user); err != nil {
 		return fail("linger", err)
 	}
@@ -194,6 +197,30 @@ func (a *agent) seed() error {
 		}
 	}
 	return nil
+}
+
+// adoptConfig moves the starting config.json from the control directory into
+// the home, which the agent owns from then on: written through the agent's
+// helper, read and removed through its parent's. A home that already holds
+// one (a daemon restart) keeps it, and a config.json the parent wrote since
+// is dropped.
+func (c *agent) adoptConfig() error {
+	from, to := filepath.Join(c.ctrl, "config.json"), filepath.Join(c.home, "config.json")
+	_, err := c.fs.Stat(to)
+	if errors.Is(err, fs.ErrNotExist) {
+		var data []byte
+		var size int64
+		if data, size, err = c.parent.fs.Read(from, configLimit); err == nil && size > int64(len(data)) {
+			err = fmt.Errorf("%s is larger than %d bytes", from, configLimit)
+		}
+		if err == nil {
+			err = c.fs.Write(to, data)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return c.parent.fs.Remove(from)
 }
 
 // admitFailed logs a failed admission once per distinct error.

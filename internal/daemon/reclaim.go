@@ -157,10 +157,10 @@ func (d *daemon) ancestorGid(agentID string) (int, error) {
 
 // controlDirGone reports whether parent's control directory ctrl no longer
 // exists: removal and its reclaim follow only from that, never from a
-// missing or renamed config.json, which an agent may move about. A directory
-// that is not the one admitted (want, when known) was removed and created
-// again, so the admitted one is gone. Anything short of certainty keeps the
-// agent: a failing helper or user lookup must not wipe a live agent.
+// missing home link, which the parent may delete. A directory that is not
+// the one admitted (want, when known) was removed and created again, so the
+// admitted one is gone. Anything short of certainty keeps the agent: a
+// failing helper or user lookup must not wipe a live agent.
 func controlDirGone(parent *agent, ctrl string, want fileID) bool {
 	e, err := parent.fs.Stat(ctrl)
 	if err != nil {

@@ -62,7 +62,7 @@ func TestConfigValidationFailure(t *testing.T) {
 	if strings.Count(h.logs.String(), `unknown model "nope"`) != 1 {
 		t.Fatalf("config error not logged exactly once:\n%s", h.logs)
 	}
-	os.WriteFile(config, []byte(testConfig), 0o644)
+	os.WriteFile(filepath.Join(h.mainHome, "config.json"), []byte(testConfig), 0o644)
 	h.waitEnds(h.mainID, 1)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("config ERROR not cleared")
@@ -278,8 +278,8 @@ func TestRestartKeepsChildHome(t *testing.T) {
 	os.WriteFile(work, []byte("mine"), 0o644)
 	os.WriteFile(filepath.Join(home, "README.md"), []byte("my own readme"), 0o644)
 	h.stop()
-	os.Remove(filepath.Join(ctrl, "home"))
 	h.start()
+	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	if again := h.childHome(ctrl); again != home {
 		t.Fatalf("restart moved the child from %s to %s", home, again)
 	}
@@ -336,6 +336,8 @@ func TestMissingPoolUsersLogged(t *testing.T) {
 // Defence in depth against a lost pool.json: a freshly assigned home whose
 // journal link already points at this agent's journals is this agent's own
 // home, so it is not cleared. Another agent's journal link does not count.
+// Without its pool record an admitted agent is found again only once its
+// control directory holds a config.json again.
 func TestLostPoolKeepsOwnHome(t *testing.T) {
 	h := newHarness(t, done(), done())
 	h.start()
@@ -353,6 +355,8 @@ func TestLostPoolKeepsOwnHome(t *testing.T) {
 	os.Symlink(h.cfg.JournalDir(childID("x")), filepath.Join(other, "journal"))
 	h.stop()
 	os.Remove(h.cfg.PoolFile())
+	writeConfig(t, h.mainCtrl)
+	writeConfig(t, ctrl)
 	makeChild(t, h, "d", true)
 	h.start()
 	waitFor(t, "all admitted", func() bool {
@@ -491,8 +495,8 @@ func TestTopLevelMessageLoggedOnly(t *testing.T) {
 }
 
 // TestRestartKeepsAdmittedChild: after a restart, a control directory with a
-// home link and a pool record is the same agent, whether or not it still
-// holds config.json, and keeps its home.
+// home link and a pool record, its config.json long moved into the home, is
+// the same agent and keeps its home.
 func TestRestartKeepsAdmittedChild(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -501,9 +505,6 @@ func TestRestartKeepsAdmittedChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.stop()
-	if err := os.Remove(filepath.Join(h.mainCtrl, "config.json")); err != nil {
-		t.Fatal(err)
-	}
 	h.start()
 	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
 	if data, err := os.ReadFile(marker); err != nil || string(data) != "mine" {
@@ -614,5 +615,118 @@ func TestStaleJournalEvidenceIgnored(t *testing.T) {
 				t.Fatal("a journal link trusted on a group the daemon has since changed")
 			}
 		})
+	}
+}
+
+// TestAdmissionMovesConfigIntoHome: admission moves the starting config from
+// the control directory into the new home, byte for byte.
+func TestAdmissionMovesConfigIntoHome(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	ctrl := makeChild(t, h, "c", false)
+	config := `{"provider":"replay","model":"replay-1","options":{"style":"a"}}`
+	if err := os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	home := h.childHome(ctrl)
+	if data, err := os.ReadFile(filepath.Join(home, "config.json")); err != nil || string(data) != config {
+		t.Fatalf("~/config.json %q %v", data, err)
+	}
+	for _, c := range []string{ctrl, h.mainCtrl} {
+		if _, err := os.Lstat(filepath.Join(c, "config.json")); !os.IsNotExist(err) {
+			t.Fatalf("config.json left in %s: %v", c, err)
+		}
+	}
+}
+
+// TestChildChangesOwnConfig: an agent edits its own ~/config.json; the next
+// run uses it and starts fresh.
+func TestChildChangesOwnConfig(t *testing.T) {
+	h := newHarness(t, done(), done())
+	h.start()
+	h.drop(h.mainHome, "one.md", "one")
+	h.waitEnds(h.mainID, 1)
+	config := `{"provider":"replay","model":"replay-1","options":{"style":"b"}}`
+	if err := os.WriteFile(filepath.Join(h.mainHome, "config.json"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.drop(h.mainHome, "two.md", "two")
+	h.waitEnds(h.mainID, 2)
+	reqs := h.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("%d requests", len(reqs))
+	}
+	if style := reqs[1].Options["style"]; style != "b" {
+		t.Fatalf("options %v", reqs[1].Options)
+	}
+	if n := len(reqs[1].Messages); n != 1 {
+		t.Fatalf("second run continued the first: %d messages", n)
+	}
+}
+
+// TestInvalidOwnConfigReportsInControlDir: an invalid ~/config.json is
+// reported in the control directory, where the agent cannot remove it, and
+// to the parent once; fixing the file clears it.
+func TestInvalidOwnConfigReportsInControlDir(t *testing.T) {
+	h := newHarness(t, doneFor(parentMark), doneFor(childMark))
+	h.start()
+	h.markParent()
+	ctrl := makeChild(t, h, "x", true)
+	home := h.childHome(ctrl)
+	config := filepath.Join(home, "config.json")
+	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
+	h.drop(home, "task.md", "work")
+	errorFile := filepath.Join(ctrl, "ERROR")
+	waitFor(t, "ERROR", func() bool {
+		data, _ := os.ReadFile(errorFile)
+		return strings.HasPrefix(string(data), "config.json: ")
+	})
+	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
+		t.Fatalf("parent notified %d times", n)
+	}
+	if _, err := os.Stat(filepath.Join(home, "ERROR")); !os.IsNotExist(err) {
+		t.Fatal("ERROR written into the agent's home")
+	}
+	os.WriteFile(config, []byte(testConfig), 0o644)
+	h.waitEnds(childID("x"), 1)
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
+		t.Fatal("config ERROR not cleared")
+	}
+}
+
+// TestStrayConfigInAdmittedControlDirIgnored: a config.json that appears in
+// an admitted agent's control directory changes nothing: the agent keeps its
+// user, its home and its own config.
+func TestStrayConfigInAdmittedControlDirIgnored(t *testing.T) {
+	h := newHarness(t, doneFor(childMark))
+	h.start()
+	ctrl := makeChild(t, h, "c", true)
+	home := h.childHome(ctrl)
+	os.WriteFile(filepath.Join(home, "work.txt"), []byte("mine"), 0o644)
+	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"other"}`), 0o644)
+	time.Sleep(20 * h.cfg.Poll)
+	h.drop(home, "task.md", "work")
+	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "done" {
+		t.Fatal(end)
+	}
+	if data, _ := os.ReadFile(filepath.Join(home, "config.json")); string(data) != testConfig {
+		t.Fatalf("~/config.json %q", data)
+	}
+	if data, _ := os.ReadFile(filepath.Join(home, "work.txt")); string(data) != "mine" {
+		t.Fatalf("home touched: %q", data)
+	}
+	if got, _ := os.Readlink(filepath.Join(ctrl, "home")); got != home {
+		t.Fatalf("moved from %s to %s", home, got)
+	}
+	if n := strings.Count(h.logs.String(), "c: admitted as agent-2"); n != 1 {
+		t.Fatalf("admitted %d times", n)
+	}
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-3") || sys.called("unlinger agent-2") {
+		t.Fatal(sys)
+	}
+	if _, err := os.Stat(filepath.Join(ctrl, "ERROR")); !os.IsNotExist(err) {
+		t.Fatal("stray config reported")
 	}
 }

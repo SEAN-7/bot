@@ -68,7 +68,7 @@ func TestOwnerLabelSurvivesRestart(t *testing.T) {
 	h.sendOwner("delivered before restart")
 	waitFor(t, "delivery", func() bool { return len(inboxNames(h.mainHome)) == 1 })
 	h.stop()
-	os.WriteFile(filepath.Join(h.mainCtrl, "config.json"), []byte(testConfig), 0o644)
+	os.WriteFile(filepath.Join(h.mainHome, "config.json"), []byte(testConfig), 0o644)
 	h.start()
 	if from := inboxRecordFrom(h.waitEnds(h.mainID, 1), "delivered before restart"); from != "owner" {
 		t.Fatalf("label lost across restart: %q", from)

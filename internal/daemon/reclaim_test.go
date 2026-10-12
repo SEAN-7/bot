@@ -143,6 +143,9 @@ func TestRemovedWhileStoppedIsReclaimed(t *testing.T) {
 	}
 }
 
+// Renaming a control directory removes its agent. The renamed directory
+// holds the home link but no config.json, which moved into the home: it is
+// a new agent once given one, and never gets the old agent's files.
 func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "sleep 30", 100))
 	h.start()
@@ -158,6 +161,11 @@ func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "removed" {
 		t.Fatal(end)
 	}
+	time.Sleep(10 * h.cfg.Poll)
+	if strings.Contains(h.logs.String(), "d: admitted as") {
+		t.Fatal("d admitted without a config.json")
+	}
+	writeConfig(t, d)
 	// d may get c's freed user, but never c's files.
 	waitFor(t, "d admitted", func() bool { return strings.Contains(h.logs.String(), "d: admitted as") })
 	dHome, _ := os.Readlink(filepath.Join(d, "home"))
@@ -197,43 +205,6 @@ func TestWaitingChildAdmittedWhenUserFrees(t *testing.T) {
 	}
 }
 
-func TestMovedConfigKeepsAgent(t *testing.T) {
-	h := newHarness(t, done())
-	h.start()
-	ctrl := makeChild(t, h, "c", true)
-	home := h.childHome(ctrl)
-	work := filepath.Join(home, "work.txt")
-	os.WriteFile(work, []byte("mine"), 0o644)
-	config, moved := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "x")
-	if err := os.Rename(config, moved); err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(20 * h.cfg.Poll)
-	sys := h.cfg.System.(*fakeSystem)
-	if sys.called("unlinger agent-2") || sys.called("stop agent-2") {
-		t.Fatalf("reclaimed with its control directory still there: %v", sys)
-	}
-	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
-		t.Fatalf("home touched: %q %v", data, err)
-	}
-	if err := os.Rename(moved, config); err != nil {
-		t.Fatal(err)
-	}
-	h.drop(home, "task.md", "work")
-	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "done" {
-		t.Fatal(end)
-	}
-	if got, _ := os.Readlink(filepath.Join(ctrl, "home")); got != home {
-		t.Fatalf("moved from %s to %s", home, got)
-	}
-	if sys.called("home agent-3") || sys.called("unlinger agent-2") {
-		t.Fatal(sys)
-	}
-	if n := strings.Count(h.logs.String(), "c: admitted as agent-2"); n != 1 {
-		t.Fatalf("admitted %d times: the agent was removed and readmitted", n)
-	}
-}
-
 func TestAgentsDirReplacedByFileRemovesChild(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -258,7 +229,9 @@ func failingLookup(h *harness, failing *atomic.Bool) {
 	}
 }
 
-func TestLookupFailureKeepsPausedChild(t *testing.T) {
+// A child the scan skips while its home link is gone is kept even if its
+// parent's user cannot be looked up to check the control directory.
+func TestLookupFailureKeepsUnlinkedChild(t *testing.T) {
 	h := newHarness(t)
 	var failing atomic.Bool
 	failingLookup(h, &failing)
@@ -267,8 +240,7 @@ func TestLookupFailureKeepsPausedChild(t *testing.T) {
 	home := h.childHome(ctrl)
 	work := filepath.Join(home, "work.txt")
 	os.WriteFile(work, []byte("mine"), 0o644)
-	config, moved := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "x")
-	os.Rename(config, moved)
+	os.Remove(filepath.Join(ctrl, "home"))
 	failing.Store(true)
 	time.Sleep(20 * h.cfg.Poll)
 	failing.Store(false)
@@ -295,8 +267,8 @@ func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
 	work := filepath.Join(home, "work.txt")
 	os.WriteFile(work, []byte("mine"), 0o644)
 	h.stop()
-	config, moved := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "x")
-	os.Rename(config, moved) // not admitted on start: only the pool entry remains
+	link := filepath.Join(ctrl, "home")
+	os.Remove(link) // not found on start: only the pool entry remains
 	failing.Store(true)
 	h.start()
 	time.Sleep(20 * h.cfg.Poll)
@@ -312,7 +284,7 @@ func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
 	if p := poolJSON(h); !strings.Contains(p, `"user":"agent-2","agent":"`+childID("c")+`","state":"active"`) {
 		t.Fatal(p)
 	}
-	os.Rename(moved, config)
+	os.Symlink(home, link)
 	if got := h.childHome(ctrl); got != home {
 		t.Fatal(got)
 	}
@@ -380,8 +352,9 @@ func TestReclaimClearsReadOnlyDirs(t *testing.T) {
 	}
 }
 
-// A paused grandchild holds its user without running; removing its parent
-// must reclaim it too rather than leave the parent waiting for it forever.
+// A grandchild not found on start holds its user without running; removing
+// its parent must reclaim it too rather than leave the parent waiting for it
+// forever.
 func TestRemovalTakesPausedDescendant(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -392,7 +365,7 @@ func TestRemovalTakesPausedDescendant(t *testing.T) {
 	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
 	h.childHome(g)
 	h.stop()
-	os.Remove(filepath.Join(g, "config.json")) // g is not admitted on start
+	os.Remove(filepath.Join(g, "home")) // g is not found on start
 	h.start()
 	waitFor(t, "c running", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	os.RemoveAll(c)
@@ -404,7 +377,7 @@ func TestRemovalTakesPausedDescendant(t *testing.T) {
 
 // A control directory removed and created again between two polls is a new
 // subagent: the old one is removed and reclaimed, and the new one admitted
-// with a cleared home. Here the old directory is emptied (pausing the agent)
+// with a cleared home. Here the old directory is emptied (the scan skips it)
 // and the new one renamed over it, so no poll sees the path missing.
 func TestReplacedControlDirIsRemoveAndAdmit(t *testing.T) {
 	h := newHarness(t)

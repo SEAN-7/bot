@@ -80,9 +80,12 @@ func (a *agent) userName() string {
 	return a.d.selfUser
 }
 
-// ctl is where the agent's config.json and ERROR live, and the helper that
-// reaches them: its control directory belongs to its parent.
-func (a *agent) ctl() (*fsio.Client, string) { return a.parent.fs, a.ctrl }
+// errorFile is the agent's ERROR and the helper that reaches it: ERROR is in
+// the control directory, which belongs to the parent, so the agent cannot
+// hide its errors.
+func (a *agent) errorFile() (*fsio.Client, string) {
+	return a.parent.fs, filepath.Join(a.ctrl, "ERROR")
+}
 
 // conversation is what a follow-up needs to continue a run: the frozen system
 // sections and messages, so the provider's cached prefix stays identical.

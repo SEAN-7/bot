@@ -18,8 +18,10 @@ import (
 	"github.com/SEAN-7/bot/internal/shell"
 )
 
-// segmentLimit bounds README.md and TASK.md as read into the system prompt.
-const segmentLimit = 1 << 20
+const (
+	segmentLimit = 1 << 20 // README.md and TASK.md as read into the system prompt
+	configLimit  = 1 << 20 // config.json
+)
 
 type recorder interface {
 	Record(typ string, fields map[string]any) error
@@ -33,14 +35,13 @@ func (a *agent) logf(format string, args ...any) {
 // to a provider failure, which is retried.
 type errConfig struct{ error }
 
-// gate reads config.json and validates it against the provider's describe.
+// gate reads ~/config.json and validates it against the provider's describe.
 // A config error is reported once per distinct config.json content and the
 // agent waits until the file changes; provider failures are retried.
 func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
 	var describe proto.DescribeResponse
-	ctl, dir := a.ctl()
-	data, _, err := ctl.Read(filepath.Join(dir, "config.json"), 1<<20)
+	data, _, err := a.fs.Read(filepath.Join(a.home, "config.json"), configLimit)
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 	if err != nil {
@@ -275,7 +276,7 @@ func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.
 
 // retry runs call until it succeeds, returns an errConfig, or the agent is
 // stopped, with delays doubling from RetryBase to RetryMax. Persistent
-// provider failures are reported in ~/ERROR and the log, never the inbox.
+// provider failures are reported in ERROR and the log, never the inbox.
 func (a *agent) retry(ctx context.Context, call func() error) error {
 	delay := a.d.cfg.RetryBase
 	var since time.Time
@@ -314,19 +315,19 @@ const (
 	errGuardPrefix    = "Context is over"
 )
 
-// setError writes the agent's ERROR beside its config.json, in its control
-// directory, where its owner sees it.
+// setError writes the agent's ERROR in its control directory, where its
+// owner sees it.
 func (a *agent) setError(text string) {
-	ctl, dir := a.ctl()
-	if err := ctl.Write(filepath.Join(dir, "ERROR"), []byte(text+"\n")); err != nil {
+	parent, path := a.errorFile()
+	if err := parent.Write(path, []byte(text+"\n")); err != nil {
 		a.logf("write ERROR: %v", err)
 	}
 }
 
 // ensureError writes the agent's ERROR unless it already holds text.
 func (a *agent) ensureError(text string) {
-	ctl, dir := a.ctl()
-	if data, _, err := ctl.Read(filepath.Join(dir, "ERROR"), 4096); err == nil && string(data) == text+"\n" {
+	parent, path := a.errorFile()
+	if data, _, err := parent.Read(path, 4096); err == nil && string(data) == text+"\n" {
 		return
 	}
 	a.setError(text)
@@ -334,11 +335,10 @@ func (a *agent) ensureError(text string) {
 
 // clearError removes the agent's ERROR if it holds an error of the given kind.
 func (a *agent) clearError(prefix string) {
-	ctl, dir := a.ctl()
-	path := filepath.Join(dir, "ERROR")
-	data, _, err := ctl.Read(path, 4096)
+	parent, path := a.errorFile()
+	data, _, err := parent.Read(path, 4096)
 	if err == nil && strings.HasPrefix(string(data), prefix) {
-		ctl.Remove(path)
+		parent.Remove(path)
 	}
 }
 

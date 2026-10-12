@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -386,4 +387,29 @@ func TestFailingDeliveryRetriedOnce(t *testing.T) {
 	if log := readRecords(h.cfg.ConversationFile(childID("c"))); len(log) != 1 {
 		t.Fatalf("conversation log %v", log)
 	}
+}
+
+// TestDownMessageWaitsForReadmission: an admitted child that is not running
+// yet after a restart keeps its messages, though its control directory no
+// longer holds a config.json: it holds a user, so it starts again.
+func TestDownMessageWaitsForReadmission(t *testing.T) {
+	h := newHarness(t, doneFor(childMark), doneFor(parentMark))
+	h.start()
+	h.markParent()
+	ctrl := makeChild(t, h, "c", true)
+	h.childHome(ctrl)
+	h.stop()
+	sys := h.cfg.System.(*fakeSystem)
+	sys.setFail("linger agent-2", errors.New("linger failed"))
+	h.start()
+	spooled := h.spoolDown(h.mainHome, "c", "when you start")
+	time.Sleep(20 * h.cfg.Poll)
+	if _, err := os.Stat(spooled); err != nil {
+		t.Fatalf("message for a child not yet running again was not kept: %v", err)
+	}
+	if n := countNotes(h.mainHome, "-undelivered.md"); n != 0 {
+		t.Fatalf("%d undelivered notes for a waiting child", n)
+	}
+	sys.setFail("linger agent-2", nil)
+	waitFor(t, "delivery after admission", func() bool { return h.sawRecord(`-owner.md"`, `"from":"owner"`, "when you start") })
 }
