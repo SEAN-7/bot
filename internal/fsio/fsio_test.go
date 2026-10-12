@@ -93,6 +93,15 @@ func TestNotExist(t *testing.T) {
 	}
 }
 
+// A path below a file does not exist either (ENOTDIR).
+func TestNotExistBelowFile(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644)
+	if _, err := c.Stat(filepath.Join(dir, "f", "x")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("stat got %v", err)
+	}
+}
+
 func TestListTypes(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644)

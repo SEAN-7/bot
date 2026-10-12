@@ -64,7 +64,9 @@ func Serve(r io.Reader, w io.Writer) error {
 		}
 		resp, err := handle(req)
 		if err != nil {
-			resp = response{Err: err.Error(), NotExist: errors.Is(err, fs.ErrNotExist), Permission: errors.Is(err, fs.ErrPermission)}
+			// A path below a non-directory (ENOTDIR) does not exist either.
+			notExist := errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
+			resp = response{Err: err.Error(), NotExist: notExist, Permission: errors.Is(err, fs.ErrPermission)}
 		}
 		if err := enc.Encode(resp); err != nil {
 			return err

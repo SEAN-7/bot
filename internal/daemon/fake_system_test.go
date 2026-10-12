@@ -51,3 +51,17 @@ func (s *fakeSystem) EnableLinger(user string) error  { s.record("linger " + use
 func (s *fakeSystem) DisableLinger(user string) error { s.record("unlinger " + user); return nil }
 func (s *fakeSystem) StopProcesses(user string) error { s.record("stop " + user); return nil }
 func (s *fakeSystem) RemoveCrontab(user string) error { s.record("crontab " + user); return nil }
+
+// inOrder reports whether calls were all made, in this order, possibly with
+// other calls between them.
+func (s *fakeSystem) inOrder(calls ...string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	i := 0
+	for _, c := range s.calls {
+		if i < len(calls) && c == calls[i] {
+			i++
+		}
+	}
+	return i == len(calls)
+}

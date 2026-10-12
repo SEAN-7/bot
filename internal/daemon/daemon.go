@@ -101,12 +101,13 @@ type daemon struct {
 	settingsErr string
 	limited     map[string]bool   // control directories held back by max_agents, already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
+	reclaimErrs map[string]string // the last reclaim error logged per pool user
 	wg          sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
 	syscall.Umask(0o022)
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, stop: ctx}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username
@@ -141,6 +142,9 @@ func Run(ctx context.Context, cfg Config) error {
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
 	for {
+		// Before reconcile, so a reclaim a crash interrupted is finished
+		// before the first admission, and one that failed is retried.
+		d.sweep()
 		d.deliverOwner()
 		d.collectMessages(d.reconcile())
 		select {
@@ -224,7 +228,7 @@ func (d *daemon) start(a *agent) {
 
 // reconcile walks the tree breadth-first from the main agent, scanning each
 // agent's home through its own helper. Known agents are kept, new control
-// directories are admitted, and agents no longer reached are stopped. It
+// directories are admitted, and agents no longer reached are removed. It
 // returns the agents in the tree.
 func (d *daemon) reconcile() []*agent {
 	d.loadSettings()
@@ -267,6 +271,16 @@ func (d *daemon) reconcile() []*agent {
 			present[c.id] = c
 			tree = append(tree, c)
 		}
+		// A known child the scan skipped stays while its control directory
+		// exists: a missing or renamed config.json only pauses it, since
+		// removal wipes its home.
+		for _, c := range known {
+			if c.parent == a && present[c.id] == nil && !controlDirGone(a, c.ctrl) {
+				seen[c.ctrl] = true
+				present[c.id] = c
+				tree = append(tree, c)
+			}
+		}
 	}
 	// Forget what was reported for directories that are gone, so they are
 	// reported again if they come back.
@@ -285,24 +299,11 @@ func (d *daemon) reconcile() []*agent {
 	var gone []*agent
 	for id, a := range d.agents {
 		if present[id] == nil {
-			a.cancel(errRemoved)
-			delete(d.agents, id)
 			gone = append(gone, a)
 		}
 	}
 	d.mu.Unlock()
-	if len(gone) > 0 {
-		// A removed child may still use its removed parent's helper (its
-		// control directory), so close them only once all have stopped.
-		go func() {
-			for _, a := range gone {
-				<-a.done
-			}
-			for _, a := range gone {
-				a.fs.Close()
-			}
-		}()
-	}
+	d.remove(gone)
 	return tree
 }
 

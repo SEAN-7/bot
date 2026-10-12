@@ -186,7 +186,9 @@ agent user cannot read another user's process environment.
 - **Removal.** When a control directory disappears, its subagent and all of
   its descendants are removed, deepest first. Each loop kills any running
   command's process group, writes the end marker (`reason: "removed"`) and
-  exits; then its user is reclaimed. Its journals remain.
+  exits; then its user is reclaimed. Its journals remain. Only the control
+  directory's disappearance removes a subagent: while it exists, a missing or
+  renamed `config.json` just keeps the subagent from starting runs.
 - **Reclaim.** The daemon marks the user `reclaiming` in `pool.json`, then:
   disables lingering and stops its user manager; kills every remaining
   process of the uid until none is left; removes its crontab; removes its
