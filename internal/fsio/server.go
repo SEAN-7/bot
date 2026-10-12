@@ -24,14 +24,17 @@ type Entry struct {
 	Type    string    `json:"type"` // file, dir, symlink or other
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mod_time"`
+	UID     int       `json:"uid"`
+	Mode    uint32    `json:"mode"` // permission bits only
 }
 
 type request struct {
-	Op    string `json:"op"`
-	Path  string `json:"path"`
-	Path2 string `json:"path2,omitempty"`
-	Data  []byte `json:"data,omitempty"`
-	Limit int64  `json:"limit,omitempty"`
+	Op    string   `json:"op"`
+	Path  string   `json:"path"`
+	Path2 string   `json:"path2,omitempty"`
+	Data  []byte   `json:"data,omitempty"`
+	Limit int64    `json:"limit,omitempty"`
+	Paths []string `json:"paths,omitempty"`
 }
 
 type response struct {
@@ -74,6 +77,10 @@ func handle(req request) (response, error) {
 	case "scan":
 		paths, err := scan(req.Path)
 		return response{Paths: paths}, err
+	case "clear":
+		return response{}, clearDir(req.Path)
+	case "purge_owned":
+		return response{}, purgeOwned(req.Paths)
 	case "list":
 		items, err := os.ReadDir(req.Path)
 		if err != nil {
@@ -143,7 +150,9 @@ func entry(info fs.FileInfo) Entry {
 	case info.Mode()&fs.ModeSymlink != 0:
 		kind = "symlink"
 	}
-	return Entry{Name: info.Name(), Type: kind, Size: info.Size(), ModTime: info.ModTime()}
+	e := Entry{Name: info.Name(), Type: kind, Size: info.Size(), ModTime: info.ModTime(), Mode: uint32(info.Mode().Perm())}
+	e.UID = owner(info)
+	return e
 }
 
 func random() string {
@@ -176,34 +185,82 @@ func write(path string, data []byte) error {
 	return err
 }
 
-// scan returns home and, breadth first, every real directory at
-// <agent>/agents/<name> that contains an inbox directory.
+// scan returns the control directories <home>/agents/<name>, sorted: real
+// directories owned by this user, each holding a regular config.json. It looks
+// one level deep only; deeper agents belong to their own users.
 func scan(home string) ([]string, error) {
-	if _, err := os.Lstat(home); err != nil {
+	agents := filepath.Join(home, "agents")
+	if !ownedDir(agents) {
+		return nil, nil // missing, or a symlink
+	}
+	items, err := os.ReadDir(agents)
+	if err != nil {
 		return nil, err
 	}
-	found := []string{home}
-	for i := 0; i < len(found); i++ {
-		agents := filepath.Join(found[i], "agents")
-		if info, err := os.Lstat(agents); err != nil || !info.IsDir() {
-			continue // missing, or a symlink, which could nest agents inside themselves
-		}
-		items, err := os.ReadDir(agents)
-		if err != nil {
+	var found []string
+	for _, item := range items {
+		dir := filepath.Join(agents, item.Name())
+		if !ownedDir(dir) {
 			continue
 		}
-		var children []string
+		if info, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil && info.Mode().IsRegular() {
+			found = append(found, dir)
+		}
+	}
+	sort.Strings(found)
+	return found, nil
+}
+
+// ownedDir reports whether path is a real directory (not a symlink) owned by
+// this user.
+func ownedDir(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.IsDir() && owner(info) == os.Getuid()
+}
+
+func owner(info fs.FileInfo) int {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return int(st.Uid)
+	}
+	return -1
+}
+
+// clearDir removes everything inside dir and keeps dir itself.
+func clearDir(dir string) error {
+	items, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if err := os.RemoveAll(filepath.Join(dir, item.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// purgeOwned removes each top-level entry of dirs that this user owns, leaving
+// entries owned by others (the daemon's, or another agent's) in place.
+func purgeOwned(dirs []string) error {
+	for _, dir := range dirs {
+		items, err := os.ReadDir(dir)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
 		for _, item := range items {
-			if !item.IsDir() { // DirEntry types come from lstat: symlinks are not dirs
-				continue
+			path := filepath.Join(dir, item.Name())
+			info, err := os.Lstat(path)
+			if err != nil || owner(info) != os.Getuid() {
+				continue // vanished, or not ours
 			}
-			child := filepath.Join(found[i], "agents", item.Name())
-			if info, err := os.Lstat(filepath.Join(child, "inbox")); err == nil && info.IsDir() {
-				children = append(children, child)
+			if err := os.RemoveAll(path); err != nil {
+				return err
 			}
 		}
-		sort.Strings(children)
-		found = append(found, children...)
 	}
-	return found, nil
+	return nil
 }

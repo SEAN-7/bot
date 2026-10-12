@@ -105,6 +105,7 @@ func (c *Client) call(req request) (response, error) {
 	return resp, nil
 }
 
+// Scan lists the control directories <home>/agents/<name>, one level deep.
 func (c *Client) Scan(home string) ([]string, error) {
 	resp, err := c.call(request{Op: "scan", Path: home})
 	return resp.Paths, err
@@ -153,4 +154,17 @@ func (c *Client) Stat(path string) (Entry, error) {
 		return Entry{}, err
 	}
 	return *resp.Entry, nil
+}
+
+// Clear removes everything inside dir and keeps dir. A missing dir is not an error.
+func (c *Client) Clear(dir string) error {
+	_, err := c.call(request{Op: "clear", Path: dir})
+	return err
+}
+
+// PurgeOwned removes the top-level entries of dirs that belong to the helper's
+// user. Missing directories are skipped.
+func (c *Client) PurgeOwned(dirs []string) error {
+	_, err := c.call(request{Op: "purge_owned", Paths: dirs})
+	return err
 }
