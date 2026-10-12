@@ -19,24 +19,76 @@ type Writer struct {
 	path string
 }
 
+// Directories are 0751: a child's journal directory is nested inside its
+// parent's, so they must be traversable by others. Files are 0640.
+const (
+	dirMode  = 0o751
+	fileMode = 0o640
+)
+
 // Create starts a new run file named by its UTC start time. On a name clash
-// the time is advanced a nanosecond, so names always sort in run order.
-func Create(dir string, now time.Time) (*Writer, error) {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// the time is advanced a nanosecond, so names always sort in run order. A
+// gid of zero or more becomes the file's group; a negative gid leaves it.
+func Create(dir string, now time.Time, gid int) (*Writer, error) {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return nil, err
 	}
 	for t := now.UTC(); ; t = t.Add(time.Nanosecond) {
 		path := filepath.Join(dir, t.Format(stamp)+".jsonl")
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, 0o644)
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY|os.O_APPEND, fileMode)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		f.Chmod(0o644)
+		f.Chmod(fileMode)
+		if gid >= 0 {
+			f.Chown(-1, gid)
+		}
 		return &Writer{f: f, path: path}, nil
 	}
+}
+
+// IsRun reports whether name is a run file, <stamp>.jsonl, as opposed to
+// other files in the directory such as the conversation log.
+func IsRun(name string) bool {
+	stem, ok := strings.CutSuffix(name, ".jsonl")
+	if !ok {
+		return false
+	}
+	_, err := time.Parse(stamp, stem)
+	return err == nil
+}
+
+// Secure creates dir and sets the journal modes on everything under it:
+// directories 0751 and regular files 0640, with group gid when it is zero or
+// more. It does not follow symlinks and leaves them and other types alone.
+func Secure(dir string, gid int) error {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
+		return err
+	}
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		var mode os.FileMode
+		switch {
+		case d.IsDir():
+			mode = dirMode
+		case d.Type().IsRegular():
+			mode = fileMode
+		default:
+			return nil
+		}
+		if err := os.Chmod(path, mode); err != nil {
+			return err
+		}
+		if gid >= 0 {
+			return os.Lchown(path, -1, gid)
+		}
+		return nil
+	})
 }
 
 func (w *Writer) Path() string { return w.path }
@@ -81,7 +133,7 @@ func Latest(dir string) (string, bool, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() && strings.HasSuffix(e.Name(), ".jsonl") {
+		if e.Type().IsRegular() && IsRun(e.Name()) {
 			names = append(names, e.Name())
 		}
 	}

@@ -71,7 +71,7 @@ func TestLogFollowsNewRuns(t *testing.T) {
 	os.MkdirAll(l.Home, 0o755)
 	os.WriteFile(filepath.Join(l.Home, "ERROR"), []byte("Provider failing since now: 429\n"), 0o644)
 	dir := l.JournalDir(l.Home)
-	first, _ := journal.Create(dir, time.Now().Add(-time.Minute))
+	first, _ := journal.Create(dir, time.Now().Add(-time.Minute), -1)
 	first.Record("assistant", map[string]any{"text": "first run"})
 	first.End("done")
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
@@ -79,7 +79,7 @@ func TestLogFollowsNewRuns(t *testing.T) {
 	var out bytes.Buffer
 	go func() {
 		time.Sleep(300 * time.Millisecond)
-		second, _ := journal.Create(dir, time.Now())
+		second, _ := journal.Create(dir, time.Now(), -1)
 		second.Record("assistant", map[string]any{"text": "second run"})
 		second.End("done")
 	}()

@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 )
 
@@ -112,10 +113,12 @@ func AgentDir(l layout.Layout, name string) string {
 func newest(dir string) string {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	sort.Strings(matches)
-	if len(matches) == 0 {
-		return ""
+	for i := len(matches) - 1; i >= 0; i-- {
+		if journal.IsRun(filepath.Base(matches[i])) {
+			return matches[i]
+		}
 	}
-	return matches[len(matches)-1]
+	return ""
 }
 
 // Log prints the agent's ERROR, if any, then follows its newest journal,

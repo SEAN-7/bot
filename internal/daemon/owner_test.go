@@ -86,7 +86,7 @@ func TestOwnerLabelSurvivesRestart(t *testing.T) {
 
 func TestCrashRecovery(t *testing.T) {
 	h := newHarness(t, done(), done())
-	w, err := journal.Create(h.cfg.JournalDir(h.cfg.Home), time.Now().Add(-time.Hour))
+	w, err := journal.Create(h.cfg.JournalDir(h.cfg.Home), time.Now().Add(-time.Hour), -1)
 	if err != nil {
 		t.Fatal(err)
 	}

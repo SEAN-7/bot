@@ -332,8 +332,11 @@ agent.
   are run journals.
 - Journal directories and files are root-owned. The main agent's are group
   `agent`; a subagent's are its own group, which holds it and its ancestors.
-  Directories are 0750 and files 0640, so siblings cannot read each other's
-  journals. Directories above them are 0755.
+  Directories are 0751 and files 0640, so siblings cannot read each other's
+  journals. A child's journal directory is nested inside its parent's, so
+  directories must be traversable by others; without read permission they
+  cannot be listed, and the files stay unreadable. Directories above them
+  are 0755.
 - Records: `start` (config), `inbox` (each file with its label), `assistant`
   (each model message), `result` (each command result), `note` (warnings and
   errors) and `end` (the clean-end marker, with `reason`).

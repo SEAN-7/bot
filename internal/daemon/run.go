@@ -105,7 +105,7 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
 		return
 	}
-	j, err := journal.Create(jdir, time.Now())
+	j, err := journal.Create(jdir, time.Now(), -1)
 	if err != nil {
 		a.logf("journal: %v", err)
 		return
