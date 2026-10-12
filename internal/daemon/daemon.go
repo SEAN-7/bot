@@ -129,12 +129,8 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	// On a tree an upgrade migrated part way, the daemon would take agents
-	// for removed and reclaim their users; install.sh finishes it.
-	if _, err := os.Lstat(cfg.MigratingFile()); err == nil {
-		return fmt.Errorf("not starting: %s marks an unfinished migration; rerun install.sh to finish it", cfg.MigratingFile())
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
+	if err := checkMigrated(cfg); err != nil {
+		return err
 	}
 	syscall.Umask(0o022)
 	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
@@ -153,6 +149,11 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
+	}
+	for _, e := range d.pool.entries() {
+		if strings.HasPrefix(e.Agent, "/") {
+			return fmt.Errorf("not starting: %s holds the 0.3 agent id %s, so this installation is not migrated; run install.sh (agent _migrate) to migrate it", cfg.PoolFile(), e.Agent)
+		}
 	}
 	if d.root.fs, err = fsio.Start(cfg.Self, rootCred); err != nil {
 		return err
@@ -178,6 +179,33 @@ func Run(ctx context.Context, cfg Config) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// checkMigrated keeps the daemon from starting on a tree an upgrade has not
+// migrated, or migrated part way: there it would take agents for removed and
+// reclaim their users, wiping their homes. install.sh migrates the tree and
+// finishes an interrupted migration. pool.json is checked once it is loaded.
+func checkMigrated(cfg Config) error {
+	const fix = "; run install.sh (agent _migrate) to migrate it"
+	for _, f := range []string{cfg.MigratingFile(), cfg.MigratingUserFile()} {
+		if _, err := os.Lstat(f); err == nil {
+			return fmt.Errorf("not starting: %s marks an unfinished migration; rerun install.sh to finish it", f)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
+		}
+	}
+	if cfg.LegacyUser == "" {
+		return nil
+	}
+	_, err := cfg.LookupUser(cfg.LegacyUser)
+	var unknown user.UnknownUserError
+	switch {
+	case err == nil:
+		return fmt.Errorf("not starting: user %s, the 0.3 main agent's, exists, so this installation is not migrated%s", cfg.LegacyUser, fix)
+	case !errors.As(err, &unknown):
+		return fmt.Errorf("not starting: looking up user %s: %v; a 0.3 installation must be migrated first%s", cfg.LegacyUser, err, fix)
+	}
+	return nil
 }
 
 // secureUnheldJournals tightens, before any agent runs, the journals of the

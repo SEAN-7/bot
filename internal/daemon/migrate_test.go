@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/SEAN-7/bot/internal/layout"
 )
@@ -640,5 +642,50 @@ func TestMigrateChoosesAgainBeforeRename(t *testing.T) {
 	}
 	if got := readLink(t, filepath.Join(cfg.Homes, "agent")); got != cfg.PoolHome("agent-15") {
 		t.Fatalf("migrated to %s", got)
+	}
+}
+
+// The daemon never starts on a tree the upgrade has not migrated, whatever
+// started it: on the 0.3 tree it would take the 0.3 subagents for removed
+// (their ids name no parent it runs) and wipe their homes. A 0.3 id in
+// pool.json, the 0.3 main agent's user, a recorded migration target or the
+// migration marker each stop it before it changes anything.
+func TestDaemonRefusesUnmigratedTree(t *testing.T) {
+	for name, tc := range map[string]struct {
+		setup func(t *testing.T, h *harness)
+		want  string
+	}{
+		"0.3 pool.json": {func(t *testing.T, h *harness) {
+			legacyInstallIn(t, h.cfg.Layout)
+		}, "pool.json"},
+		"0.3 user": {func(t *testing.T, h *harness) {
+			h.cfg.LegacyUser = "agent"
+		}, "user agent"},
+		"migration target": {func(t *testing.T, h *harness) {
+			os.WriteFile(h.cfg.MigratingUserFile(), []byte("agent-16\n"), 0o600)
+		}, ""}, // its path
+		"migration marker": {func(t *testing.T, h *harness) {
+			os.WriteFile(h.cfg.MigratingFile(), []byte("/var/backups/b.tgz\n"), 0o600)
+		}, "unfinished migration"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			tc.setup(t, h)
+			want := tc.want
+			if want == "" {
+				want = h.cfg.MigratingUserFile()
+			}
+			sys := h.cfg.System.(*fakeSystem)
+			before := snapshot(t, h.cfg, sys)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := Run(ctx, h.cfg)
+			if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "install.sh") {
+				t.Fatalf("Run: %v", err)
+			}
+			if after := snapshot(t, h.cfg, sys); after != before || sys.String() != "" {
+				t.Fatalf("changed before refusing: %s\n%s", sys, after)
+			}
+		})
 	}
 }

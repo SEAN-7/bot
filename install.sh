@@ -109,12 +109,23 @@ main() {
 	# does not have: that user, or a migration an earlier run left
 	# unfinished, means this upgrade migrates. Nothing has changed yet, so
 	# every check up to stopping the service leaves the machine as it was.
+	# Any earlier release left settings.json or the version file: without
+	# them this is a fresh install, and a user agent is someone else's.
+	installed=no
+	if [ -e /etc/agent/settings.json ] || [ -e /var/lib/agent/version ]; then installed=yes; fi
 	legacy=no
 	if id agent >/dev/null 2>&1; then legacy=yes; fi
 	migrate=no
 	if [ "$legacy" = yes ] || [ -e "$MIGRATING" ] || [ -e "$MIGRATING_USER" ]; then migrate=yes; fi
+	if [ "$legacy" = yes ] && [ "$installed" = no ] && [ ! -e "$MIGRATING" ] && [ ! -e "$MIGRATING_USER" ]; then
+		die "a user named agent exists, but this machine has no earlier installation (neither /etc/agent/settings.json nor /var/lib/agent/version); only an upgrade from 0.3 takes that user over. Rename or remove it, then rerun. Nothing changed."
+	fi
+	# An upgrade keeps the configuration and creates no main agent. Every
+	# completed install records its version (the human may have removed
+	# main since); settings.json alone may be a fresh install that failed
+	# before choosing a provider, which a rerun finishes as one.
 	upgrade=$migrate
-	if [ -e /etc/agent/agents/main ]; then upgrade=yes; fi
+	if [ -e /var/lib/agent/version ] || [ -e /etc/agent/agents/main ]; then upgrade=yes; fi
 
 	if [ -e "$MIGRATING" ]; then
 		case $(cat "$MIGRATING") in

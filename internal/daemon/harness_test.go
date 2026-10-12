@@ -116,6 +116,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	// Every pool user resolves to the current user, so all helpers run as us.
 	h.cfg.PoolUsers = []string{"agent-1", "agent-2", "agent-3", "agent-4"}
 	h.cfg.LookupUser = func(string) (*syscall.Credential, error) { return nil, nil }
+	h.cfg.LegacyUser = "" // every name resolves here; there is no 0.3 user
 	h.cfg.System = &fakeSystem{}
 	h.cfg.TmpDirs = []string{tmp}
 	h.cfg.Poll = 10 * time.Millisecond

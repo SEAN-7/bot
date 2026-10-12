@@ -195,8 +195,12 @@ agent user cannot read another user's process environment.
   loop, no inbox, no journal and no owner. An agent's id is its path from
   root: `main`, `main/agents/research`, `main/agents/research/agents/scraper`.
   The id keys journals, pool assignments and delivery records.
-- Startup: require root; refuse to start while `/var/lib/agent/migrating`
-  marks an unfinished migration (see Migration); resolve the provider user
+- Startup: require root; refuse to start on a tree that is not migrated
+  (see Migration): while `/var/lib/agent/migrating` or
+  `/var/lib/agent/migrating-user` marks an unfinished migration, while the
+  0.3 main agent's user `agent` exists, or when `pool.json` holds a 0.3
+  agent id (an absolute path), since the daemon would take those agents
+  for removed and wipe their homes; resolve the provider user
   and the pool users (missing ones are logged, and agents are limited to
   the rest); start root's helper; tighten the journals of agents that hold
   no user (they get the journal modes and the group of their nearest
@@ -683,9 +687,14 @@ release binary. It:
    the GitHub API with the token, and verifies its checksum. The token is
    never written to disk and reaches curl on stdin, never in command
    arguments.
-2. On an upgrade from 0.3 (the user `agent` exists, or an earlier run left
-   the migration unfinished), checks that the installation is 0.3.0 or
-   later, lists the `agent` user's running transient `systemd-run` jobs and
+2. Tells a fresh install from an upgrade: an upgrade is a machine with
+   `/var/lib/agent/version` (every completed install writes it),
+   `/etc/agent/agents/main`, or a 0.3 installation to migrate. A user
+   `agent` on a machine with neither `/etc/agent/settings.json` nor
+   `/var/lib/agent/version` (nor an unfinished migration) belongs to
+   someone else: it stops there, changing nothing. On an upgrade from 0.3
+   (the user `agent` exists, or an earlier run left the migration
+   unfinished), checks that the installation is 0.3.0 or later, lists the `agent` user's running transient `systemd-run` jobs and
    asks before going on, since the migration stops them (see Migration).
    Declining changes nothing; with no terminal it warns and goes on.
 3. Keeps the previous binary and, if anything fails while nothing has been
