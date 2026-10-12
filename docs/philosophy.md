@@ -23,6 +23,8 @@ The harness provides a few guarantees; the agent provides all policy.
   privileges, so a planted symlink reaches nothing the agent couldn't.
 - Messages sent with `agent send` are labelled as the owner's; nothing the
   agent writes can carry that label.
+- The owner's standing instructions in `/etc/agent/OWNER.md` reach every
+  agent first on every run, and no agent can change them.
 - Every model message and command result is journaled; an interrupted run is
   reported to the agent on restart.
 - Context resets and interruptions lose nothing that is on disk.

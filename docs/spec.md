@@ -49,13 +49,19 @@ be a script the agent writes, it stays out of the harness.
   agent write to its owner; the daemon records both directions in a
   root-owned log the agent can read but not change (see Messages). It is
   pull, not push: alerts remain something the agent builds.
+- **Standing owner instructions.** `/etc/agent/OWNER.md` is written by the
+  owner, loaded first on every run of every agent, and cannot be changed by
+  any agent (see OWNER.md). The harness guarantees that it is present,
+  unaltered and labelled as the owner's. Precedence is stated to the model,
+  not enforced: hard limits belong in the privilege model, not in this file.
 
 ## Filesystem layout on the VM
 
 | Path | Owner, mode | Contents |
 | --- | --- | --- |
 | `/usr/local/bin/agent` | root, 0755 | The harness binary |
-| `/etc/agent/` | root, 0711 (traversable, not listable) | `settings.json` (0600), `credentials/` (0700) |
+| `/etc/agent/` | root, 0711 (traversable, not listable) | `settings.json` (0600), `credentials/` (0700), `OWNER.md` (0644) |
+| `/etc/agent/OWNER.md` | root, 0644 | The owner's standing instructions; optional, written by the owner |
 | `/etc/agent/credentials/NAME.env` | root, 0600 | Plugin settings and secrets as `KEY=value` lines |
 | `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables, root:agent-provider 0750; the agent user cannot read or run them |
 | `/var/lib/agent/owner/` | root, 0700 | Spool for `agent send` |
@@ -145,14 +151,17 @@ a dot.
 1. Read `config.json` (`provider`, `model`, `options`) and validate it against
    the provider's `describe` (see Configuration validation). On failure, do
    not start and leave the inbox untouched.
-2. Read `README.md` and `TASK.md` (missing files are empty).
+2. Read `OWNER.md` (see OWNER.md); if it is unsafe, do not start and leave
+   the inbox untouched. Read `README.md` and `TASK.md` (missing files are
+   empty).
 3. Collect inbox files in name order, skipping dot-files and directories.
    Write them to the journal, then move them to `inbox/processed/` (adding a
    numeric suffix if a name is already taken).
 
 **Context.**
-- System segments, most stable first: the system prompt (verbatim, below),
-  then `README.md`, then `TASK.md`.
+- System segments, most stable first: the system prompt (verbatim, below)
+  followed in the same segment by the owner section when `OWNER.md` has
+  content, then `README.md`, then `TASK.md`.
 - The first user message holds the inbox files. Each file is one JSON record
   built by the daemon:
   `{"file": "inbox/processed/NAME", "from": "owner" | "data", "content": "..."}`.
@@ -178,7 +187,7 @@ appended, and the system sections, call numbering and 80% warning state carry
 over unchanged, so the provider's cached prefix stays identical) when all of
 these hold: it starts within 4 minutes of that run ending (shorter than the
 provider's 5-minute cache, so the cache is always warm), the configuration is
-unchanged, and `~/.reset` does not exist. Otherwise it starts fresh. The
+unchanged, `OWNER.md` is unchanged, and `~/.reset` does not exist. Otherwise it starts fresh. The
 daemon deletes `~/.reset` when it starts a run. Each run still has its own
 journal; a continued run's `start` record names the run it continues. A
 daemon restart, interruption, error or context reset always starts fresh.
@@ -239,6 +248,54 @@ Never write inbox messages for provider errors.
 > arrive as files in ~/inbox/. ~/journal/ is a read-only record of everything
 > you've done. When a run ends or your context resets, you keep only what's
 > on disk. To stop, reply without a command.
+
+## OWNER.md
+
+`/etc/agent/OWNER.md` holds the owner's standing instructions for every agent
+in the tree. Owner messages are processed and can be forgotten, and
+`README.md` is the agent's own to revise. OWNER.md is the one thing in
+context that no agent can change.
+
+- **Writing it.** The owner edits it as root (`sudo $EDITOR
+  /etc/agent/OWNER.md`). There is no CLI command. The installer never creates,
+  changes or removes it, so upgrades keep it.
+- **Reading it.** At the start of each fresh run, the daemon reads it
+  directly as root (it is outside every agent directory), up to the same
+  limit as `README.md`. The agent can read it at its path, since
+  `/etc/agent` is traversable, but cannot list or write anything there.
+- **Safety check.** The file is used only if it is a regular file (not a
+  symlink) owned by root and not writable by group or others, and
+  `/etc/agent` is owned by root and not writable by group or others. If the
+  file is missing, there is no owner section. If it exists but fails the
+  check or cannot be read, the agent does not start: the daemon writes the
+  reason to `~/ERROR` and the service log, leaves the inbox untouched, and
+  retries on later polls. Silently running without the owner's instructions
+  would be worse than not running. When the file is fixed, the daemon clears
+  `~/ERROR` if the error was an OWNER.md error.
+- **Placement.** When the file has non-whitespace content, the first system
+  segment is the system prompt, then a blank line, then this header
+  (verbatim), then the file's content:
+
+  > # Owner's instructions
+  >
+  > Your owner wrote the following in /etc/agent/OWNER.md. You can read it
+  > but not change it. It applies to every agent on this machine and takes
+  > precedence over everything else in your context.
+
+  An empty or missing file leaves the first segment byte-identical to the
+  system prompt alone, so installs without it keep their cached prefix.
+  Creating or editing the file changes every agent's prefix once; the owner
+  should expect one cache rebuild per edit.
+- **Continuation.** A run continues a warm conversation only if OWNER.md's
+  content is identical to what that conversation was built with; otherwise it
+  starts fresh, so an edit takes effect on the next run of every agent.
+- **Precedence is a convention.** The harness guarantees the file is present,
+  unaltered and clearly attributed; whether the model follows it is up to the
+  model. Limits that must hold (credentials, spend, privileges) are enforced
+  by the privilege model and the provider, not by this file. If the owner
+  wants owner messages to be able to relax a rule, the file says so.
+- **With `--sudo`** the agent can rewrite the file, and this becomes a
+  convention like the other protections.
 
 ## Configuration validation
 
@@ -387,6 +444,12 @@ Using the replay plugin:
 - owner labelling: a delivered message is `owner`, and a forged file is `data`
 - messages: an agent's and a subagent's `agent message` and an owner message
   all reach the log with correct labels; the agent cannot write the log
+- OWNER.md: its content follows the system prompt in the first segment for
+  the main agent and a subagent; a missing or empty file leaves the segment
+  identical to the system prompt; a symlink, a non-root owner or a
+  group-writable file stops runs with `~/ERROR` and leaves the inbox intact;
+  an edit makes the next run start fresh instead of continuing; the agent
+  cannot write it
 
 Paths, user names and timings are configurable so the loop can be tested in
 a temporary root. Tests that depend on privilege separation need root and a
@@ -399,10 +462,12 @@ It covers:
 - installation
 - setting a spend limit on the provider key
 - sending the first message
+- writing `/etc/agent/OWNER.md`: what it is for, that each edit rebuilds
+  every agent's prompt cache once, and that precedence is a convention
 - reading logs
 - stopping the service
 - what is and isn't protected: no isolation between subagents, and the effect
-  of `--sudo`
+  of `--sudo` (including on OWNER.md)
 - an example first message asking the agent to set up a Telegram channel for
   itself from a bot token
 
