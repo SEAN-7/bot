@@ -127,6 +127,11 @@ func handle(req request) (response, error) {
 		return response{}, os.MkdirAll(req.Path, 0o755)
 	case "remove":
 		return response{}, os.RemoveAll(req.Path)
+	case "unlink":
+		if err := syscall.Unlink(req.Path); err != nil {
+			return response{}, &fs.PathError{Op: "unlink", Path: req.Path, Err: err}
+		}
+		return response{}, nil
 	case "symlink":
 		temp := filepath.Join(filepath.Dir(req.Path2), "."+filepath.Base(req.Path2)+"."+random()+".tmp")
 		if err := os.Symlink(req.Path, temp); err != nil {
@@ -201,10 +206,10 @@ func write(path string, data []byte) error {
 	return err
 }
 
-// scan returns the control directories <home>/agents/<name>, sorted: real
-// directories owned by this user, each holding a regular config.json or, once
-// the agent is admitted and its config has moved, a home symlink. It looks one
-// level deep only; deeper agents belong to their own users.
+// scan returns the control directories <home>/agents/<name>, sorted: every
+// real directory there owned by this user. The daemon decides from what each
+// holds whether it is an agent. It looks one level deep only; deeper agents
+// belong to their own users.
 func scan(home string) ([]string, error) {
 	agents := filepath.Join(home, "agents")
 	if !ownedDir(agents) {
@@ -217,12 +222,7 @@ func scan(home string) ([]string, error) {
 	var found []string
 	for _, item := range items {
 		dir := filepath.Join(agents, item.Name())
-		if !ownedDir(dir) {
-			continue
-		}
-		if info, err := os.Lstat(filepath.Join(dir, "config.json")); err == nil && info.Mode().IsRegular() {
-			found = append(found, dir)
-		} else if info, err := os.Lstat(filepath.Join(dir, "home")); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		if ownedDir(dir) {
 			found = append(found, dir)
 		}
 	}

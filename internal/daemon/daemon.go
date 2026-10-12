@@ -353,9 +353,6 @@ func (d *daemon) reconcile() {
 			seen[ctrl] = true
 			c := known[d.childID(a, ctrl)]
 			if c == nil {
-				if !d.admissible(a, ctrl) {
-					continue
-				}
 				if c = d.admit(a, ctrl); c == nil {
 					continue
 				}
@@ -368,9 +365,8 @@ func (d *daemon) reconcile() {
 			present[c.id] = c
 			tree = append(tree, c)
 		}
-		// A known child the scan skipped, its home link gone (restored
-		// below), stays while its control directory exists, since removal
-		// wipes its home.
+		// A known child the scan missed stays unless its control directory
+		// is certainly gone, since removal wipes its home.
 		for _, c := range known {
 			if c.parent == a && present[c.id] == nil && !controlDirGone(a, c.ctrl, c.ctrlID) {
 				seen[c.ctrl] = true
@@ -406,18 +402,6 @@ func (d *daemon) reconcile() {
 	}
 	d.mu.Unlock()
 	d.remove(gone)
-}
-
-// admissible reports whether parent's control directory ctrl, which is not
-// a known agent, may be admitted: it holds a regular config.json, a new
-// agent's starting config, or its agent already holds a user, as after a
-// daemon restart. A home link alone claims no user.
-func (d *daemon) admissible(parent *agent, ctrl string) bool {
-	if d.pool.userOf(d.childID(parent, ctrl)) != "" {
-		return true
-	}
-	e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json"))
-	return err == nil && e.Type == "file"
 }
 
 // childID is the identity of the agent at ctrl, a control directory of

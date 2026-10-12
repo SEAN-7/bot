@@ -13,13 +13,13 @@ func TestPoolAssignLowestFreeAndPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u1, _ := p.assign("/h/agents/a", 2)
-	u2, _ := p.assign("/h/agents/b", 2)
-	u3, _ := p.assign("/h/agents/c", 2)
+	u1, _ := p.assign("/h/agents/a", 2, nil)
+	u2, _ := p.assign("/h/agents/b", 2, nil)
+	u3, _ := p.assign("/h/agents/c", 2, nil)
 	if u1 != "agent-1" || u2 != "agent-2" || u3 != "" {
 		t.Fatal(u1, u2, u3)
 	}
-	if again, _ := p.assign("/h/agents/a", 2); again != "agent-1" {
+	if again, _ := p.assign("/h/agents/a", 2, nil); again != "agent-1" {
 		t.Fatal(again)
 	}
 	if p.userOf("/h/agents/b") != "agent-2" || p.userOf("/h/agents/c") != "" {
@@ -42,25 +42,25 @@ func TestPoolAssignLowestFreeAndPersist(t *testing.T) {
 
 func TestPoolLimit(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	if u, _ := p.assign("/h/agents/a", 1); u != "agent-1" {
+	if u, _ := p.assign("/h/agents/a", 1, nil); u != "agent-1" {
 		t.Fatal(u)
 	}
-	if u, err := p.assign("/h/agents/b", 1); u != "" || err != nil {
+	if u, err := p.assign("/h/agents/b", 1, nil); u != "" || err != nil {
 		t.Fatal(u, err)
 	}
 }
 
 func TestPoolFreeReuses(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	p.assign("/h/agents/a", 2)
-	p.assign("/h/agents/b", 2)
+	p.assign("/h/agents/a", 2, nil)
+	p.assign("/h/agents/b", 2, nil)
 	if err := p.free("agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	if p.userOf("/h/agents/a") != "" {
 		t.Fatal("freed user still assigned")
 	}
-	if u, _ := p.assign("/h/agents/c", 2); u != "agent-1" {
+	if u, _ := p.assign("/h/agents/c", 2, nil); u != "agent-1" {
 		t.Fatal(u)
 	}
 }
@@ -78,13 +78,13 @@ func TestPoolSaveFailureLeavesMemoryUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := loadPool(filepath.Join(dir, "pool.json"), []string{"agent-1", "agent-2"})
-	if u, err := p.assign("/h/agents/a", 2); u != "agent-1" || err != nil {
+	if u, err := p.assign("/h/agents/a", 2, nil); u != "agent-1" || err != nil {
 		t.Fatal(u, err)
 	}
 	if err := os.RemoveAll(dir); err != nil { // saves now fail
 		t.Fatal(err)
 	}
-	if u, err := p.assign("/h/agents/b", 2); u != "" || err == nil {
+	if u, err := p.assign("/h/agents/b", 2, nil); u != "" || err == nil {
 		t.Fatalf("assign: %q %v", u, err)
 	}
 	if p.userOf("/h/agents/b") != "" || len(p.entries()) != 1 {
@@ -103,30 +103,47 @@ func TestPoolSaveFailureLeavesMemoryUnchanged(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := p.assign("/h/agents/b", 2); u != "agent-2" || err != nil {
+	if u, err := p.assign("/h/agents/b", 2, nil); u != "agent-2" || err != nil {
 		t.Fatal(u, err)
 	}
 }
 
 func TestPoolReclaimingUserIsNeverHandedOut(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	p.assign("/h/agents/a", 2)
+	p.assign("/h/agents/a", 2, nil)
 	p.mark("agent-1", poolReclaiming)
-	if u, err := p.assign("/h/agents/a", 2); u != "" || err != nil {
+	if u, err := p.assign("/h/agents/a", 2, nil); u != "" || err != nil {
 		t.Fatalf("same agent: %q %v", u, err)
 	}
 	if p.userOf("/h/agents/a") != "agent-1" {
 		t.Fatal("userOf must still name the reclaiming user")
 	}
 	// A new agent skips the reclaiming user.
-	if u, _ := p.assign("/h/agents/b", 2); u != "agent-2" {
+	if u, _ := p.assign("/h/agents/b", 2, nil); u != "agent-2" {
 		t.Fatal(u)
 	}
 	// The reclaiming entry still counts toward the limit.
 	q, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	q.assign("/h/agents/a", 1)
+	q.assign("/h/agents/a", 1, nil)
 	q.mark("agent-1", poolReclaiming)
-	if u, _ := q.assign("/h/agents/b", 1); u != "" {
+	if u, _ := q.assign("/h/agents/b", 1, nil); u != "" {
 		t.Fatal(u)
+	}
+}
+
+func TestPoolAssignSkipsUnusable(t *testing.T) {
+	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2", "agent-3"})
+	usable := func(u string) bool { return u != "agent-1" }
+	if u, err := p.assign("a", 3, usable); u != "agent-2" || err != nil {
+		t.Fatalf("got %q %v", u, err)
+	}
+	if u, _ := p.assign("a", 3, func(string) bool { return false }); u != "agent-2" {
+		t.Fatalf("held user not returned: %q", u)
+	}
+	if u, _ := p.assign("b", 3, func(u string) bool { return u == "agent-2" }); u != "" {
+		t.Fatalf("taken or unusable user handed out: %q", u)
+	}
+	if p.isFree("agent-2") || !p.isFree("agent-1") {
+		t.Fatal(p.sorted())
 	}
 }

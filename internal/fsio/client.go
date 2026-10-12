@@ -105,7 +105,8 @@ func (c *Client) call(req request) (response, error) {
 	return resp, nil
 }
 
-// Scan lists the control directories <home>/agents/<name>, one level deep.
+// Scan lists the control directories <home>/agents/<name>, one level deep:
+// the real directories the helper's user owns.
 func (c *Client) Scan(home string) ([]string, error) {
 	resp, err := c.call(request{Op: "scan", Path: home})
 	return resp.Paths, err
@@ -137,8 +138,16 @@ func (c *Client) Mkdir(path string) error {
 	return err
 }
 
+// Remove removes path and everything under it. A missing path is not an error.
 func (c *Client) Remove(path string) error {
 	_, err := c.call(request{Op: "remove", Path: path})
+	return err
+}
+
+// Unlink removes path, which must not be a directory: a link is removed, not
+// followed.
+func (c *Client) Unlink(path string) error {
+	_, err := c.call(request{Op: "unlink", Path: path})
 	return err
 }
 

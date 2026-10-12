@@ -80,10 +80,20 @@ func (p *pool) hasDescendants(agentID string) bool {
 	return false
 }
 
-// assign returns agentID's user, giving it the first free one if it has none.
-// It returns "" when every user is taken, limit entries already exist, or the
-// agent's user is being reclaimed: a reclaiming user is never handed out.
-func (p *pool) assign(agentID string, limit int) (string, error) {
+// isFree reports whether user holds no entry.
+func (p *pool) isFree(user string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, taken := p.byUser[user]
+	return !taken
+}
+
+// assign returns agentID's user, giving it the first free one usable accepts
+// (any, if usable is nil) if it has none. It returns "" when no free user is
+// usable, limit entries already exist, or the agent's user is being
+// reclaimed: a reclaiming user is never handed out. usable runs with the pool
+// locked and must not use it.
+func (p *pool) assign(agentID string, limit int, usable func(user string) bool) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, e := range p.byUser {
@@ -98,7 +108,7 @@ func (p *pool) assign(agentID string, limit int) (string, error) {
 		return "", nil
 	}
 	for _, u := range p.users {
-		if _, taken := p.byUser[u]; !taken {
+		if _, taken := p.byUser[u]; !taken && (usable == nil || usable(u)) {
 			next := p.with(u, poolEntry{User: u, Agent: agentID, State: poolActive})
 			if err := p.commit(next); err != nil {
 				return "", err

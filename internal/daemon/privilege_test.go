@@ -687,11 +687,10 @@ func TestPrivilegeOldLogsUnreadable(t *testing.T) {
 }
 
 // TestPrivilegeLostPoolIgnoresPlantedJournalLink: after pool.json is lost, a
-// home is kept only if its journal link and the journal directory's group
-// both say it is the newly assigned agent's. A previous holder that pointed
-// its journal link at a sibling's journals cannot pass its files on to that
-// sibling. Without their pool records, main and d are found again once their
-// control directories hold a config.json again.
+// home is recovered only if its journal link and the journal directory's
+// group both say it is the agent's own. A previous holder that pointed its
+// journal link at a sibling's journals cannot pass its files on to that
+// sibling, even when the parent points the sibling's home link at them.
 func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
 	h, _ := rootHarness(t)
 	h.start()
@@ -717,14 +716,48 @@ func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
 	h.stop()
 	os.Remove(h.cfg.PoolFile())
 	os.RemoveAll(ctrlC)
-	writeConfig(t, h.mainCtrl)
-	writeConfig(t, ctrlD)
+	linkD := filepath.Join(ctrlD, "home")
+	os.Remove(linkD)
+	if err := os.Symlink(homeC, linkD); err != nil {
+		t.Fatal(err)
+	}
+	mainUID, mainGID := lookupIDs(t, h.cfg.PoolUsers[0])
+	os.Lchown(linkD, mainUID, mainGID)
 	h.start()
-	waitFor(t, "d admitted as c's former user", func() bool {
-		return strings.Contains(h.logs.String(), "main/agents/d: admitted as "+userC)
+	// main recovers its home by its own evidence.
+	waitFor(t, "main admitted again", func() bool {
+		return strings.Count(h.logs.String(), "main: admitted as "+h.cfg.PoolUsers[0]) == 2
 	})
-	if _, err := os.Lstat(planted); !os.IsNotExist(err) {
-		t.Fatalf("d inherited c's planted file: %v", err)
+	time.Sleep(20 * h.cfg.Poll)
+	if strings.Count(h.logs.String(), "main/agents/d: admitted as") != 1 {
+		t.Fatal("d admitted on a journal link planted by its home's previous holder")
+	}
+	if !fileContains(planted, "for d") {
+		t.Fatal("c's former home changed")
+	}
+}
+
+// TestPrivilegeLostPoolNewAgentSkipsLiveHome: after pool.json is lost, a
+// new root child admitted before main is never given main's user, whose home
+// holds main's evidence under the real groups; main then recovers it.
+func TestPrivilegeLostPoolNewAgentSkipsLiveHome(t *testing.T) {
+	h, name := rootHarness(t, done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
+	marker := filepath.Join(h.mainHome, "marker.txt")
+	os.WriteFile(marker, []byte("mine"), 0o644)
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	early := topLevel(t, h, "aaa") // sorts before main
+	os.Chmod(early, 0o700)
+	h.start()
+	if got := ownerName(t, h.childHome(early)); got == name {
+		t.Fatalf("new agent given main's user %s", got)
+	}
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as "+name) == 2 })
+	if data, err := os.ReadFile(marker); err != nil || string(data) != "mine" {
+		t.Fatalf("main's home cleared: %q %v", data, err)
 	}
 }
 

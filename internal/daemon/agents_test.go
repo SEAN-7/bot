@@ -269,8 +269,11 @@ func TestGrandchildAdmitted(t *testing.T) {
 	}
 }
 
+// TestRestartKeepsChildHome: a child whose home link went while the daemon
+// was stopped is admitted again with its own user and home, the link
+// restored, and runs.
 func TestRestartKeepsChildHome(t *testing.T) {
-	h := newHarness(t)
+	h := newHarness(t, done())
 	h.start()
 	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
@@ -278,8 +281,8 @@ func TestRestartKeepsChildHome(t *testing.T) {
 	os.WriteFile(work, []byte("mine"), 0o644)
 	os.WriteFile(filepath.Join(home, "README.md"), []byte("my own readme"), 0o644)
 	h.stop()
+	os.Remove(filepath.Join(ctrl, "home"))
 	h.start()
-	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	if again := h.childHome(ctrl); again != home {
 		t.Fatalf("restart moved the child from %s to %s", home, again)
 	}
@@ -291,6 +294,10 @@ func TestRestartKeepsChildHome(t *testing.T) {
 	}
 	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-3") {
 		t.Fatalf("a second user was prepared: %v", sys)
+	}
+	h.drop(home, "task.md", "work")
+	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "done" {
+		t.Fatal(end)
 	}
 }
 
@@ -335,9 +342,8 @@ func TestMissingPoolUsersLogged(t *testing.T) {
 
 // Defence in depth against a lost pool.json: a freshly assigned home whose
 // journal link already points at this agent's journals is this agent's own
-// home, so it is not cleared. Another agent's journal link does not count.
-// Without its pool record an admitted agent is found again only once its
-// control directory holds a config.json again.
+// home, so it is not cleared. A link to journals that do not exist does not
+// count.
 func TestLostPoolKeepsOwnHome(t *testing.T) {
 	h := newHarness(t, done(), done())
 	h.start()
@@ -355,8 +361,6 @@ func TestLostPoolKeepsOwnHome(t *testing.T) {
 	os.Symlink(h.cfg.JournalDir(childID("x")), filepath.Join(other, "journal"))
 	h.stop()
 	os.Remove(h.cfg.PoolFile())
-	writeConfig(t, h.mainCtrl)
-	writeConfig(t, ctrl)
 	makeChild(t, h, "d", true)
 	h.start()
 	waitFor(t, "all admitted", func() bool {
@@ -367,7 +371,7 @@ func TestLostPoolKeepsOwnHome(t *testing.T) {
 		t.Fatalf("own home cleared: %q %v", data, err)
 	}
 	if _, err := os.Stat(filepath.Join(other, "stale.txt")); !os.IsNotExist(err) {
-		t.Fatal("a home with another agent's journal link was not cleared")
+		t.Fatal("a home with a journal link to nothing was not cleared")
 	}
 }
 
@@ -390,8 +394,11 @@ func TestJournalOwnedBy(t *testing.T) {
 	if journalOwnedBy(link, os.Getgid()) {
 		t.Fatal("symlinked journal directory accepted")
 	}
-	if !journalOwnedBy(filepath.Join(dir, "missing"), -1) {
+	if !journalOwnedBy(dir, -1) {
 		t.Fatal("without a credential (one user for every agent) the group cannot be checked")
+	}
+	if journalOwnedBy(filepath.Join(dir, "missing"), -1) {
+		t.Fatal("missing journal directory accepted without a credential")
 	}
 }
 
@@ -592,10 +599,10 @@ func TestStaleJournalEvidenceIgnored(t *testing.T) {
 		{"admitted", func(d *daemon, id string) error { return d.secureJournal(id, os.Getgid()) }},
 		{"reclaimed", func(d *daemon, id string) error {
 			// Admitted to agent-2 (agent-1 being taken), then removed.
-			if _, err := d.pool.assign("other", 4); err != nil {
+			if _, err := d.pool.assign("other", 4, nil); err != nil {
 				return err
 			}
-			if user, err := d.pool.assign(id, 4); err != nil || user != "agent-2" {
+			if user, err := d.pool.assign(id, 4, nil); err != nil || user != "agent-2" {
 				return fmt.Errorf("assigned %q: %v", user, err)
 			}
 			os.MkdirAll(d.cfg.PoolHome("agent-2"), 0o755)
@@ -728,5 +735,131 @@ func TestStrayConfigInAdmittedControlDirIgnored(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(ctrl, "ERROR")); !os.IsNotExist(err) {
 		t.Fatal("stray config reported")
+	}
+}
+
+// marked writes a marker file into home and returns a check that it is still
+// there.
+func marked(t *testing.T, home string) func() {
+	t.Helper()
+	path := filepath.Join(home, "marker.txt")
+	if err := os.WriteFile(path, []byte(home), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if data, err := os.ReadFile(path); err != nil || string(data) != home {
+			t.Fatalf("%s cleared: %q %v", home, data, err)
+		}
+	}
+}
+
+// TestLostPoolRecoversTree: after pool.json is lost, agents that have run
+// are admitted again from their home links and journal evidence, with no
+// config.json anywhere: each gets its own user back and keeps its home.
+func TestLostPoolRecoversTree(t *testing.T) {
+	h := newHarness(t, done(), done(), done(), done())
+	h.start()
+	c := makeChild(t, h, "c", true)
+	cHome := h.childHome(c)
+	g := writeConfig(t, filepath.Join(cHome, "agents", "g"))
+	gHome := h.childHome(g)
+	gID := childID("c/agents/g")
+	for _, a := range []struct{ id, home string }{{h.mainID, h.mainHome}, {childID("c"), cHome}, {gID, gHome}} {
+		h.drop(a.home, "go.md", "go")
+		h.waitEnds(a.id, 1)
+	}
+	checks := []func(){marked(t, h.mainHome), marked(t, cHome), marked(t, gHome)}
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	h.start()
+	waitFor(t, "g admitted again", func() bool { return strings.Count(h.logs.String(), gID+": admitted as agent-3") == 2 })
+	for _, check := range checks {
+		check()
+	}
+	for _, want := range []string{`{"user":"agent-1","agent":"main","state":"active"}`, `{"user":"agent-2","agent":"` + childID("c") + `","state":"active"}`, `{"user":"agent-3","agent":"` + gID + `","state":"active"}`} {
+		if !strings.Contains(poolJSON(h), want) {
+			t.Fatalf("pool.json %s", poolJSON(h))
+		}
+	}
+	h.drop(gHome, "again.md", "again")
+	if end := lastEnd(h.waitEnds(gID, 2)); end != "done" {
+		t.Fatal(end)
+	}
+}
+
+// TestNewAgentSkipsUnrecoveredHome: a root child created after pool.json is
+// lost, and admitted before main (it sorts first), is never given main's
+// user, whose home holds main's evidence; main then gets it back.
+func TestNewAgentSkipsUnrecoveredHome(t *testing.T) {
+	h := newHarness(t, done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
+	check := marked(t, h.mainHome)
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	early := topLevel(t, h, "aaa")
+	h.start()
+	if home := h.childHome(early); home != h.cfg.PoolHome("agent-2") {
+		t.Fatalf("new agent got %s", home)
+	}
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
+	check()
+}
+
+// TestRestartWithoutOwnConfigReports: an agent that deleted its own
+// config.json is admitted again after a restart and reported like any
+// config error: ERROR in its control directory and one note to its parent.
+// Restoring the file lets it run.
+func TestRestartWithoutOwnConfigReports(t *testing.T) {
+	h := newHarness(t, doneFor(parentMark), doneFor(childMark))
+	h.start()
+	h.markParent()
+	ctrl := makeChild(t, h, "c", true)
+	home := h.childHome(ctrl)
+	h.stop()
+	config := filepath.Join(home, "config.json")
+	os.Remove(config)
+	h.start()
+	h.drop(home, "task.md", "work")
+	errorFile := filepath.Join(ctrl, "ERROR")
+	waitFor(t, "ERROR", func() bool {
+		data, _ := os.ReadFile(errorFile)
+		return strings.HasPrefix(string(data), "config.json: ")
+	})
+	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
+	time.Sleep(200 * time.Millisecond)
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
+		t.Fatalf("parent notified %d times", n)
+	}
+	os.WriteFile(config, []byte(testConfig), 0o644)
+	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "done" {
+		t.Fatal(end)
+	}
+}
+
+// TestRestartDropsStrayConfig: a config.json the parent left in an admitted
+// agent's control directory is removed when the agent is admitted again, and
+// the agent keeps its own; anything else of that name is left alone.
+func TestRestartDropsStrayConfig(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	ctrl := makeChild(t, h, "c", true)
+	home := h.childHome(ctrl)
+	stray := filepath.Join(ctrl, "config.json")
+	h.stop()
+	os.WriteFile(stray, []byte(`{"provider":"replay","model":"other"}`), 0o644)
+	h.start()
+	waitFor(t, "stray config removed", func() bool { _, err := os.Lstat(stray); return os.IsNotExist(err) })
+	if data, _ := os.ReadFile(filepath.Join(home, "config.json")); string(data) != testConfig {
+		t.Fatalf("~/config.json %q", data)
+	}
+	h.stop()
+	os.MkdirAll(filepath.Join(stray, "keep"), 0o755)
+	h.start()
+	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 3 })
+	if _, err := os.Stat(filepath.Join(stray, "keep")); err != nil {
+		t.Fatalf("directory named config.json removed: %v", err)
 	}
 }

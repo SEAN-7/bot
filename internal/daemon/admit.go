@@ -17,9 +17,9 @@ import (
 const errLimitPrefix = "Agent limit reached"
 
 // admit gives the agent at ctrl a pool user and a home, and starts its
-// loop. It returns nil when the agent cannot start yet: no user is free,
-// its user is still being reclaimed, or a step failed and is retried at the
-// next poll. Only the poll goroutine calls it.
+// loop. It returns nil when ctrl is not an agent (yet), or the agent cannot
+// start yet: no user is free, its user is still being reclaimed, or a step
+// failed and is retried at the next poll. Only the poll goroutine calls it.
 func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if d.draining() {
 		return nil
@@ -31,7 +31,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return nil
 	}
 	held := d.pool.userOf(id)
-	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents))
+	usable, keep := d.admission(parent, ctrl, id, held)
+	if usable == nil {
+		return nil // it may still be being written
+	}
+	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents), usable)
 	if err != nil {
 		d.admitFailed(ctrl, id, "pool", err)
 		return nil
@@ -44,8 +48,8 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	}
 	c := &agent{d: d, id: id, name: id, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	// A user new to this agent may hold a previous agent's files; a user it
-	// already held (a daemon restart) keeps them.
-	fresh, cleared := held == "", false
+	// already held, or recovered by its evidence, keeps them.
+	fresh, cleared := !keep, false
 	fail := func(step string, err error) *agent {
 		d.admitFailed(ctrl, id, step, err)
 		if c.fs != nil {
@@ -112,6 +116,98 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	return c
 }
 
+// admission decides how the agent id at ctrl, which the daemon does not run,
+// is admitted: which free users it may be given (usable) and whether its
+// home is kept. A nil usable means ctrl is not an agent yet. In order:
+//  1. it holds a user in pool.json (a daemon restart): that user, kept;
+//  2. its home link names a free user whose home holds this agent's
+//     evidence (recovery after a lost pool.json): that user, kept;
+//  3. it holds a regular config.json: a fresh user, never one whose home
+//     holds another agent's evidence, so a lost pool.json cannot wipe a
+//     live home.
+func (d *daemon) admission(parent *agent, ctrl, id, held string) (usable func(string) bool, keep bool) {
+	own := d.cfg.JournalDir(id)
+	if held != "" {
+		return func(string) bool { return false }, true // assign returns the held user
+	}
+	if u := d.linkedUser(parent, ctrl); u != "" && d.pool.isFree(u) {
+		if dir, err := d.homeEvidence(u); err == nil && dir == own {
+			return func(c string) bool { return c == u }, true
+		}
+	}
+	if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Type == "file" {
+		return func(u string) bool {
+			dir, err := d.homeEvidence(u)
+			return err == nil && (dir == "" || dir == own)
+		}, false
+	}
+	return nil, false
+}
+
+// linkedUser is the pool user whose home the home link in ctrl names, or "".
+func (d *daemon) linkedUser(parent *agent, ctrl string) string {
+	e, err := parent.fs.Stat(filepath.Join(ctrl, "home"))
+	if err != nil || e.Type != "symlink" {
+		return ""
+	}
+	for _, u := range d.pool.users {
+		if d.cfg.PoolHome(u) == e.Target {
+			return u
+		}
+	}
+	return ""
+}
+
+// homeEvidence returns the journal directory that user's home is evidence
+// for (see evidence), looking through a helper running as user: the daemon
+// never opens a home as root.
+func (d *daemon) homeEvidence(user string) (string, error) {
+	cred, err := d.cfg.LookupUser(user)
+	if err != nil {
+		return "", err
+	}
+	helper, err := fsio.Start(d.cfg.Self, cred)
+	if err != nil {
+		return "", err
+	}
+	defer helper.Close()
+	gid := -1
+	if cred != nil {
+		gid = int(cred.Gid)
+	}
+	return d.evidence(helper, d.cfg.PoolHome(user), gid)
+}
+
+// evidence returns the journal directory home's journal link points at, if
+// that directory carries group gid, the home user's: only a run of the agent
+// whose journals are there creates the link, and only the daemon sets the
+// group, so the home is that agent's. The link lives in a home a previous
+// holder controlled, so the group is what counts: the one the directory had
+// on start, if secureUnheldJournals has changed it since and nothing has set
+// it again. helper runs as the home's user. "" when there is no evidence.
+func (d *daemon) evidence(helper *fsio.Client, home string, gid int) (string, error) {
+	e, err := helper.Stat(filepath.Join(home, "journal"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	dir := e.Target
+	if e.Type != "symlink" || filepath.Clean(dir) != dir || !strings.HasPrefix(dir, filepath.Clean(d.cfg.Log)+"/") {
+		return "", nil
+	}
+	if prior, ok := d.journalGids[dir]; ok {
+		if gid < 0 || prior == gid {
+			return dir, nil
+		}
+		return "", nil
+	}
+	if journalOwnedBy(dir, gid) {
+		return dir, nil
+	}
+	return "", nil
+}
+
 // secureJournal creates id's journal directory and gives it to group gid, as
 // admission does. The group remembered on start is then out of date, so
 // ownsHome reads the group from the directory from here on.
@@ -124,39 +220,23 @@ func (d *daemon) secureJournal(id string, gid int) error {
 	return nil
 }
 
-// ownsHome reports whether a's home already holds a journal link to a's own
-// journal directory, which only a run of this agent creates.
-//
-// The link lives in a home the previous holder of this user controlled, so
-// it is trusted only if the journal directory also carries this user's
-// group, which only the daemon sets: the group it had on start, if
-// secureUnheldJournals has changed it since and nothing has set it again.
+// ownsHome reports whether a's home holds evidence (see evidence) that it is
+// a's own.
 func (a *agent) ownsHome() bool {
-	e, err := a.fs.Stat(filepath.Join(a.home, "journal"))
-	dir := a.d.cfg.JournalDir(a.id)
-	if err != nil || e.Type != "symlink" || e.Target != dir {
-		return false
-	}
-	gid := a.gid()
-	if prior, ok := a.d.journalGids[dir]; ok {
-		return gid < 0 || prior == gid
-	}
-	return journalOwnedBy(dir, gid)
+	dir, err := a.d.evidence(a.fs, a.home, a.gid())
+	return err == nil && dir == a.d.cfg.JournalDir(a.id)
 }
 
 // journalOwnedBy reports whether dir is a real directory with group gid. It
 // runs as root on the root-owned journal tree. Without a credential (gid < 0:
 // every agent runs as the one current user) there is no group to check.
 func journalOwnedBy(dir string, gid int) bool {
-	if gid < 0 {
-		return true
-	}
 	info, err := os.Lstat(dir)
 	if err != nil || !info.IsDir() {
 		return false
 	}
 	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && int(st.Gid) == gid
+	return ok && (gid < 0 || int(st.Gid) == gid)
 }
 
 // repairHomeLink puts back the home link in an agent's control directory
@@ -201,12 +281,22 @@ func (a *agent) seed() error {
 
 // adoptConfig moves the starting config.json from the control directory into
 // the home, which the agent owns from then on: written through the agent's
-// helper, read and removed through its parent's. A home that already holds
-// one (a daemon restart) keeps it, and a config.json the parent wrote since
-// is dropped.
+// helper, read and removed through its parent's. Only a regular file is a
+// starting config. A home that already holds one (a daemon restart) keeps
+// it, and a config.json the parent wrote since is dropped. With neither,
+// admission goes on: the first run reports the missing config.
 func (c *agent) adoptConfig() error {
 	from, to := filepath.Join(c.ctrl, "config.json"), filepath.Join(c.home, "config.json")
-	_, err := c.fs.Stat(to)
+	e, err := c.parent.fs.Stat(from)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if e.Type != "file" {
+		return nil
+	}
+	_, err = c.fs.Stat(to)
 	if errors.Is(err, fs.ErrNotExist) {
 		var data []byte
 		var size int64
@@ -220,7 +310,10 @@ func (c *agent) adoptConfig() error {
 	if err != nil {
 		return err
 	}
-	return c.parent.fs.Remove(from)
+	if err := c.parent.fs.Unlink(from); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // admitFailed logs a failed admission once per distinct error.

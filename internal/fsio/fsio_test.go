@@ -153,6 +153,33 @@ func TestRenameMkdirRemove(t *testing.T) {
 	}
 }
 
+func TestUnlinkRemovesOnlyNonDirectories(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	file, sub, link := filepath.Join(dir, "f"), filepath.Join(dir, "d"), filepath.Join(dir, "l")
+	os.WriteFile(file, []byte("x"), 0o644)
+	os.MkdirAll(sub, 0o755)
+	os.WriteFile(filepath.Join(sub, "g"), []byte("x"), 0o644)
+	os.Symlink(file, link)
+	if err := c.Unlink(link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("link followed: %v", err)
+	}
+	if err := c.Unlink(file); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Unlink(sub); err == nil {
+		t.Fatal("directory unlinked")
+	}
+	if _, err := os.Stat(filepath.Join(sub, "g")); err != nil {
+		t.Fatalf("directory contents removed: %v", err)
+	}
+	if err := c.Unlink(file); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing file: %v", err)
+	}
+}
+
 func TestConcurrentRequests(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	var wg sync.WaitGroup
@@ -245,29 +272,20 @@ func controlDir(t *testing.T, home, name string) string {
 }
 
 func TestScanFindsControlDirs(t *testing.T) {
+	// Every real directory the user owns is a control directory, whatever it
+	// holds: the daemon decides what it is.
 	c, home := start(t), t.TempDir()
-	controlDir(t, home, "b")
-	controlDir(t, home, "a")
-	os.MkdirAll(filepath.Join(home, "agents", "noconfig"), 0o755)
+	b, a := controlDir(t, home, "b"), controlDir(t, home, "a")
+	empty := filepath.Join(home, "agents", "empty")
+	os.MkdirAll(empty, 0o755)
+	linked := filepath.Join(home, "agents", "linked")
+	os.MkdirAll(linked, 0o755)
+	os.Symlink(filepath.Join(t.TempDir(), "home"), filepath.Join(linked, "home"))
+	os.WriteFile(filepath.Join(home, "agents", "file"), []byte("x"), 0o644)
 	os.MkdirAll(filepath.Join(home, "agents", "a", "home", "agents", "deep"), 0o755) // not scanned: one level
 	got, err := c.Scan(home)
-	want := []string{filepath.Join(home, "agents", "a"), filepath.Join(home, "agents", "b")}
+	want := []string{a, b, empty, linked}
 	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v %v", got, err)
-	}
-}
-
-func TestScanFindsAdmittedControlDirs(t *testing.T) {
-	// An admitted child's config.json has moved out of its control directory;
-	// the home symlink is what marks it.
-	c, home := start(t), t.TempDir()
-	a := controlDir(t, home, "a")
-	b := filepath.Join(home, "agents", "b")
-	os.MkdirAll(b, 0o755)
-	os.Symlink(filepath.Join(t.TempDir(), "home"), filepath.Join(b, "home"))
-	os.MkdirAll(filepath.Join(home, "agents", "c"), 0o755)
-	got, err := c.Scan(home)
-	if err != nil || !reflect.DeepEqual(got, []string{a, b}) {
 		t.Fatalf("got %v %v", got, err)
 	}
 }
@@ -282,13 +300,10 @@ func TestScanSkipsSymlinks(t *testing.T) {
 		t.Fatalf("symlinked agents: got %v %v", got, err)
 	}
 	os.Remove(filepath.Join(home, "agents"))
-	// agents/x a symlink to a real control directory, agents/y with a
-	// config.json symlink, agents/z a genuine control directory.
+	// agents/x a symlink to a real control directory, agents/z a genuine
+	// control directory.
 	os.MkdirAll(filepath.Join(home, "agents"), 0o755)
 	os.Symlink(filepath.Join(real, "agents", "x"), filepath.Join(home, "agents", "x"))
-	y := filepath.Join(home, "agents", "y")
-	os.MkdirAll(y, 0o755)
-	os.Symlink(filepath.Join(real, "agents", "x", "config.json"), filepath.Join(y, "config.json"))
 	z := controlDir(t, home, "z")
 	got, err := c.Scan(home)
 	if err != nil || !reflect.DeepEqual(got, []string{z}) {
