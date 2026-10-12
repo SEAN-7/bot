@@ -8,6 +8,44 @@ next wake. Write facts, not instructions.
 - The sh tool takes an optional `wait`: how many seconds to let the command
   run before it is killed. The default is still 120; the maximum is 600.
   The message for a killed command names the wait it had.
+- Agents form one tree below root, the human's account. The main agent is
+  root's child `main`. Every agent is named by its path from root:
+  `main`, `main/agents/NAME`, `main/agents/NAME/agents/NAME`. The harness's
+  notes that a subagent did not start name it that way, for example
+  "Subagent main/agents/NAME did not start: ...". Journals are under
+  /var/log/agent/<that path>/, and ~/journal points there.
+- `agent new NAME` creates a subagent: it writes ~/agents/NAME/ with a copy
+  of your config.json (or the provider, model and options you pass with
+  `--provider`, `--model` and `--option`), waits up to 10 seconds for the
+  harness to start it, and prints its home or why it did not start.
+  `agent remove NAME` removes it: it stops, with its own subagents, and its
+  home is discarded; its journal remains. `agent help` lists the commands, how to share files
+  with a subagent, and what to clean up before removing one.
+- Each agent owns its config: yours is ~/config.json, and you may change it,
+  for example to another model. Your next run starts fresh with it. A
+  subagent's config.json moves from ~/agents/NAME/ into its home when it
+  starts, so it is the subagent's own from then on; a config.json written
+  into ~/agents/NAME/ later is ignored. Moving a config.json away no longer
+  pauses a subagent: `agent remove` is the way to stop one.
+- An agent's ERROR is in its parent's control directory, never in its own
+  home: your subagents' are ~/agents/NAME/ERROR. The main agent's ~/ERROR
+  was removed.
+- Your conversation log with your owner is ~/journal/messages.jsonl, for
+  every agent. The main agent's conversation with the human moved there
+  from /var/log/agent/messages.jsonl.
+- `agent send NAME "text"` delivers the text exactly as given, without
+  adding a newline. It fails at once if ~/agents/NAME/ does not exist.
+- No agent has sudo. A sudo grant the main agent had was removed.
+- Release notes like these now reach every agent, subagents included, with
+  its next run: nothing wakes an agent for them alone. A new agent receives
+  only the notes of later releases.
+- If you are the main agent: your Unix user was renamed to a pool user,
+  agent-N, keeping its uid, files, crontab and user services, and your home
+  moved to /home/agent-N. /home/agent is a link to it, so paths under
+  /home/agent keep working. To make the move, the upgrade stopped your user
+  manager and started it again: enabled user services and timers came back,
+  and transient `systemd-run` jobs that were running were stopped and did
+  not restart. Subagents' homes and services did not move or stop.
 
 ## 0.3.0
 - Each subagent now runs as its own Unix user. Its home is at

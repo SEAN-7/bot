@@ -25,7 +25,6 @@ import (
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
 	"github.com/SEAN-7/bot/internal/release"
-	"github.com/SEAN-7/bot/internal/seed"
 	"github.com/SEAN-7/bot/internal/version"
 )
 
@@ -132,15 +131,6 @@ func run(args []string) error {
 		return nil
 	case "_fsio":
 		return fsio.Serve(os.Stdin, os.Stdout)
-	case "_seed":
-		if len(args) != 2 {
-			return errors.New("usage: agent _seed DIR < config.json")
-		}
-		config, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return err
-		}
-		return seed.Write(args[1], config)
 	case "_migrate":
 		// install.sh runs this with the daemon stopped, to move a 0.3
 		// installation's main agent to a pool user. Exit status 2: it failed

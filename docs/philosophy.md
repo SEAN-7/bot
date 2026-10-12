@@ -4,11 +4,11 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## Three ideas
 
-1. **An agent is a user and a directory**: a home holding `README.md`,
-   `TASK.md` and `inbox/`. The main agent is `agent` at `/home/agent`. A
-   parent creates a subagent by writing a control directory under its
-   `agents/` folder; the harness gives it a user from a pool and a home.
-   Removing the control directory stops it.
+1. **An agent is a user and a home** holding `README.md`, `TASK.md` and
+   `inbox/`. Its owner, root or another agent, creates it with `agent new`;
+   the harness gives it a user from a pool. `agent remove` stops it. Root is
+   the top of the tree and the main agent its first child, so the human
+   does exactly what an agent does.
 2. **Everything that happens is a file in an inbox**: owner messages,
    schedules, heartbeats, child reports, crash recovery and context resets.
    There is no other event channel.
@@ -20,15 +20,16 @@ The harness provides a few guarantees; the agent provides all policy.
 - Commands run as the agent's own unprivileged user, with a time limit the
   agent chooses per command (up to 10 minutes) that kills the whole process
   group.
-- Every agent has one owner: the human for the main agent, its parent for a
-  subagent. Messages between them are labelled with their sender; nothing an
-  agent writes can carry another's label.
+- Every agent has one owner: the human (root) for a top-level agent such as
+  the main agent, its parent for a subagent. Messages between them are
+  labelled with their sender; nothing an agent writes can carry another's
+  label.
 - An agent's standing instructions in its `OWNER.md` reach it first on every
   run, and it cannot change them.
 - A subagent cannot change its parent's or siblings' files; its ancestors
   can always read its journals.
-- No agent can read provider credentials or alter journals or conversation
-  logs.
+- No agent has sudo, and none can read provider credentials or alter
+  journals or conversation logs.
 - All daemon file access inside agent homes happens with an agent's
   privileges, so a planted symlink reaches nothing that agent couldn't.
 - Every model message and command result is journaled; an interrupted run is
@@ -37,9 +38,9 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## What the agent decides
 
-Memory, scheduling, messaging, tools, subagents, when to stop and how to
-work: all of it is files and scripts the agent writes for itself, starting
-from suggestions in its seed README that it is free to revise.
+Memory, its model, scheduling, messaging, tools, subagents, when to stop
+and how to work: all of it is files and scripts the agent writes for itself,
+starting from suggestions in its seed README that it is free to revise.
 
 ## How to judge a change
 

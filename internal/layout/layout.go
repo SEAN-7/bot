@@ -57,7 +57,10 @@ func (l Layout) MigratingFile() string { return filepath.Join(l.Lib, "migrating"
 // so a rerun finishes with the same user.
 func (l Layout) MigratingUserFile() string { return filepath.Join(l.Lib, "migrating-user") }
 
-// VersionFile records the last version whose release notes the agent got.
+// VersionFile records the installed version, written by install.sh. The
+// next upgrade reads it, and the 0.4.0 migration records it as the newest
+// release notes each migrated agent has seen. It does not drive delivery:
+// each agent's pool entry does.
 func (l Layout) VersionFile() string { return filepath.Join(l.Lib, "version") }
 
 // ConversationFile is an agent's conversation with its owner, written only

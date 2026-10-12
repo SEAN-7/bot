@@ -1,55 +1,26 @@
 package seed
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
 
-func TestSeedDoesNotOverwrite(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "README.md"), []byte("mine"), 0o644)
-	if err := Write(dir, []byte(`{"provider":"p","model":"m"}`)); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(filepath.Join(dir, "README.md")); string(data) != "mine" {
-		t.Fatalf("README overwritten: %q", data)
-	}
-	if data, _ := os.ReadFile(filepath.Join(dir, "TASK.md")); string(data) != "No task yet.\n" {
-		t.Fatalf("TASK.md %q", data)
-	}
-	if data, _ := os.ReadFile(filepath.Join(dir, "config.json")); !strings.Contains(string(data), `"model":"m"`) {
-		t.Fatalf("config %q", data)
-	}
-	for _, sub := range []string{"inbox/processed", "agents"} {
-		if info, err := os.Stat(filepath.Join(dir, sub)); err != nil || !info.IsDir() {
-			t.Fatalf("%s missing", sub)
-		}
-	}
-	os.WriteFile(filepath.Join(dir, "config.json"), []byte("edited"), 0o644)
-	Write(dir, []byte(`{}`))
-	if data, _ := os.ReadFile(filepath.Join(dir, "config.json")); string(data) != "edited" {
-		t.Fatal("config overwritten on reseed")
-	}
-}
-
 func TestSeedReadmeCoversTopics(t *testing.T) {
 	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message",
-		"agent send NAME", "~/agents/NAME/config.json", "OWNER.md", "~/agents/NAME/home", "setfacl", `"from": "agents/NAME"`} {
+		"~/config.json", "~/journal/messages.jsonl", "agent send NAME", "agent new NAME", "agent remove NAME", "agent help",
+		"~/agents/NAME/OWNER.md", "~/agents/NAME/ERROR", "~/agents/NAME/home", `"from": "agents/NAME"`} {
 		if !strings.Contains(README, want) {
 			t.Errorf("README lacks %q", want)
 		}
 	}
 }
 
-// Granting x on a directory exposes its other-readable entries, files a
-// subagent creates later need a default ACL, and users are reused.
-func TestSeedReadmeSharingRecipe(t *testing.T) {
-	for _, want := range []string{"chmod o-rwx", "setfacl -R -d -m u:USER:rwX,u:$(id -un):rwX", "Users are reused",
-		"setfacl -R -x u:USER,d:u:USER", "setfacl -x u:USER ~ ~/share", "find ~/share/NAME -user USER"} {
-		if !strings.Contains(README, want) {
-			t.Errorf("README lacks %q", want)
+// The README names no path that 0.4.0 removed, and leaves the sharing recipe
+// to agent help.
+func TestSeedReadmeDropsOldLayout(t *testing.T) {
+	for _, old := range []string{"/var/log/agent/messages.jsonl", "~/agents/NAME/config.json", "setfacl", "pauses"} {
+		if strings.Contains(README, old) {
+			t.Errorf("README still has %q", old)
 		}
 	}
 }
