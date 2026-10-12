@@ -390,3 +390,20 @@ func TestPurgeOwnedReadOnlyDirsAndContinues(t *testing.T) {
 		t.Fatalf("followed a link: %v %v", info.Mode(), err)
 	}
 }
+
+func TestEntryIdentity(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := filepath.Join(dir, "d")
+	os.Mkdir(path, 0o755)
+	keep := filepath.Join(dir, "keep") // holds the inode, so it cannot be reused
+	os.Rename(path, keep)
+	os.Mkdir(path, 0o755)
+	a, err1 := c.Stat(keep)
+	b, err2 := c.Stat(path)
+	if err1 != nil || err2 != nil || a.Ino == 0 || a.Ino == b.Ino && a.Dev == b.Dev {
+		t.Fatalf("identities %d/%d and %d/%d: %v %v", a.Dev, a.Ino, b.Dev, b.Ino, err1, err2)
+	}
+	if again, _ := c.Stat(path); again.Ino != b.Ino || again.Dev != b.Dev {
+		t.Fatal("identity not stable")
+	}
+}

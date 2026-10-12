@@ -26,6 +26,10 @@ type Entry struct {
 	ModTime time.Time `json:"mod_time"`
 	UID     int       `json:"uid"`
 	Mode    uint32    `json:"mode"` // permission bits only
+	// Dev and Ino identify the file: a directory removed and created again
+	// at the same path is a different one.
+	Dev uint64 `json:"dev"`
+	Ino uint64 `json:"ino"`
 }
 
 type request struct {
@@ -154,6 +158,9 @@ func entry(info fs.FileInfo) Entry {
 	}
 	e := Entry{Name: info.Name(), Type: kind, Size: info.Size(), ModTime: info.ModTime(), Mode: uint32(info.Mode().Perm())}
 	e.UID = owner(info)
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		e.Dev, e.Ino = uint64(st.Dev), uint64(st.Ino)
+	}
 	return e
 }
 

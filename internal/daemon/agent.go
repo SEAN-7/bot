@@ -22,6 +22,7 @@ type agent struct {
 	name   string // "main", or the path under main's agents/ (research/agents/scraper)
 	home   string
 	ctrl   string // the real control directory, in the parent's home; "" for main
+	ctrlID fileID // ctrl as admitted: a directory created again there is another subagent
 	user   string // cfg.AgentUser for main, a pool user for subagents
 	parent *agent
 	fs     *fsio.Client // runs as user: every access to home goes through it
@@ -30,9 +31,15 @@ type agent struct {
 
 	failedConfig string // hash of a config.json already reported invalid
 	failedOwner  string // the OWNER.md error already logged
+	linkErr      string // the home link error already logged; poll goroutine only
 
 	conv *conversation // the last run's conversation, if it ended normally
 }
+
+// fileID identifies a file by device and inode.
+type fileID struct{ dev, ino uint64 }
+
+func idOf(e fsio.Entry) fileID { return fileID{e.Dev, e.Ino} }
 
 func newMain(d *daemon) *agent {
 	return &agent{d: d, id: d.cfg.Home, name: "main", home: d.cfg.Home, user: d.cfg.AgentUser, done: make(chan struct{})}

@@ -129,8 +129,8 @@ Helper operations: `scan` (find control directories), `list` (inbox entries
 with type and size), `read` (path, byte limit), `write` (atomic:
 dot-prefixed temporary file then rename), `rename`, `mkdir`, `remove`,
 `removeall` (recursive, never following symlinks), `symlink` (create or
-replace), `stat` (size, mtime, type, mode and owner uid, without following
-symlinks for the final component).
+replace), `stat` (size, mtime, type, mode, owner uid, device and inode,
+without following symlinks for the final component).
 
 **Shell commands** run as the agent's user with credentials set in the child
 before exec, so the change of working directory happens with that user's
@@ -176,7 +176,10 @@ agent user cannot read another user's process environment.
   symlink into the control directory (through the parent's helper). An
   agent's identity is its control directory's path as seen from the main
   agent (see Journal): renaming the directory removes the subagent and
-  admits a new one.
+  admits a new one, and so does removing it and creating it again, even
+  between two polls (the daemon records the directory's device and inode at
+  admission). Each poll restores a subagent's `home` link if its parent
+  removed it.
 - **max_agents.** When no pool user is free, a new control directory is not
   admitted. The daemon writes the reason to its `ERROR` and the service log,
   and notifies the parent's inbox once.

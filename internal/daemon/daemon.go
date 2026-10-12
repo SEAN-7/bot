@@ -332,6 +332,11 @@ func (d *daemon) reconcile() {
 				if c = d.admit(a, ctrl); c == nil {
 					continue
 				}
+			} else if controlDirGone(a, ctrl, c.ctrlID) {
+				// Created again since admission: the old subagent is
+				// removed below, and the new one admitted once its user
+				// is reclaimed.
+				continue
 			}
 			present[c.id] = c
 			tree = append(tree, c)
@@ -340,11 +345,16 @@ func (d *daemon) reconcile() {
 		// exists: a missing or renamed config.json only pauses it, since
 		// removal wipes its home.
 		for _, c := range known {
-			if c.parent == a && present[c.id] == nil && !controlDirGone(a, c.ctrl) {
+			if c.parent == a && present[c.id] == nil && !controlDirGone(a, c.ctrl, c.ctrlID) {
 				seen[c.ctrl] = true
 				present[c.id] = c
 				tree = append(tree, c)
 			}
+		}
+	}
+	for _, c := range tree[1:] {
+		if !unscanned[c.parent.home] {
+			d.repairHomeLink(c)
 		}
 	}
 	// Forget what was reported for directories that are gone, so they are

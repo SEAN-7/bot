@@ -23,6 +23,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return nil
 	}
 	name, id := childName(parent, ctrl), d.childID(parent, ctrl)
+	dir, err := parent.fs.Stat(ctrl)
+	if err != nil {
+		d.admitFailed(ctrl, name, "control directory", err)
+		return nil
+	}
 	held := d.pool.userOf(id)
 	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents-1))
 	if err != nil {
@@ -35,7 +40,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 		return nil // held: its user is being reclaimed
 	}
-	c := &agent{d: d, id: id, name: name, home: d.cfg.PoolHome(user), ctrl: ctrl, user: user, parent: parent, done: make(chan struct{})}
+	c := &agent{d: d, id: id, name: name, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	// A user new to this agent may hold a previous agent's files; a user it
 	// already held (a daemon restart) keeps them.
 	fresh, cleared := held == "", false
@@ -94,6 +99,25 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	d.mu.Unlock()
 	c.logf("admitted as %s", user)
 	return c
+}
+
+// repairHomeLink puts back the home link in a subagent's control directory
+// if its parent removed it, through the parent's helper. A failure is
+// logged once and retried at the next poll.
+func (d *daemon) repairHomeLink(c *agent) {
+	link := filepath.Join(c.ctrl, "home")
+	_, err := c.parent.fs.Stat(link)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err = c.parent.fs.Symlink(c.home, link); err == nil {
+			c.logf("home link restored")
+		}
+	}
+	if err == nil {
+		c.linkErr = ""
+	} else if msg := err.Error(); msg != c.linkErr {
+		c.linkErr = msg
+		c.logf("home link: %v", err)
+	}
 }
 
 // seed creates the harness's directories and the seed files the home lacks,

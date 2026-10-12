@@ -149,16 +149,20 @@ func (d *daemon) ancestorGid(agentID string) (int, error) {
 
 // controlDirGone reports whether parent's control directory ctrl no longer
 // exists: removal and its reclaim follow only from that, never from a
-// missing or renamed config.json, which an agent may move about. Anything
-// short of certainty keeps the agent: a failing helper or user lookup must
-// not wipe a live subagent.
-func controlDirGone(parent *agent, ctrl string) bool {
+// missing or renamed config.json, which an agent may move about. A directory
+// that is not the one admitted (want, when known) was removed and created
+// again, so the admitted one is gone. Anything short of certainty keeps the
+// agent: a failing helper or user lookup must not wipe a live subagent.
+func controlDirGone(parent *agent, ctrl string, want fileID) bool {
 	e, err := parent.fs.Stat(ctrl)
 	if err != nil {
 		return errors.Is(err, fs.ErrNotExist)
 	}
 	if e.Type != "dir" {
 		return true // replaced by a link or a file
+	}
+	if want != (fileID{}) && idOf(e) != want {
+		return true // another directory now
 	}
 	uid := parent.uid()
 	return uid >= 0 && e.UID != uid // someone else's directory
@@ -200,5 +204,5 @@ func (d *daemon) orphaned(id string) bool {
 		}
 		return false
 	}
-	return controlDirGone(parent, filepath.Join(parent.home, "agents", filepath.Base(id)))
+	return controlDirGone(parent, filepath.Join(parent.home, "agents", filepath.Base(id)), fileID{})
 }
