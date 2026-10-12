@@ -83,6 +83,60 @@ func TestNewWritesValidatedConfig(t *testing.T) {
 	}
 }
 
+// TestNewInheritedOptions: the caller's options go with its model, so they are
+// dropped when --provider or --model is given and kept otherwise.
+func TestNewInheritedOptions(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m","options":{"effort":"low"}}`), 0o644)
+	o := fastNew(20 * time.Millisecond)
+	o.Model = "m2"
+	if err := New(l, false, home, "cheap", o, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := readConfig(t, filepath.Join(home, "agents", "cheap", "config.json")); c.Model != "m2" || len(c.Options) != 0 {
+		t.Fatalf("config %+v", c)
+	}
+	o.Model, o.Options = "m", []string{"budget=3"}
+	if err := New(l, false, home, "same", o, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := readConfig(t, filepath.Join(home, "agents", "same", "config.json")); c.Options["effort"] != nil || c.Options["budget"] != float64(3) {
+		t.Fatalf("config %+v", c)
+	}
+	if err := New(l, false, home, "plain", fastNew(20*time.Millisecond), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := readConfig(t, filepath.Join(home, "agents", "plain", "config.json")); c.Options["effort"] != "low" {
+		t.Fatalf("config %+v", c)
+	}
+}
+
+func TestNewWithoutCallerConfig(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := t.TempDir()
+	o := fastNew(20 * time.Millisecond)
+	o.Provider, o.Model = "p", "m"
+	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	if c := readConfig(t, filepath.Join(home, "agents", "x", "config.json")); c.Provider != "p" || c.Model != "m" {
+		t.Fatalf("config %+v", c)
+	}
+	for _, o := range []NewOptions{{Model: "m"}, {Provider: "p"}, {}} {
+		o.Wait, o.Poll = time.Millisecond, time.Millisecond
+		err := New(l, false, home, "y", o, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "pass --provider and --model") {
+			t.Fatalf("%+v: got %v", o, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(home, "agents", "y")); err == nil {
+		t.Fatal("a rejected agent left a directory")
+	}
+}
+
 func TestNewRootRequiresModel(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")

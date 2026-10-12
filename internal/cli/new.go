@@ -58,11 +58,15 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		}
 	} else {
 		data, err := os.ReadFile(filepath.Join(home, "config.json"))
-		if err != nil {
-			return fmt.Errorf("no starting config: %w", err)
-		}
-		if config, err = plugin.ParseConfig(data); err != nil {
-			return fmt.Errorf("%s: %w", filepath.Join(home, "config.json"), err)
+		switch {
+		case os.IsNotExist(err) && o.Provider != "" && o.Model != "":
+			// The flags say everything a starting config would.
+		case err != nil:
+			return fmt.Errorf("no starting config to copy (%v); pass --provider and --model", err)
+		default:
+			if config, err = plugin.ParseConfig(data); err != nil {
+				return fmt.Errorf("%s: %w", filepath.Join(home, "config.json"), err)
+			}
 		}
 	}
 	providers, err := LoadProviders(l)
@@ -74,6 +78,11 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		installed = append(installed, p)
 	}
 	sort.Strings(installed)
+	// Options belong to a model, so choosing another provider or model starts
+	// from none; only --option applies then.
+	if o.Provider != "" || o.Model != "" {
+		config.Options = nil
+	}
 	if o.Provider != "" {
 		config.Provider = o.Provider
 	}
