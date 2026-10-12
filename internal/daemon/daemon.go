@@ -16,8 +16,10 @@ import (
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/layout"
+	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
+	"github.com/SEAN-7/bot/internal/version"
 )
 
 type Config struct {
@@ -36,6 +38,8 @@ type Config struct {
 	// continues that conversation. Shorter than the provider's 5-minute cache,
 	// so a continued conversation always finds it warm.
 	ContinueWindow time.Duration
+	Version        string // this harness version; "dev" builds deliver no release notes
+	ReleaseNotes   string // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
 	InboxClip      int
 	Logger         *log.Logger
@@ -54,6 +58,8 @@ func DefaultConfig(self string) Config {
 		ErrorAfter:     3,
 		DrainTimeout:   15 * time.Minute,
 		ContinueWindow: 4 * time.Minute,
+		Version:        version.Version,
+		ReleaseNotes:   notes.Text,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
@@ -112,6 +118,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
+	d.deliverReleaseNotes()
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()

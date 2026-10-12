@@ -137,6 +137,13 @@ agent user cannot read another user's process environment.
 - **Removal.** When an agent directory disappears, its loop kills any running
   command's process group, writes the end marker (`reason: "removed"`) and
   exits. Its journals remain.
+- **Release notes.** On start, if `/var/lib/agent/version` differs from the
+  running version, the daemon writes the sections of its embedded release
+  notes (`internal/notes/notes.md`) newer than the recorded version, up to the
+  running one, to the main agent's inbox as one `<time>-harness-update.md`,
+  then records the version. With no record, it delivers every section up to
+  the running version. Fresh installs record the version at install time.
+  Development builds deliver nothing.
 - **Owner spool.** The daemon moves each file in `/var/lib/agent/owner/` into
   `/home/agent/inbox/` as `<UTC timestamp>-owner.md` (through the helper, with
   an atomic dot-name rename) and appends the agent path, file name and SHA-256

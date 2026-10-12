@@ -27,6 +27,9 @@ func (l Layout) OwnerSpool() string     { return filepath.Join(l.Lib, "owner") }
 func (l Layout) DeliveredFile() string  { return filepath.Join(l.Lib, "delivered.jsonl") }
 func (l Layout) ProvidersCache() string { return filepath.Join(l.Lib, "providers.json") }
 
+// VersionFile records the last version whose release notes the agent got.
+func (l Layout) VersionFile() string { return filepath.Join(l.Lib, "version") }
+
 // MessagesFile is the owner conversation, written only by the daemon.
 func (l Layout) MessagesFile() string { return filepath.Join(l.Log, "messages.jsonl") }
 

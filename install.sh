@@ -137,6 +137,8 @@ main() {
 			say "Unknown model: $model"
 		done
 		printf '{"provider": "%s", "model": "%s", "options": {}}\n' "$provider" "$model" | as_agent /usr/local/bin/agent _seed /home/agent
+		# A fresh seed README is current: record the version so no release notes are sent.
+		printf '%s\n' "$VERSION" >/var/lib/agent/version
 	fi
 
 	loginctl enable-linger agent
