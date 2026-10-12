@@ -227,7 +227,8 @@ func owner(info fs.FileInfo) int {
 	return -1
 }
 
-// clearDir removes everything inside dir and keeps dir itself.
+// clearDir removes everything inside dir and keeps dir itself. It goes on
+// past an entry it cannot remove and reports every failure.
 func clearDir(dir string) error {
 	items, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -235,23 +236,25 @@ func clearDir(dir string) error {
 	} else if err != nil {
 		return err
 	}
+	var errs []error
 	for _, item := range items {
-		if err := os.RemoveAll(filepath.Join(dir, item.Name())); err != nil {
-			return err
-		}
+		errs = append(errs, removeAll(filepath.Join(dir, item.Name())))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // purgeOwned removes each top-level entry of dirs that this user owns, leaving
-// entries owned by others (the daemon's, or another agent's) in place.
+// entries owned by others (the daemon's, or another agent's) in place. It goes
+// on past a directory or entry it cannot remove and reports every failure.
 func purgeOwned(dirs []string) error {
+	var errs []error
 	for _, dir := range dirs {
 		items, err := os.ReadDir(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return err
+			errs = append(errs, err)
+			continue
 		}
 		for _, item := range items {
 			path := filepath.Join(dir, item.Name())
@@ -259,10 +262,36 @@ func purgeOwned(dirs []string) error {
 			if err != nil || owner(info) != os.Getuid() {
 				continue // vanished, or not ours
 			}
-			if err := os.RemoveAll(path); err != nil {
-				return err
-			}
+			errs = append(errs, removeAll(path))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
+}
+
+// removeAll is os.RemoveAll for a tree that may hold directories without
+// write or search permission for their owner (a module cache is read-only,
+// for example): it first gives every directory this user owns u+rwx, never
+// following symlinks, then removes the tree.
+func removeAll(path string) error {
+	writable(path)
+	return os.RemoveAll(path)
+}
+
+func writable(path string) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.IsDir() || owner(info) != os.Getuid() {
+		return // not a directory (links included), or not ours to change
+	}
+	if info.Mode().Perm()&0o700 != 0o700 {
+		os.Chmod(path, info.Mode().Perm()|0o700)
+	}
+	items, err := os.ReadDir(path)
+	if err != nil {
+		return // RemoveAll reports it
+	}
+	for _, item := range items {
+		if item.IsDir() {
+			writable(filepath.Join(path, item.Name()))
+		}
+	}
 }

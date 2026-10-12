@@ -43,9 +43,10 @@ func depth(a *agent) int {
 // everything it runs, wipes its home and temporary files, empties its group
 // and hands agentID's journals to the parent's group, and only then frees
 // it. A failure leaves the user reclaiming, so it is never assigned, and the
-// whole reclaim is retried at the next poll and on the next start. It waits
-// for its descendants' reclaims: their groups still list this user, so its
-// next holder must not get it while their homes may hold files.
+// whole reclaim is retried at the next poll and on the next start. Its group
+// is emptied and it is freed only after its descendants' reclaims: their
+// groups still list this user, so its next holder must not get it while their
+// homes may hold files. What it runs is stopped at once all the same.
 func (d *daemon) reclaim(user, agentID string) error {
 	err := d.reclaimSteps(user, agentID)
 	if err != nil {
@@ -69,17 +70,20 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		// Persisted before anything is destroyed, so a crash at any later
 		// step is finished on the next start instead of handing out the user.
 		{"pool", func() error { return d.pool.mark(user, poolReclaiming) }},
+		{"linger", func() error { return sys.DisableLinger(user) }},
+		// Before the kill loop, so no cron job starts after it.
+		{"crontab", func() error { return sys.RemoveCrontab(user) }},
+		{"stop processes", func() error { return sys.StopProcesses(user) }},
+		{"wipe files", func() error { return d.wipe(user) }},
+		// Its descendants' groups still list this user, so it is not
+		// handed on while their homes may hold files; everything it runs
+		// is stopped above regardless.
 		{"subagents", func() error {
 			if d.pool.hasDescendants(agentID) {
 				return errors.New("waiting for its subagents' users to be reclaimed")
 			}
 			return nil
 		}},
-		{"linger", func() error { return sys.DisableLinger(user) }},
-		// Before the kill loop, so no cron job starts after it.
-		{"crontab", func() error { return sys.RemoveCrontab(user) }},
-		{"stop processes", func() error { return sys.StopProcesses(user) }},
-		{"wipe files", func() error { return d.wipe(user) }},
 		{"group members", func() error { return sys.SetMembers(user, nil) }},
 		{"journal", func() error {
 			gid, err := d.ancestorGid(agentID)

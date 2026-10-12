@@ -198,8 +198,12 @@ agent user cannot read another user's process environment.
   so the next holder of the user cannot read them. Only then is the user
   marked free. A reclaim interrupted by a crash is finished on the next
   start, before the user can be assigned again. A failed reclaim is retried
-  every poll, and a user's reclaim waits until every descendant's user has
-  been reclaimed, since their groups still list it.
+  every poll. Its lingering, crontab, processes and files go at once, but
+  its group is cleared and it is freed only after every descendant's user
+  has been reclaimed, since their groups still list it. Removing a home
+  first gives the user write permission on every directory it owns there
+  (never following symlinks), so read-only directories such as a module
+  cache cannot block it.
 - **Release notes.** On start, if `/var/lib/agent/version` differs from the
   running version, the daemon writes the sections of its embedded release
   notes (`internal/notes/notes.md`) newer than the recorded version, up to the

@@ -337,3 +337,56 @@ func TestPurgeOwnedRemovesOwnEntries(t *testing.T) {
 		}
 	}
 }
+
+// readOnlyTree builds dir/ro (0555) holding a file and a 0000 directory with
+// a file inside, and a link to outside, a read-only directory that must keep
+// its mode: clearing never follows links.
+func readOnlyTree(t *testing.T, dir string) (outside string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	outside = t.TempDir()
+	ro := filepath.Join(dir, "ro")
+	os.MkdirAll(filepath.Join(ro, "locked"), 0o755)
+	os.WriteFile(filepath.Join(ro, "f"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(ro, "locked", "g"), []byte("x"), 0o644)
+	os.Symlink(outside, filepath.Join(ro, "out"))
+	os.Chmod(filepath.Join(ro, "locked"), 0)
+	os.Chmod(ro, 0o555)
+	os.Chmod(outside, 0o555)
+	t.Cleanup(func() { os.Chmod(outside, 0o755) })
+	return outside
+}
+
+func TestClearReadOnlyDirs(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	outside := readOnlyTree(t, dir)
+	if err := c.Clear(dir); err != nil {
+		t.Fatal(err)
+	}
+	if items, err := os.ReadDir(dir); err != nil || len(items) != 0 {
+		t.Fatalf("left %v %v", items, err)
+	}
+	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("followed a link: %v %v", info.Mode(), err)
+	}
+}
+
+func TestPurgeOwnedReadOnlyDirsAndContinues(t *testing.T) {
+	c := start(t)
+	one, two := t.TempDir(), t.TempDir()
+	outside := readOnlyTree(t, two)
+	notDir := filepath.Join(one, "file")
+	os.WriteFile(notDir, []byte("x"), 0o644)
+	// The first "directory" cannot be listed; the second is still purged.
+	if err := c.PurgeOwned([]string{notDir, two}); err == nil {
+		t.Fatal("expected the unlistable directory's error")
+	}
+	if items, err := os.ReadDir(two); err != nil || len(items) != 0 {
+		t.Fatalf("left %v %v", items, err)
+	}
+	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0o555 {
+		t.Fatalf("followed a link: %v %v", info.Mode(), err)
+	}
+}

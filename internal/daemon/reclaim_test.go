@@ -306,6 +306,9 @@ func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
 	}
 }
 
+// A stuck reclaim of a grandchild keeps its parent's user from being freed
+// (the grandchild's group still lists it), but not from being stopped: the
+// parent's lingering, crontab, processes and files go at once.
 func TestParentWaitsForDescendantReclaim(t *testing.T) {
 	h := newHarness(t)
 	c := makeChild(t, h, "c", true)
@@ -323,12 +326,14 @@ func TestParentWaitsForDescendantReclaim(t *testing.T) {
 		p := poolJSON(h)
 		return strings.Count(p, `"state":"reclaiming"`) == 2
 	})
+	waitFor(t, "parent stopped", func() bool { return sys.inOrder("unlinger agent-1", "crontab agent-1", "stop agent-1") })
+	waitFor(t, "parent's home wiped", func() bool {
+		_, err := os.Stat(filepath.Join(cHome, "work.txt"))
+		return os.IsNotExist(err)
+	})
 	time.Sleep(20 * h.cfg.Poll)
-	if sys.called("unlinger agent-1") || sys.called("members agent-1 ") {
-		t.Fatalf("parent reclaimed before its child: %v", sys)
-	}
-	if _, err := os.Stat(filepath.Join(cHome, "work.txt")); err != nil {
-		t.Fatal("parent's home wiped before its child's reclaim finished")
+	if sys.called("members agent-1 ") {
+		t.Fatalf("parent's group emptied before its child was reclaimed: %v", sys)
 	}
 	if p := poolJSON(h); strings.Count(p, `"state":"reclaiming"`) != 2 {
 		t.Fatal(p)
@@ -338,8 +343,28 @@ func TestParentWaitsForDescendantReclaim(t *testing.T) {
 	}
 	sys.setFail("stop agent-2", nil)
 	waitFor(t, "pool empty", func() bool { return poolJSON(h) == "[]" })
-	if !sys.inOrder("members agent-2 ", "unlinger agent-1", "members agent-1 ") {
+	if !sys.inOrder("members agent-2 ", "members agent-1 ") {
 		t.Fatal(sys)
+	}
+}
+
+// A directory without write permission for its owner (a Go module cache is
+// 0555) must not stop a home from being cleared and its user reclaimed.
+func TestReclaimClearsReadOnlyDirs(t *testing.T) {
+	skipIfRoot(t)
+	h := newHarness(t)
+	c := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(c)
+	ro := filepath.Join(home, "go", "pkg", "mod")
+	os.MkdirAll(ro, 0o755)
+	os.WriteFile(filepath.Join(ro, "f.go"), []byte("package f"), 0o444)
+	os.Chmod(ro, 0o555)
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+	os.RemoveAll(c)
+	waitFor(t, "pool empty", func() bool { return poolJSON(h) == "[]" })
+	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
+		t.Fatalf("home not emptied: %v %v", entries, err)
 	}
 }
 
