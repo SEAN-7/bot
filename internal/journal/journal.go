@@ -42,9 +42,14 @@ func Create(dir string, now time.Time, gid int) (*Writer, error) {
 		if err != nil {
 			return nil, err
 		}
-		f.Chmod(fileMode)
-		if gid >= 0 {
-			f.Chown(-1, gid)
+		err = f.Chmod(fileMode)
+		if err == nil && gid >= 0 {
+			err = f.Chown(-1, gid)
+		}
+		if err != nil {
+			f.Close()
+			os.Remove(path)
+			return nil, err
 		}
 		return &Writer{f: f, path: path}, nil
 	}

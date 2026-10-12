@@ -103,8 +103,14 @@ func TestSecureFixesTree(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Chmod(run, 0o644)
+	// The link points outside the walked tree, so Secure must not follow it.
+	target := filepath.Join(t.TempDir(), "target")
+	if err := os.WriteFile(target, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(target, 0o644)
 	link := filepath.Join(dir, "link")
-	if err := os.Symlink(run, link); err != nil {
+	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
 	if err := Secure(dir, os.Getgid()); err != nil {
@@ -118,8 +124,30 @@ func TestSecureFixesTree(t *testing.T) {
 	if info, err := os.Lstat(link); err != nil || info.Mode()&os.ModeSymlink == 0 {
 		t.Fatalf("symlink changed: %v %v", info, err)
 	}
-	if info, _ := os.Stat(run); info.Mode().Perm() != 0o640 {
+	if info, _ := os.Stat(target); info.Mode().Perm() != 0o644 {
 		t.Fatalf("symlink target mode %v", info.Mode())
+	}
+}
+
+func TestCreateWithGroup(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	w, err := Create(dir, time.Now(), os.Getgid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+	if info, _ := os.Stat(w.Path()); info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v", info.Mode())
+	}
+}
+
+func TestSecureCreatesMissingDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a", "b")
+	if err := Secure(dir, os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o751 {
+		t.Fatalf("dir: %v %v", info, err)
 	}
 }
 
