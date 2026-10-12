@@ -180,6 +180,40 @@ below); `install.sh` creates other missing pool users only after the rename.
    memberships, and the user manager restarts the agent's units. Each agent
    gets the 0.4.0 notes on its next wake.
 
+**What the live VM depends on** (read-only survey, 2026-10-12, version
+0.3.1):
+
+- `agent` is uid 1001 with home `/home/agent` (4.2 GB, about 120,000 files)
+  on the root filesystem, so the move is a single `rename(2)`. It belongs to
+  the groups `agent-1` and `agent-2` as the ancestor of `clinics` and
+  `recipes`; `usermod -l` renames those member entries and the daemon
+  recomputes them anyway.
+- Its crontab and its persistent user units (`caddy`, `lspn-api`,
+  `recipes-*`, `telegram-poller` and two timers) use absolute
+  `/home/agent/...` paths, as do the running postgres (`-D`), redis and caddy
+  processes. The symlink is what keeps them working; nothing outside the home
+  refers to `/home/agent`.
+- Stopping the user manager takes down its public services (the Caddy HTTPS
+  proxy and the APIs on 0.0.0.0:8080) until step 3 re-enables lingering, and
+  kills transient `systemd-run` jobs, which do not come back (at the time of
+  the survey, `lspn-manual-sync` and a collector run). Enabled units and
+  timers restart on their own. The 0.4.0 notes state that the upgrade
+  restarted the user manager and stopped transient jobs. `install.sh` prints
+  the user's running transient units before step 2, so the operator can
+  choose a quiet moment.
+- `/etc/sudoers.d/agent` and `/etc/agent/OWNER.md` do not exist, and the
+  owner spool is empty; those steps are no-ops here but stay for other
+  installs.
+- Files the user owns in `/tmp` and ACL entries naming it refer to the uid
+  and need nothing. Renaming keeps the inode, so file capabilities on its
+  binaries (such as caddy's) are kept.
+- Two subagents: `clinics` on `agent-1` and `recipes` on `agent-2`.
+
+The migration test fixture mirrors this shape: a main agent with two
+subagents, a crontab using `$HOME` and absolute paths, an enabled user unit
+with an absolute `ExecStart`, a running transient unit, no OWNER.md and no
+sudoers file.
+
 Every step is idempotent: a rerun detects what is done (user already
 renamed, file already moved) and continues. A failure before step 3 exits 1
 and `install.sh` restores the previous release; a failure from step 3 on
