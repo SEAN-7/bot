@@ -223,6 +223,19 @@ func groupMembers(t *testing.T, group string) string {
 	return fields[3]
 }
 
+// statIs fails unless path has this owner, group and mode.
+func statIs(t *testing.T, path string, uid, gid int, mode fs.FileMode) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := info.Sys().(*syscall.Stat_t)
+	if int(st.Uid) != uid || int(st.Gid) != gid || info.Mode() != mode {
+		t.Fatalf("%s is %d:%d %v, want %d:%d %v", path, st.Uid, st.Gid, info.Mode(), uid, gid, mode)
+	}
+}
+
 // withSystemd reports whether systemd runs this machine, so lingering can be
 // checked; containers without it still check everything else.
 func withSystemd() bool {
@@ -390,6 +403,14 @@ func TestPrivilegeSubagentIsolation(t *testing.T) {
 		t.Fatalf("siblings share user %s", ownerName(t, homeA))
 	}
 	journalA := h.cfg.JournalDir(ctrlA)
+	// Each home is its user's, setgid to its group; each journal directory
+	// is root's, in the subagent's group, traversable but not listable.
+	for _, home := range []string{homeA, homeB} {
+		uid, gid := lookupIDs(t, ownerName(t, home))
+		statIs(t, home, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
+	}
+	_, gidA := lookupIDs(t, ownerName(t, homeA))
+	statIs(t, journalA, 0, gidA, fs.ModeDir|0o751)
 	steps := []string{matchStep("task-for-a", fmt.Sprintf("touch %s/x; echo rc1=$?; echo hi > %s/OWNER.md; echo rc2=$?; cat %s/TASK.md; echo rc3=$?", h.cfg.Home, ctrlA, homeB), 100)}
 	h.setScript(steps...)
 	h.drop(homeA, "task.md", "task-for-a")
