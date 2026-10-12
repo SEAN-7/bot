@@ -158,6 +158,11 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 			t.Fatal(p, err)
 		}
 	}
+	// Its control directories are its ancestors' to read (the home's group),
+	// not its children's, should it let them through its home.
+	if info, _ := os.Stat(filepath.Join(home, "agents")); info.Mode().Perm() != 0o750 {
+		t.Fatalf("agents/ %v", info.Mode())
+	}
 	h.drop(home, "task.md", "work")
 	h.waitEnds(childID("c"), 1) // journals are keyed by the path from root
 	if tool := h.requests()[1].Messages[2].Content; !strings.Contains(tool, home) {

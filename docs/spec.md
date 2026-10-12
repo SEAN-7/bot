@@ -123,7 +123,14 @@ agent's group (in `/etc/group`, kept current as the tree changes). An
 agent's home is setgid to its group and commands run with umask 022, so by
 default its ancestors can read what it writes, and nobody else can traverse
 its home. An agent can tighten its own files' modes; its journals stay
-readable by its ancestors regardless.
+readable by its ancestors regardless. What an agent grants to let a child
+through its home (x on `~`, see `agent help`) opens what others can read
+there, so the harness keeps its own parts of the home group-only:
+`agents/` (seeded 0750), the control directories `agent new` creates
+(0750, `config.json` 0640) and the spools `agent message` and `agent send`
+write (`.messages/` directories 0750, files 0640). A child never needs its
+control directory, and cannot read its siblings' `OWNER.md`, `ERROR` or
+starting `config.json`, or messages in flight.
 Processes started before a membership change (an ancestor's user manager,
 for example) see the new group only after they restart; commands the
 harness runs always get current groups. Likewise, a process an ancestor
@@ -240,7 +247,7 @@ agent user cannot read another user's process environment.
   a user new to this agent whose home does not hold this agent's evidence,
   clears what a previous holder left in the home; sets the members of the user's group to the agent's ancestors other
   than root; seeds the home with the seed `README.md`, `TASK.md`, `inbox/`
-  and `agents/` where missing; moves the starting `config.json` from the
+  and `agents/` (0750) where missing; moves the starting `config.json` from the
   control directory into the home (written through the agent's helper,
   removed through the parent's; a home that already has one keeps it, and
   the parent's is renamed `config.json.ignored`);
@@ -398,11 +405,13 @@ same way in both directions, and root talks with its children the same way.
 Nothing reaches the human except from a top-level agent.
 
 - **Up.** `agent message "text"` (run by any agent) writes the text to
-  `~/.messages/<UTC timestamp>.md` with an atomic dot-name rename.
+  `~/.messages/<UTC timestamp>.md` with an atomic dot-name rename. Root
+  has no owner: run by root it fails, naming `agent send NAME`.
 - **Down.** `agent send NAME "text"` writes it, exactly as given, to
   `.messages/agents/NAME/<UTC timestamp>.md` the same way: under the
   caller's home for an agent, under `/etc/agent` for root, whose spool is
-  private (directories 0700, files 0600). `NAME` must be a direct child: its
+  private (directories 0700, files 0600; an agent's are 0750 and 0640).
+  `NAME` must be a direct child: its
   control directory `agents/NAME/` must exist.
 - Empty messages and messages over 64 KiB are refused, the latter with
   advice to send a file path instead.
@@ -412,7 +421,7 @@ Nothing reaches the human except from a top-level agent.
   (anything else is ignored and logged). The spool's location and owner
   identify the sender.
   - Up from a top-level agent: appended to its conversation log. It does not
-    wake anyone: the human reads the log with `agent messages NAME`.
+    wake anyone: the human reads the log with `sudo agent messages NAME`.
   - Up from any other agent: delivered to its parent's inbox as
     `<UTC timestamp>-NAME.md`, recorded in `delivered.jsonl` with sender
     `agents/NAME`, and appended to the agent's conversation log.
@@ -612,7 +621,7 @@ Root runs every command with `sudo`.
 - `agent new NAME [--provider P] [--model M] [--option k=v]...`: creates a
   child. It builds the starting config, validates it against
   `providers.json`, creates the control directory (root's 0700, an agent's
-  0755) and writes `config.json` with an atomic dot-name rename, then waits
+  0750) and writes `config.json` (0640) with an atomic dot-name rename, then waits
   up to 10 seconds for admission and prints the new home, or fails with the
   control directory's `ERROR`. An agent's default is a copy of its own
   `~/config.json`; root must pass `--model`. `--provider` or `--model`
@@ -626,7 +635,7 @@ Root runs every command with `sudo`.
 - `agent send NAME "text"|-`: a message to the direct child NAME (see
   Messages); `-` reads stdin.
 - `agent message "text"|-`: for agents. Queues a message to the agent's
-  owner.
+  owner. Root has none, so it refuses to run as root.
 - `agent messages [NAME]`: shows a conversation and follows new records.
   Without `NAME`, the caller's conversation with its owner; with `NAME`, that
   descendant's conversation with its parent. Root must pass `NAME`. Records
@@ -759,7 +768,8 @@ Using the replay plugin:
   left unadmitted does not check a free user's home at every poll
 - isolation: an agent cannot write its parent's or a sibling's home, its
   control directory or its OWNER.md; its parent can read its home and
-  journals; a sibling can read neither
+  journals; a sibling can read neither; a child let through its parent's
+  home cannot read the parent's `agents/`, while its grandparent can
 - config: admission moves `config.json` into the home; an agent's edit makes
   its next run fresh with the new model; an invalid config writes `ERROR` in
   the control directory, which the agent cannot remove; a `config.json`
@@ -768,7 +778,8 @@ Using the replay plugin:
 - CLI: `agent new` rejects an invalid config before creating anything,
   reports the control directory's `ERROR`, defaults to the caller's config,
   requires `--model` from root and refuses an existing NAME; `agent remove`
-  deletes the control directory; root must pass NAME to `messages` and `log`
+  deletes the control directory; root must pass NAME to `messages` and `log`,
+  and cannot run `agent message`; control directories and spools are 0750
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
   crontabs, homes and the `/home` links to them, keeps their journals

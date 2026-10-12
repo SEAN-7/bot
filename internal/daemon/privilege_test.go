@@ -456,6 +456,55 @@ func TestPrivilegeSubagentIsolation(t *testing.T) {
 	exitCodes(t, h.toolOutput("frc="), false, "jrc", "frc")
 }
 
+// TestPrivilegeControlDirsPrivate: an agent's control directories are open
+// to its ancestors and closed to its children. A child that its parent lets
+// through its home (the sharing recipe's x on ~; o+x here) still reads the
+// parent's shared files, but cannot list ~/agents or read a sibling's
+// OWNER.md; the grandparent, in the parent's group, reads both.
+func TestPrivilegeControlDirsPrivate(t *testing.T) {
+	h, _ := rootHarness(t)
+	h.start()
+	ctrlA := rootChild(t, h, "a")
+	homeA := h.childHome(ctrlA)
+	uidA, gidA := lookupIDs(t, ownerName(t, homeA))
+	agentsA := filepath.Join(homeA, "agents")
+	statIs(t, agentsA, uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
+	// a's children, made as a would: g, admitted, and s, never admitted.
+	ctrlG, ctrlS := filepath.Join(agentsA, "g"), filepath.Join(agentsA, "s")
+	for path, text := range map[string]string{
+		filepath.Join(ctrlG, "config.json"): testConfig,
+		filepath.Join(ctrlS, "OWNER.md"):    "sibling's orders\n",
+		filepath.Join(homeA, "shared.txt"):  "for everyone\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{filepath.Dir(path), path} {
+			if err := os.Lchown(p, uidA, gidA); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	homeG := h.childHome(ctrlG)
+	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
+		t.Fatal(err)
+	}
+	h.setScript(
+		matchStep("task-for-g", fmt.Sprintf("cat %s/shared.txt; echo ok=$?; ls %s; echo rc1=$?; cat %s/OWNER.md; echo rc2=$?", homeA, agentsA, ctrlS), 100),
+		matchStep("task-for-main", "ls agents/a/home/agents; echo lrc=$?; cat agents/a/home/agents/s/OWNER.md; echo orc=$?", 100))
+	h.drop(homeG, "task.md", "task-for-g")
+	h.waitEnds(childID("a/agents/g"), 1)
+	out := h.toolOutput("rc1=")
+	exitCodes(t, out, true, "ok")
+	exitCodes(t, out, false, "rc1", "rc2")
+	h.drop(h.mainHome, "go.md", "task-for-main")
+	h.waitEnds(h.mainID, 1)
+	exitCodes(t, h.toolOutput("lrc="), true, "lrc", "orc")
+}
+
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops
 // what its user left running, removes its crontab, lingering, home and
 // temporary files, and empties its group.

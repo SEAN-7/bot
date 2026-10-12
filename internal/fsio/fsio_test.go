@@ -138,8 +138,13 @@ func TestSymlinkReplaces(t *testing.T) {
 
 func TestRenameMkdirRemove(t *testing.T) {
 	c, dir := start(t), t.TempDir()
-	if err := c.Mkdir(filepath.Join(dir, "a", "b")); err != nil {
+	if err := c.Mkdir(filepath.Join(dir, "a", "b"), 0o750); err != nil {
 		t.Fatal(err)
+	}
+	for _, d := range []string{filepath.Join(dir, "a"), filepath.Join(dir, "a", "b")} {
+		if info, err := os.Stat(d); err != nil || info.Mode().Perm() != 0o750 {
+			t.Fatalf("%s: %v %v", d, info, err)
+		}
 	}
 	os.WriteFile(filepath.Join(dir, "x"), []byte("1"), 0o644)
 	if err := c.Rename(filepath.Join(dir, "x"), filepath.Join(dir, "a", "b", "x")); err != nil {

@@ -98,7 +98,7 @@ func run(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := cli.Message(os.Getenv("HOME"), text, time.Now()); err != nil {
+		if err := cli.Message(os.Geteuid() == 0, os.Getenv("HOME"), text, time.Now()); err != nil {
 			return err
 		}
 		fmt.Println("Queued for your owner.")

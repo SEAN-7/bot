@@ -288,8 +288,14 @@ func (d *daemon) repairHomeLink(c *agent) {
 // seed creates the harness's directories and the seed files the home lacks,
 // through the agent's own helper.
 func (a *agent) seed() error {
-	for _, dir := range []string{"inbox/processed", "agents"} {
-		if err := a.fs.Mkdir(filepath.Join(a.home, dir)); err != nil {
+	// agents/ is open to the home's group, the agent's ancestors, and closed
+	// to others: a child it lets through its home never reads its siblings'
+	// control directories.
+	for _, dir := range []struct {
+		name string
+		mode os.FileMode
+	}{{"inbox/processed", 0o755}, {"agents", 0o750}} {
+		if err := a.fs.Mkdir(filepath.Join(a.home, dir.name), dir.mode); err != nil {
 			return err
 		}
 	}

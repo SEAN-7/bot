@@ -71,7 +71,7 @@ func (a *agent) collectInbox(j recorder) ([]inboxRecord, error) {
 		return nil, err
 	}
 	processed := filepath.Join(a.home, "inbox", "processed")
-	if err := a.fs.Mkdir(processed); err != nil {
+	if err := a.fs.Mkdir(processed, 0o755); err != nil {
 		return nil, err
 	}
 	var records []inboxRecord

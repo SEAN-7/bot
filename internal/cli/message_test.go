@@ -10,9 +10,26 @@ import (
 	"time"
 )
 
+// spoolModes checks that a spool and its messages are open to the agent's
+// ancestors (its home's group) but not to others, such as its children.
+func spoolModes(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, dir := range dirs {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o750 {
+			t.Errorf("%s: %v, want 0750", dir, err)
+		}
+	}
+	entries, _ := os.ReadDir(dirs[len(dirs)-1])
+	for _, e := range entries {
+		if info, err := e.Info(); err != nil || info.Mode().Perm() != 0o640 {
+			t.Errorf("%s: %v, want 0640", e.Name(), err)
+		}
+	}
+}
+
 func TestMessageWritesSpool(t *testing.T) {
 	home := t.TempDir()
-	if err := Message(home, "build finished", time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)); err != nil {
+	if err := Message(false, home, "build finished", time.Date(2026, 10, 11, 9, 0, 0, 0, time.UTC)); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := os.ReadDir(filepath.Join(home, ".messages"))
@@ -22,17 +39,31 @@ func TestMessageWritesSpool(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(home, ".messages", entries[0].Name())); string(data) != "build finished" {
 		t.Fatalf("content %q", data)
 	}
+	spoolModes(t, filepath.Join(home, ".messages"))
+}
+
+// Root has no owner to message: run by root, agent message would write a
+// spool nobody reads.
+func TestMessageRejectsRoot(t *testing.T) {
+	home := t.TempDir()
+	err := Message(true, home, "hello", time.Now())
+	if err == nil || err.Error() != "root has no owner; use agent send NAME" {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".messages")); !os.IsNotExist(err) {
+		t.Fatalf("spool created: %v", err)
+	}
 }
 
 func TestMessageRejectsEmptyAndHuge(t *testing.T) {
 	home := t.TempDir()
-	if err := Message(home, "  ", time.Now()); err == nil {
+	if err := Message(false, home, "  ", time.Now()); err == nil {
 		t.Fatal("empty message accepted")
 	}
-	if err := Message(home, strings.Repeat("x", 64<<10+1), time.Now()); err == nil || !strings.Contains(err.Error(), "path") {
+	if err := Message(false, home, strings.Repeat("x", 64<<10+1), time.Now()); err == nil || !strings.Contains(err.Error(), "path") {
 		t.Fatalf("huge message: %v", err)
 	}
-	if err := Message("", "hi", time.Now()); err == nil {
+	if err := Message(false, "", "hi", time.Now()); err == nil {
 		t.Fatal("missing HOME accepted")
 	}
 }
@@ -105,6 +136,9 @@ func TestSendChildWritesDownSpool(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 1 {
 		t.Fatalf("spool %v", entries)
+	}
+	if os.Geteuid() != 0 { // root's spool is private
+		spoolModes(t, filepath.Join(home, ".messages"), filepath.Join(home, ".messages", "agents"), dir)
 	}
 }
 

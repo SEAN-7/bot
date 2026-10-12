@@ -124,9 +124,11 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		return err
 	}
 	data = append(data, '\n')
-	// Root's control directories stay private; an agent's must be readable by
-	// the child's user, who has to traverse the parent's home to reach it.
-	mode := os.FileMode(0o755)
+	// Root's control directories stay private. An agent's are open to its
+	// home's group, its ancestors, and closed to everyone else: its
+	// children, whom a sharing grant may let through its home, never need
+	// them.
+	mode := os.FileMode(0o750)
 	if root {
 		mode = 0o700
 	}
@@ -138,7 +140,7 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 	}
 	// The dot-name rename keeps the daemon from reading half a config.
 	temp := filepath.Join(ctrl, ".config.json")
-	if err := os.WriteFile(temp, data, 0o644); err != nil {
+	if err := os.WriteFile(temp, data, 0o640); err != nil {
 		return err
 	}
 	if err := os.Rename(temp, filepath.Join(ctrl, "config.json")); err != nil {

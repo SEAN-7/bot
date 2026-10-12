@@ -68,14 +68,16 @@ func TestNewWritesValidatedConfig(t *testing.T) {
 		t.Fatalf("output %q", out.String())
 	}
 	ctrl := filepath.Join(home, "agents", "x")
-	if info, err := os.Stat(ctrl); err != nil || info.Mode().Perm() != 0o755 {
+	// Open to the caller's ancestors (its home's group) but not to its
+	// children, whom a sharing grant may let through its home.
+	if info, err := os.Stat(ctrl); err != nil || info.Mode().Perm() != 0o750 {
 		t.Fatalf("control directory %v %v", info, err)
 	}
 	c := readConfig(t, filepath.Join(ctrl, "config.json"))
 	if c.Provider != "p" || c.Model != "m" || c.Options["effort"] != "low" {
 		t.Fatalf("config %+v", c)
 	}
-	if info, _ := os.Stat(filepath.Join(ctrl, "config.json")); info.Mode().Perm() != 0o644 {
+	if info, _ := os.Stat(filepath.Join(ctrl, "config.json")); info.Mode().Perm() != 0o640 {
 		t.Fatalf("config mode %v", info.Mode())
 	}
 	if entries, _ := os.ReadDir(ctrl); len(entries) != 1 {

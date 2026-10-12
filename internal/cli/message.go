@@ -21,8 +21,11 @@ const MessageLimit = 64 << 10
 
 // Message queues a message to the owner from the agent whose directory is
 // home. The daemon records it in the owner conversation, which the agent
-// cannot change afterwards.
-func Message(home, text string, now time.Time) error {
+// cannot change afterwards. Root (the human) has no owner.
+func Message(root bool, home, text string, now time.Time) error {
+	if root {
+		return errors.New("root has no owner; use agent send NAME")
+	}
 	if home == "" {
 		return errors.New("HOME is not set; run agent message from an agent's shell")
 	}
@@ -56,10 +59,12 @@ func SendChild(base, name, text string, now time.Time) error {
 }
 
 // queue writes one message into a spool directory with an atomic dot-name
-// rename, so the daemon never reads half a message. A private spool is
+// rename, so the daemon never reads half a message. An agent's spool is
+// readable by its home's group, its ancestors, and not by others, such as a
+// child a sharing grant lets through the home; a private spool is
 // readable by its owner alone.
 func queue(dir, text string, now time.Time, private bool) error {
-	dirMode, fileMode := os.FileMode(0o755), os.FileMode(0o644)
+	dirMode, fileMode := os.FileMode(0o750), os.FileMode(0o640)
 	if private {
 		dirMode, fileMode = 0o700, 0o600
 	}

@@ -41,6 +41,7 @@ type request struct {
 	Data  []byte   `json:"data,omitempty"`
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
+	Mode  uint32   `json:"mode,omitempty"` // mkdir's permission bits
 }
 
 type response struct {
@@ -124,7 +125,11 @@ func handle(req request) (response, error) {
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
 	case "mkdir":
-		return response{}, os.MkdirAll(req.Path, 0o755)
+		mode := os.FileMode(req.Mode).Perm()
+		if mode == 0 {
+			mode = 0o755 // a request without one
+		}
+		return response{}, os.MkdirAll(req.Path, mode)
 	case "remove":
 		return response{}, os.RemoveAll(req.Path)
 	case "unlink":

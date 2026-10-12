@@ -31,6 +31,11 @@ next wake. Write facts, not instructions.
 - An agent's ERROR is in its parent's control directory, never in its own
   home: your subagents' are ~/agents/NAME/ERROR. The main agent's ~/ERROR
   was removed.
+- `agent new` creates control directories 0750 with config.json 0640;
+  `agent message` and `agent send` write spool files 0640 and create spool
+  directories 0750; a new agent's ~/agents/ is 0750. Your ancestors read
+  them through your group, and a subagent you let through your home does
+  not. Directories that already existed keep their modes.
 - Your conversation log with your owner is ~/journal/messages.jsonl, for
   every agent. The main agent's conversation with the human moved there
   from /var/log/agent/messages.jsonl.

@@ -133,8 +133,9 @@ func (c *Client) Rename(from, to string) error {
 	return err
 }
 
-func (c *Client) Mkdir(path string) error {
-	_, err := c.call(request{Op: "mkdir", Path: path})
+// Mkdir creates path and its missing parents with mode (less the umask).
+func (c *Client) Mkdir(path string, mode os.FileMode) error {
+	_, err := c.call(request{Op: "mkdir", Path: path, Mode: uint32(mode.Perm())})
 	return err
 }
 

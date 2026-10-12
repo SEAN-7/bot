@@ -413,7 +413,7 @@ func (a *agent) toolContent(runID string, n int, r shell.Result, err error, wait
 	}
 	dir := filepath.Join(a.home, ".outputs")
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", runID, n))
-	if err := a.fs.Mkdir(dir); err == nil {
+	if err := a.fs.Mkdir(dir, 0o755); err == nil {
 		err = a.fs.Write(path, []byte(r.Output))
 	}
 	if err != nil {
