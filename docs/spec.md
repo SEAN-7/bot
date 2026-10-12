@@ -315,7 +315,9 @@ agent.
   The delivery is recorded first, so the recipient can never collect an
   unrecorded file; then the inbox file is written through the recipient's
   helper with an atomic dot-name rename, the log appended and the spool file
-  removed. A crash between steps can only duplicate a message.
+  removed. A crash between steps can only duplicate a message. A spool file
+  the sender keeps from being removed is delivered once while it stays (once
+  more after a daemon restart).
 - **Conversation logs.** The human's conversation with the main agent is
   `/var/log/agent/messages.jsonl` (root:agent 0640). A subagent's
   conversation with its parent is `messages.jsonl` in the subagent's journal

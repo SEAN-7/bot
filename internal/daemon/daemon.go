@@ -105,12 +105,15 @@ type daemon struct {
 	// spoolIgnored holds the spool entries already logged as not an agent's
 	// message; only the poll goroutine touches it.
 	spoolIgnored map[string]bool
-	wg           sync.WaitGroup
+	// unremoved holds spool files delivered but not yet removed, so they are
+	// not delivered again while they stay; only the poll goroutine touches it.
+	unremoved map[spoolKey]bool
+	wg        sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
 	syscall.Umask(0o022)
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, stop: ctx}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username

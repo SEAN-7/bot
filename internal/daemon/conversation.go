@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,29 +66,78 @@ func (d *daemon) collectMessages() {
 	}
 	d.mu.Unlock()
 	sort.Strings(ids)
-	ignored := map[string]bool{}
+	pass := &spoolPass{ignored: map[string]bool{}, kept: map[spoolKey]bool{}, unlisted: map[string]bool{}}
 	for _, id := range ids {
 		a := agents[id]
 		uid := a.uid()
 		if uid < 0 {
+			pass.unlisted[a.id] = true
 			continue // no user to check ownership against
 		}
 		spool := filepath.Join(a.home, ".messages")
-		d.collectUp(a, uid, spool, ignored)
-		d.collectDown(a, uid, filepath.Join(spool, "agents"), agents, ignored)
+		d.collectUp(a, uid, spool, pass)
+		d.collectDown(a, uid, filepath.Join(spool, "agents"), agents, pass)
 	}
 	// Remember only what is still there, so a path is reported once while
-	// it stays and again if it comes back.
-	d.spoolIgnored = ignored
+	// it stays and again if it comes back, and a delivered file the agent
+	// kept is forgotten once it is gone. A spool that could not be listed
+	// keeps its entries: the file may still be there.
+	d.spoolIgnored = pass.ignored
+	for k := range d.unremoved {
+		if !pass.kept[k] && !pass.unlisted[k.agent] {
+			delete(d.unremoved, k)
+		}
+	}
+}
+
+// spoolKey names one delivered spool file: its sender, path and content.
+type spoolKey struct{ agent, path, sum string }
+
+// spoolPass is what one poll's collection saw.
+type spoolPass struct {
+	ignored  map[string]bool   // entries that are not messages
+	kept     map[spoolKey]bool // delivered files still in place
+	unlisted map[string]bool   // agents with a spool that could not be listed
+}
+
+// alreadyDelivered reports whether the spool file at path with this content was
+// already delivered but could not be removed. Such a file is not delivered
+// again while it stays; its removal is retried.
+func (d *daemon) alreadyDelivered(a *agent, path string, data []byte, pass *spoolPass) (spoolKey, bool) {
+	sum := sha256.Sum256(data)
+	k := spoolKey{a.id, path, hex.EncodeToString(sum[:])}
+	if !d.unremoved[k] {
+		return k, false
+	}
+	d.settle(a, k, pass)
+	return k, true
+}
+
+// settle removes a delivered spool file. One the agent keeps from being
+// removed is remembered, and logged once, so it is delivered only once.
+func (d *daemon) settle(a *agent, k spoolKey, pass *spoolPass) {
+	if err := a.fs.Remove(k.path); err != nil {
+		if !d.unremoved[k] {
+			a.logf("message %s delivered but not removed: %v", k.path, err)
+		}
+		d.unremoved[k] = true
+		pass.kept[k] = true
+		return
+	}
+	delete(d.unremoved, k)
 }
 
 // collectUp delivers the agent's messages for its owner: the human's log for
 // the main agent, the parent's inbox for a subagent.
-func (d *daemon) collectUp(a *agent, uid int, spool string, ignored map[string]bool) {
-	for _, path := range d.spoolFiles(a, uid, spool, ignored) {
+func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
+	for _, path := range d.spoolFiles(a, uid, spool, pass) {
 		data, err := readMessage(a, path)
 		if err != nil {
 			a.logf("message %s: %v", filepath.Base(path), err)
+			continue
+		}
+		k, done := d.alreadyDelivered(a, path, data, pass)
+		if done {
 			continue
 		}
 		if a.parent == nil {
@@ -103,35 +154,34 @@ func (d *daemon) collectUp(a *agent, uid int, spool string, ignored map[string]b
 			a.logf("message %s: %v", filepath.Base(path), err)
 			return
 		}
-		if err := a.fs.Remove(path); err != nil {
-			a.logf("message %s: %v", filepath.Base(path), err)
-		}
+		d.settle(a, k, pass)
 	}
 }
 
 // collectDown delivers the agent's messages for its children. Only real
 // directories the agent owns, named like a control directory, are spools.
-func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*agent, ignored map[string]bool) {
+func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*agent, pass *spoolPass) {
 	entries, err := a.fs.List(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return
 	} else if err != nil {
 		a.logf("messages: %v", err)
+		pass.unlisted[a.id] = true
 		return
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name)
 		if e.Type != "dir" || e.UID != uid || !validControlDir(a.home, filepath.Join(a.home, "agents", e.Name)) {
-			d.ignoreSpool(a, path, "not a spool directory the agent owns", ignored)
+			d.ignoreSpool(a, path, "not a spool directory the agent owns", pass)
 			continue
 		}
-		files := d.spoolFiles(a, uid, path, ignored)
+		files := d.spoolFiles(a, uid, path, pass)
 		if len(files) == 0 {
 			continue
 		}
 		if target := agents[filepath.Join(a.id, "agents", e.Name)]; target != nil {
-			d.sendDown(a, target, files)
+			d.sendDown(a, target, files, pass)
 		} else if !a.childWaits(uid, e.Name) {
 			for _, f := range files {
 				if err := a.fs.Remove(f); err != nil {
@@ -147,11 +197,15 @@ func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*a
 }
 
 // sendDown delivers files from a's spool for target, a's child, as the owner's.
-func (d *daemon) sendDown(a, target *agent, files []string) {
+func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 	for _, path := range files {
 		data, err := readMessage(a, path)
 		if err != nil {
 			a.logf("message %s: %v", path, err)
+			continue
+		}
+		k, done := d.alreadyDelivered(a, path, data, pass)
+		if done {
 			continue
 		}
 		if err := d.deliver(target, noteName("owner", time.Now()), data, "owner"); err != nil {
@@ -161,9 +215,7 @@ func (d *daemon) sendDown(a, target *agent, files []string) {
 		if err := d.appendConversation(d.cfg.ConversationFile(target.id), target.gid(), map[string]any{"from": "owner", "text": logText(data)}); err != nil {
 			target.logf("conversation log: %v", err)
 		}
-		if err := a.fs.Remove(path); err != nil {
-			a.logf("message %s: %v", path, err)
-		}
+		d.settle(a, k, pass)
 	}
 }
 
@@ -190,12 +242,13 @@ func (a *agent) childWaits(uid int, name string) bool {
 // spoolFiles lists a spool's messages in name order: regular, non-dot files
 // owned by the agent. Anything else that is not a directory is left in place
 // and logged.
-func (d *daemon) spoolFiles(a *agent, uid int, dir string, ignored map[string]bool) []string {
+func (d *daemon) spoolFiles(a *agent, uid int, dir string, pass *spoolPass) []string {
 	entries, err := a.fs.List(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	} else if err != nil {
 		a.logf("messages: %v", err)
+		pass.unlisted[a.id] = true
 		return nil
 	}
 	var paths []string
@@ -205,7 +258,7 @@ func (d *daemon) spoolFiles(a *agent, uid int, dir string, ignored map[string]bo
 		}
 		path := filepath.Join(dir, e.Name)
 		if e.Type != "file" || e.UID != uid {
-			d.ignoreSpool(a, path, "not a regular file the agent owns", ignored)
+			d.ignoreSpool(a, path, "not a regular file the agent owns", pass)
 			continue
 		}
 		paths = append(paths, path)
@@ -215,11 +268,11 @@ func (d *daemon) spoolFiles(a *agent, uid int, dir string, ignored map[string]bo
 }
 
 // ignoreSpool logs a spool entry that is not the agent's message, once.
-func (d *daemon) ignoreSpool(a *agent, path, why string, ignored map[string]bool) {
+func (d *daemon) ignoreSpool(a *agent, path, why string, pass *spoolPass) {
 	if !d.spoolIgnored[path] {
 		a.logf("ignoring %s: %s", path, why)
 	}
-	ignored[path] = true
+	pass.ignored[path] = true
 }
 
 // readMessage reads a spooled message, at most messageLimit bytes of it.

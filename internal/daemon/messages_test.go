@@ -225,3 +225,62 @@ func TestOwnerMessageLogged(t *testing.T) {
 		}
 	}
 }
+
+func TestUnremovableChildMessageDeliveredOnce(t *testing.T) {
+	h := newHarness(t, doneFor(parentMark), doneFor(parentMark), doneFor(parentMark))
+	h.markParent()
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	h.stop()
+	// The child keeps its spooled message from being removed.
+	spool := filepath.Join(home, ".messages")
+	spooled := h.queue(spool, "report once")
+	if err := os.Chmod(spool, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(spool, 0o755) })
+	h.start()
+	waitFor(t, "delivery", func() bool { return countNotes(h.cfg.Home, "-c.md") == 1 })
+	time.Sleep(300 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
+		t.Fatalf("parent received %d deliveries of one message", n)
+	}
+	if n := strings.Count(h.logs.String(), spooled+" delivered but not removed"); n != 1 {
+		t.Fatalf("remove failure logged %d times:\n%s", n, h.logs)
+	}
+	if log := readRecords(h.cfg.ConversationFile(ctrl)); len(log) != 1 {
+		t.Fatalf("conversation log %v", log)
+	}
+	os.Chmod(spool, 0o755)
+	waitFor(t, "spool file removed", func() bool {
+		_, err := os.Stat(spooled)
+		return os.IsNotExist(err)
+	})
+	time.Sleep(100 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
+		t.Fatalf("parent received %d deliveries after the file was removed", n)
+	}
+}
+
+func TestUnremovableMainMessageLoggedOnce(t *testing.T) {
+	h := newHarness(t)
+	spool := filepath.Join(h.cfg.Home, ".messages")
+	h.queue(spool, "log me once")
+	if err := os.Chmod(spool, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(spool, 0o755) })
+	h.start()
+	waitFor(t, "agent message in log", func() bool { return hasMessage(h, "agent", "main", "log me once") })
+	time.Sleep(300 * time.Millisecond)
+	n := 0
+	for _, m := range messageRecords(h) {
+		if m["text"] == "log me once" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("message logged %d times", n)
+	}
+}
