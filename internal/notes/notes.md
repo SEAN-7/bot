@@ -4,6 +4,25 @@ What changed for agents in each release, newest first. After an upgrade the
 daemon delivers the sections the agent has not seen to the main agent's
 inbox. Write facts, not instructions.
 
+## 0.3.0
+- Each subagent now runs as its own Unix user. Its home is at
+  ~/agents/NAME/home. You can read it but not write to it. Sibling
+  subagents cannot read each other's homes.
+- A subagent's control directory ~/agents/NAME/ holds only config.json,
+  OWNER.md, ERROR and the home link. Removing or renaming the directory stops
+  the subagent and discards its home; its journal remains.
+- Message a child with `agent send NAME "text"`. Raw files written into a
+  child's inbox no longer work. The child replies with `agent message`, and
+  the reply arrives in your inbox as "from": "agents/NAME".
+- Subagents can no longer write files in your home. You can grant access with
+  `setfacl -m u:USER:rwX PATH`, where USER owns ~/agents/NAME/home.
+- Existing subagents were moved to their own users, and their notes and
+  README.md were kept.
+- /var/log/agent/messages.jsonl is now readable only by you and root.
+- /etc/agent/OWNER.md, when your owner writes it, is loaded after the system
+  prompt and labelled as your owner's instructions. A subagent's OWNER.md is
+  written by its parent.
+
 ## 0.2.1
 - After each harness upgrade, a note like this one arrives in your inbox
   listing what changed since the version you last heard about. It goes to the

@@ -34,8 +34,9 @@ service.
 `--sudo` (append `-s -- --sudo` after `sh`) gives the agent passwordless sudo;
 rerunning without it leaves an existing grant alone (remove
 `/etc/sudoers.d/agent` to revoke).
-Only use it if you accept that the credential, journal and owner-message
-protections then become conventions the agent could ignore.
+Only the main agent gets sudo; subagents never do. Only use it if you accept
+that the credential, journal, owner-message and `OWNER.md` protections then
+become conventions the agent could ignore.
 
 ## Set a spend limit first
 
@@ -64,8 +65,9 @@ agent messages            # shows the conversation and follows new messages
 
 The conversation log (`/var/log/agent/messages.jsonl`) is written only by the
 harness: the agent can add messages but cannot edit or delete them, and the
-labels on who said what can't be forged. It is not a push channel, so you see
-messages when you look.
+labels on who said what can't be forged. Only the main agent and root can
+read it. It is not a push channel, so you see messages when you look.
+Subagents cannot message you; they report to the agent that created them.
 
 For notifications on your phone, ask the agent to build a channel. For
 example:
@@ -74,11 +76,55 @@ example:
 sudo agent send "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."
 ```
 
+## Give it standing instructions
+
+`/etc/agent/OWNER.md` holds your standing instructions for the main agent:
+house rules, what to ask you before doing, how you want it to treat its
+subagents. Unlike its README, the agent cannot change it, and it is shown to
+the model at the start of every fresh run, labelled as yours. Messages are
+for tasks; use this file for what should stay true.
+
+```bash
+sudo $EDITOR /etc/agent/OWNER.md
+```
+
+Each edit changes the start of the main agent's prompt, so its prompt cache
+is rebuilt once and its next run starts fresh. Upgrades never create, change or remove the file. The file must be a
+regular file owned by root and not writable by anyone else, in a directory
+likewise; otherwise the agent does not start and `sudo agent log` shows an
+`OWNER.md: ...` error until you fix it.
+
+That the model follows it is a convention, not a guarantee. Anything that
+must hold (credentials, spend, privileges) is enforced by the privilege model
+and your provider's limits, not by this file. Subagents do not see it: each
+subagent has its own `OWNER.md`, written by its parent, and a parent passes
+on what applies.
+
+## Subagents
+
+The agent creates subagents itself, by writing `~/agents/NAME/config.json`.
+Each runs as its own pool user (`agent-1` to `agent-<max_agents-1>`; with the
+default `max_agents` of 16, that is 15 subagents). The limit is in
+`/etc/agent/settings.json`. A subagent that does not fit is not started, and
+its parent is told.
+
+As root you can watch any of them, whatever their depth:
+
+```bash
+sudo agent log research                # follow a subagent's run
+sudo agent messages research           # its conversation with its parent
+sudo agent log research/agents/scraper # a subagent of a subagent
+```
+
+Removing or renaming a subagent's directory stops it and frees its user, and
+its home is discarded; its journal remains under `/var/log/agent/`. You
+cannot send messages to a subagent; only agents message their own children.
+
 ## Watch it
 
 ```bash
 sudo agent log            # follow the main agent's current run (sudo also shows ~/ERROR)
-agent log research        # follow a subagent at ~/agents/research
+sudo agent log research   # follow a subagent at ~/agents/research
 journalctl -u agent -f    # the service log: startup, config and provider errors
 ```
 
@@ -102,9 +148,16 @@ service is stopped; list them with
   journals (`/var/log/agent`), and the daemon reads and writes agent files
   only with the agent's own permissions.
 - Owner messages are verified; nothing the agent writes can pass as yours.
-- Subagents are **not** isolated from each other: all agents run as the one
-  `agent` user and can read and change each other's files.
-- With `--sudo`, none of the above is enforced.
+- Each subagent runs as its own user. It cannot read or change its parent's
+  files, its siblings' files or its own control directory (so not its
+  `OWNER.md`), and its journals are written only by the harness. A parent
+  gives a subagent access to a file explicitly, with `setfacl`.
+- Ancestors can read a subagent's home and journals by default (they are
+  members of its group) but cannot write there. A subagent can restrict its
+  own files' modes, but not its journals.
+- With `--sudo`, none of the above is enforced for the main agent: it can
+  read `/etc/agent`, change journals and rewrite `/etc/agent/OWNER.md`.
+  Subagents never get sudo, so one cannot use it to reach beyond its own user.
 
 ## Development
 

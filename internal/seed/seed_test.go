@@ -35,7 +35,8 @@ func TestSeedDoesNotOverwrite(t *testing.T) {
 }
 
 func TestSeedReadmeCoversTopics(t *testing.T) {
-	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message"} {
+	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message",
+		"agent send NAME", "~/agents/NAME/config.json", "OWNER.md", "~/agents/NAME/home", "setfacl", `"from": "agents/NAME"`} {
 		if !strings.Contains(README, want) {
 			t.Errorf("README lacks %q", want)
 		}
