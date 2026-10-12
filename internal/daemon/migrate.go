@@ -29,20 +29,37 @@ import (
 // Every check is made before the first change, and every step skips what an
 // earlier, interrupted run did, so a rerun finishes the migration with the
 // user recorded in MigratingUserFile. A failure before the user is renamed
-// leaves the installation as the previous release expects it; from then on
-// the error is a *PartialError. The daemon never writes inside a home as
+// leaves the installation as the previous release expects it, the user
+// lingering again; from then on, or whenever an earlier run may have renamed
+// it, the error is a *PartialError. The daemon never writes inside a home as
 // root, and neither does this: changes there go through a helper running as
 // the home's user.
 func Migrate(cfg Config) (err error) {
 	m := &migrator{cfg: cfg, oldMain: filepath.Join(cfg.Homes, cfg.LegacyUser), helpers: map[string]*fsio.Client{}}
 	defer m.closeHelpers()
-	legacy, err := m.resolves(cfg.LegacyUser)
-	if err != nil {
-		return err
+	defer func() {
+		if err != nil && m.partial {
+			err = &PartialError{Err: err}
+		}
+	}()
+	// Runs before the wrapping above: a failure before the rename leaves the
+	// previous release to run, with its services.
+	defer func() {
+		if err != nil && !m.partial && m.stopping {
+			if lerr := cfg.System.EnableLinger(cfg.LegacyUser); lerr != nil {
+				cfg.Logger.Printf("re-enabling lingering for %s: %v", cfg.LegacyUser, lerr)
+			}
+		}
+	}()
+	legacy, lerr := m.resolves(cfg.LegacyUser)
+	target, rerr := m.recordedTarget()
+	if lerr != nil || rerr != nil {
+		// A record, or one that cannot be read, means an earlier run may
+		// have renamed the user, unless it is certainly still there.
+		m.partial = (rerr != nil || target != "") && (lerr != nil || !legacy)
+		return errors.Join(lerr, rerr)
 	}
-	if m.target, err = m.recordedTarget(); err != nil {
-		return err
-	}
+	m.target = target
 	if !legacy && m.target == "" {
 		return m.checkNothingLeft()
 	}
@@ -58,11 +75,6 @@ func Migrate(cfg Config) (err error) {
 	}
 	// Once the user is renamed, an earlier run has changed things.
 	m.partial = !legacy
-	defer func() {
-		if err != nil && m.partial {
-			err = &PartialError{Err: err}
-		}
-	}()
 	recorded := m.target != ""
 	if !recorded {
 		if m.target, err = m.firstFreeUser(); err != nil {
@@ -87,6 +99,7 @@ func Migrate(cfg Config) (err error) {
 		}
 	}
 	m.partial = true
+	m.legacyResolves = legacy
 	for _, step := range []func() error{m.renameUser, m.rootControlDir, m.rewritePool, m.moveJournals, m.rewriteDelivered, m.moveOwnerSpool, m.removeSudoers} {
 		if err := step(); err != nil {
 			return err
@@ -119,6 +132,11 @@ type migrator struct {
 	target  string // the pool user the legacy user becomes
 	oldMain string // the main agent's id and home before: /home/agent
 	partial bool   // see PartialError
+	// stopping: this run began stopping the legacy user, which must linger
+	// again if the run fails before renaming it.
+	stopping bool
+	// legacyResolves: the legacy user existed when this run renamed it.
+	legacyResolves bool
 	// homeMoved and homeLinked: the legacy home is at the target's home
 	// already, and its old path links there.
 	homeMoved, homeLinked bool
@@ -212,6 +230,19 @@ func (m *migrator) check(legacy bool) error {
 	if legacy && exists {
 		return fmt.Errorf("users %s and %s both exist", cfg.LegacyUser, m.target)
 	}
+	if legacy {
+		lookupGroup := cfg.LookupGroup
+		if lookupGroup == nil {
+			lookupGroup = groupExists
+		}
+		taken, err := lookupGroup(m.target)
+		if err != nil {
+			return fmt.Errorf("looking up group %s: %w", m.target, err)
+		}
+		if taken {
+			return fmt.Errorf("group %s exists, so user %s cannot be renamed to it", m.target, cfg.LegacyUser)
+		}
+	}
 	if !legacy && !exists {
 		return fmt.Errorf("neither user %s nor %s exists", cfg.LegacyUser, m.target)
 	}
@@ -303,6 +334,15 @@ func (m *migrator) checkHome(legacy bool) error {
 // previous release able to run.
 func (m *migrator) stopLegacyUser() error {
 	sys, u := m.cfg.System, m.cfg.LegacyUser
+	m.stopping = true
+	// Its services first, waiting for them to shut down cleanly; then
+	// whatever is left.
+	if err := m.change("stop user manager"); err != nil {
+		return err
+	}
+	if err := sys.StopUserManager(u); err != nil {
+		return err
+	}
 	if err := m.change("disable linger"); err != nil {
 		return err
 	}
@@ -325,6 +365,14 @@ func (m *migrator) renameUser() error {
 		return err
 	}
 	if err := sys.RenameUser(cfg.LegacyUser, m.target, home); err != nil {
+		// Renaming the user is RenameUser's first change: while the legacy
+		// user is still there, nothing is renamed and the previous release
+		// can run (a busy user, say, from a cron job started since).
+		if m.legacyResolves {
+			if still, lerr := m.resolves(cfg.LegacyUser); lerr == nil && still {
+				m.partial = false
+			}
+		}
 		return err
 	}
 	if !m.homeMoved {

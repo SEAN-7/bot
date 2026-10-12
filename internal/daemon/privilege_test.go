@@ -109,11 +109,13 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	return h, h.cfg.PoolUsers[0]
 }
 
-// noLinger is the real System without lingering, which needs systemd.
+// noLinger is the real System without lingering or user managers, which
+// need systemd.
 type noLinger struct{ System }
 
-func (noLinger) EnableLinger(string) error  { return nil }
-func (noLinger) DisableLinger(string) error { return nil }
+func (noLinger) EnableLinger(string) error    { return nil }
+func (noLinger) DisableLinger(string) error   { return nil }
+func (noLinger) StopUserManager(string) error { return nil }
 
 // lookupIDs returns the uid and primary gid of a test user.
 func lookupIDs(t *testing.T, name string) (int, int) {

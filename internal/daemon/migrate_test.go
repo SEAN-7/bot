@@ -51,7 +51,7 @@ func legacyInstallIn(t *testing.T, l layout.Layout) (Config, *fakeSystem) {
 	for i := 1; i <= 15; i++ {
 		sys.users[fmt.Sprintf("agent-%d", i)] = true
 	}
-	cfg.System, cfg.LookupUser = sys, sys.lookup
+	cfg.System, cfg.LookupUser, cfg.LookupGroup = sys, sys.lookup, sys.lookupGroup
 	cfg.Logger = log.New(testWriter{t}, "", 0)
 
 	main := filepath.Join(cfg.Homes, "agent")
@@ -216,7 +216,7 @@ func TestMigrateRestructuresState(t *testing.T) {
 			if sys.users["agent"] || !sys.users["agent-16"] {
 				t.Fatalf("users: %v", sys.users)
 			}
-			if !sys.inOrder("unlinger agent", "stop agent", "rename agent agent-16", "rename crontab agent agent-16", "linger agent-16") {
+			if !sys.inOrder("stop manager agent", "unlinger agent", "stop agent", "rename agent agent-16", "rename crontab agent agent-16", "linger agent-16") {
 				t.Fatalf("system calls: %s", sys)
 			}
 			if got := readLink(t, old); got != home {
@@ -407,30 +407,93 @@ func TestMigrateResumesAfterEachStep(t *testing.T) {
 }
 
 // A failure before the user is renamed changes nothing a previous release
-// could trip over, and is not partial: install.sh restores that release.
+// could trip over, and is not partial: install.sh restores that release,
+// whose services run again once the user lingers again.
 func TestMigrateFailureBeforeRenameIsNotPartial(t *testing.T) {
+	for _, call := range []string{"stop manager agent", "unlinger agent", "stop agent", "rename agent agent-16"} {
+		t.Run(call, func(t *testing.T) {
+			cfg, sys := legacyInstall(t)
+			sys.setFail(call, errors.New("failed"))
+			err := Migrate(cfg)
+			var partial *PartialError
+			if err == nil || errors.As(err, &partial) {
+				t.Fatalf("got %v", err)
+			}
+			if !sys.users["agent"] || sys.users["agent-16"] {
+				t.Fatalf("renamed: %s", sys)
+			}
+			if !sys.inOrder(call, "linger agent") {
+				t.Fatalf("lingering not restored: %s", sys)
+			}
+			if info, err := os.Lstat(filepath.Join(cfg.Homes, "agent")); err != nil || !info.IsDir() {
+				t.Fatalf("home %v %v", info, err)
+			}
+			if exists(cfg.PoolHome("agent-16")) || exists(filepath.Join(cfg.RootHome(), "agents")) {
+				t.Fatal("state changed")
+			}
+			sys.setFail(call, nil)
+			if err := Migrate(cfg); err != nil {
+				t.Fatal(err)
+			}
+			if !exists(filepath.Join(cfg.PoolHome("agent-16"), "notes.txt")) {
+				t.Fatal("not migrated on the second run")
+			}
+		})
+	}
+}
+
+// A rename that stopped after renaming the user is partial, and lingering
+// is left to the rerun, which finishes it.
+func TestMigrateFailedRenameAfterUsermodIsPartial(t *testing.T) {
 	cfg, sys := legacyInstall(t)
-	sys.setFail("stop agent", errors.New("processes survived"))
+	sys.setFail("renamed agent agent-16", errors.New("groupmod failed"))
 	err := Migrate(cfg)
 	var partial *PartialError
-	if err == nil || errors.As(err, &partial) {
+	if !errors.As(err, &partial) {
 		t.Fatalf("got %v", err)
 	}
-	if sys.called("rename agent agent-16") || !sys.users["agent"] {
-		t.Fatalf("renamed: %s", sys)
+	if sys.called("linger agent") {
+		t.Fatalf("lingering re-enabled for a renamed user: %s", sys)
 	}
-	if info, err := os.Lstat(filepath.Join(cfg.Homes, "agent")); err != nil || !info.IsDir() {
-		t.Fatalf("home %v %v", info, err)
-	}
-	if exists(cfg.PoolHome("agent-16")) || exists(filepath.Join(cfg.RootHome(), "agents")) {
-		t.Fatal("state changed")
-	}
-	sys.setFail("stop agent", nil)
+	sys.setFail("renamed agent agent-16", nil)
 	if err := Migrate(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if !exists(filepath.Join(cfg.PoolHome("agent-16"), "notes.txt")) {
-		t.Fatal("not migrated on the second run")
+}
+
+// When an earlier run may have renamed the user, an error that stops
+// Migrate before it can tell is partial: restoring the previous release on
+// a migrated tree would reclaim the subagents' users.
+func TestMigrateUncertainStateIsPartial(t *testing.T) {
+	lookupFails := func(cfg Config, sys *fakeSystem) { sys.setFail("lookup agent", errors.New("passwd unreadable")) }
+	renamed := func(cfg Config, sys *fakeSystem) { sys.setUser("agent", false); sys.setUser("agent-16", true) }
+	record := func(text string) func(Config, *fakeSystem) {
+		return func(cfg Config, sys *fakeSystem) { os.WriteFile(cfg.MigratingUserFile(), []byte(text), 0o600) }
+	}
+	unreadable := func(cfg Config, sys *fakeSystem) { os.Mkdir(cfg.MigratingUserFile(), 0o700) }
+	for _, c := range []struct {
+		name    string
+		setup   []func(Config, *fakeSystem)
+		partial bool
+	}{
+		{"record and failing lookup", []func(Config, *fakeSystem){record("agent-16\n"), lookupFails}, true},
+		{"malformed record, user renamed", []func(Config, *fakeSystem){renamed, record("../x\n")}, true},
+		{"unreadable record, user renamed", []func(Config, *fakeSystem){renamed, unreadable}, true},
+		{"unreadable record and failing lookup", []func(Config, *fakeSystem){unreadable, lookupFails}, true},
+		{"failing lookup, no record", []func(Config, *fakeSystem){lookupFails}, false},
+		{"malformed record, user present", []func(Config, *fakeSystem){record("../x\n")}, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, sys := legacyInstall(t)
+			for _, f := range c.setup {
+				f(cfg, sys)
+			}
+			err := Migrate(cfg)
+			var partial *PartialError
+			if err == nil || errors.As(err, &partial) != c.partial {
+				t.Fatalf("got %v, want partial %v", err, c.partial)
+			}
+		})
 	}
 }
 
@@ -471,26 +534,29 @@ func TestMigrateRefusesOldPoolWithoutLegacyUser(t *testing.T) {
 // Anything that would stop the migration part way is found before the first
 // change.
 func TestMigrateRefusesConflicts(t *testing.T) {
-	for name, setup := range map[string]func(t *testing.T, cfg Config){
-		"target home exists": func(t *testing.T, cfg Config) {
+	for name, setup := range map[string]func(t *testing.T, cfg Config, sys *fakeSystem){
+		"target's group exists": func(t *testing.T, cfg Config, sys *fakeSystem) {
+			sys.groups = map[string]bool{"agent-16": true}
+		},
+		"target home exists": func(t *testing.T, cfg Config, sys *fakeSystem) {
 			os.MkdirAll(cfg.PoolHome("agent-16"), 0o755)
 		},
-		"unknown pool id": func(t *testing.T, cfg Config) {
+		"unknown pool id": func(t *testing.T, cfg Config, sys *fakeSystem) {
 			writeTree(t, map[string]string{cfg.PoolFile(): `[{"user":"agent-1","agent":"/srv/other/agents/x","state":"active"}]`}, nil)
 		},
-		"main's journals exist": func(t *testing.T, cfg Config) {
+		"main's journals exist": func(t *testing.T, cfg Config, sys *fakeSystem) {
 			os.MkdirAll(cfg.JournalDir("main"), 0o755)
 		},
-		"spooled name taken": func(t *testing.T, cfg Config) {
+		"spooled name taken": func(t *testing.T, cfg Config, sys *fakeSystem) {
 			writeTree(t, map[string]string{filepath.Join(cfg.RootHome(), ".messages", "agents", "main", "20261012T000000.000000000Z.md"): "other"}, nil)
 		},
-		"OWNER.md in both places": func(t *testing.T, cfg Config) {
+		"OWNER.md in both places": func(t *testing.T, cfg Config, sys *fakeSystem) {
 			writeTree(t, map[string]string{filepath.Join(cfg.Etc, "OWNER.md"): "a", filepath.Join(cfg.RootHome(), "agents", "main", "OWNER.md"): "b"}, nil)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, sys := legacyInstall(t)
-			setup(t, cfg)
+			setup(t, cfg, sys)
 			before := snapshot(t, cfg, sys)
 			err := Migrate(cfg)
 			var partial *PartialError
@@ -517,7 +583,13 @@ func TestMigratedInstallationStarts(t *testing.T) {
 	h.cfg.PoolUsers = layout.PoolUsers(16)
 	h.mainHome = h.cfg.PoolHome("agent-16")
 	h.run()
+	ctrls := []string{filepath.Join(h.cfg.PoolHome("agent-16"), "agents", "clinics"), filepath.Join(h.cfg.PoolHome("agent-16"), "agents", "recipes"), filepath.Join(h.cfg.PoolHome("agent-1"), "agents", "scraper")}
 	waitFor(t, "subagents' configs adopted", func() bool {
+		for _, ctrl := range ctrls {
+			if exists(filepath.Join(ctrl, "config.json")) {
+				return false
+			}
+		}
 		return exists(filepath.Join(h.cfg.PoolHome("agent-1"), "config.json")) && exists(filepath.Join(h.cfg.PoolHome("agent-2"), "config.json")) && exists(filepath.Join(h.cfg.PoolHome("agent-3"), "config.json"))
 	})
 	for path, text := range map[string]string{
@@ -528,11 +600,6 @@ func TestMigratedInstallationStarts(t *testing.T) {
 	} {
 		if got := fileText(t, path); got != text {
 			t.Fatalf("%s: %q", path, got)
-		}
-	}
-	for _, ctrl := range []string{filepath.Join(h.cfg.PoolHome("agent-16"), "agents", "clinics"), filepath.Join(h.cfg.PoolHome("agent-1"), "agents", "scraper")} {
-		if exists(filepath.Join(ctrl, "config.json")) {
-			t.Fatalf("%s: starting config.json not adopted", ctrl)
 		}
 	}
 	if !strings.Contains(h.logs.String(), "main: admitted as agent-16") {

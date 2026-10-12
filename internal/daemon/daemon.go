@@ -34,9 +34,11 @@ type Config struct {
 	System     System                                    // root-only side effects; the real one by default
 	PoolUsers  []string                                  // agent users; nil = the max_agents pool users that exist
 	LookupUser func(string) (*syscall.Credential, error) // resolves user names; osuser.Lookup by default
-	TmpDirs    []string                                  // shared directories swept when a user is reclaimed
-	LegacyUser string                                    // the main agent's user before 0.4.0, which Migrate renames
-	SudoersDir string                                    // where 0.3 granted LegacyUser sudo
+	// LookupGroup reports whether a group exists; groupExists by default.
+	LookupGroup func(string) (bool, error)
+	TmpDirs     []string // shared directories swept when a user is reclaimed
+	LegacyUser  string   // the main agent's user before 0.4.0, which Migrate renames
+	SudoersDir  string   // where 0.3 granted LegacyUser sudo
 
 	Poll           time.Duration
 	CommandWait    time.Duration // how long a command runs when the model gives no wait
@@ -64,6 +66,7 @@ func DefaultConfig(self string) Config {
 		Self:           self,
 		System:         newExecSystem(),
 		LookupUser:     osuser.Lookup,
+		LookupGroup:    groupExists,
 		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
 		LegacyUser:     "agent",
 		SudoersDir:     "/etc/sudoers.d",
@@ -250,6 +253,16 @@ func (d *daemon) forgetGroups(dir string) {
 			delete(d.journalGids, path)
 		}
 	}
+}
+
+// groupExists reports whether the group database has name.
+func groupExists(name string) (bool, error) {
+	_, err := user.LookupGroup(name)
+	var unknown user.UnknownGroupError
+	if errors.As(err, &unknown) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // poolUsers returns the configured pool users, or the max_agents pool users,

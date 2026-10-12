@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -23,6 +24,9 @@ type System interface {
 	SetMembers(group string, members []string) error
 	EnableLinger(user string) error
 	DisableLinger(user string) error
+	// StopUserManager stops the user's systemd instance and waits, for a
+	// bounded time, until its services have shut down.
+	StopUserManager(user string) error
 	// StopProcesses ends the user's systemd instance and every process it owns.
 	StopProcesses(user string) error
 	RemoveCrontab(user string) error
@@ -91,6 +95,30 @@ func (s *execSystem) EnableLinger(user string) error {
 
 func (s *execSystem) DisableLinger(user string) error {
 	return s.do("loginctl", "disable-linger", user)
+}
+
+// userStopTimeout bounds how long StopUserManager waits for the user's
+// services to shut down.
+const userStopTimeout = 3 * time.Minute
+
+func (s *execSystem) StopUserManager(user string) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	if cred == nil {
+		return fmt.Errorf("no such user %q", user)
+	}
+	unit := fmt.Sprintf("user@%d.service", cred.Uid)
+	out, err := s.run("timeout", strconv.Itoa(int(userStopTimeout/time.Second)), "systemctl", "stop", unit)
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 124 {
+		return fmt.Errorf("%s did not stop within %s", unit, userStopTimeout)
+	}
+	if err != nil {
+		return fmt.Errorf("systemctl stop %s: %v: %s", unit, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 func (s *execSystem) StopProcesses(user string) error {

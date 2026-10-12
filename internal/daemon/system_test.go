@@ -256,3 +256,26 @@ func TestExecSystemRenameCrontab(t *testing.T) {
 		t.Fatal(string(data))
 	}
 }
+
+func TestExecSystemStopUserManager(t *testing.T) {
+	var calls [][]string
+	var fail error
+	s := &execSystem{
+		run: func(name string, args ...string) ([]byte, error) {
+			calls = append(calls, append([]string{name}, args...))
+			return nil, fail
+		},
+		lookup: func(string) (*syscall.Credential, error) { return &syscall.Credential{Uid: 1001}, nil },
+	}
+	if err := s.StopUserManager("agent"); err != nil {
+		t.Fatal(err)
+	}
+	// Waited for, so the user's services shut down cleanly, but bounded.
+	if want := []string{"timeout", "180", "systemctl", "stop", "user@1001.service"}; !reflect.DeepEqual(calls[0], want) {
+		t.Fatal(calls[0])
+	}
+	fail = exec.Command("sh", "-c", "exit 124").Run()
+	if err := s.StopUserManager("agent"); err == nil || !strings.Contains(err.Error(), "did not stop within") {
+		t.Fatalf("timeout: %v", err)
+	}
+}
