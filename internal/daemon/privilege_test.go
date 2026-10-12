@@ -766,3 +766,39 @@ func TestPrivilegeOldLogsUnreadable(t *testing.T) {
 		t.Fatal("subagent read the human's conversation")
 	}
 }
+
+// TestPrivilegeLostPoolIgnoresPlantedJournalLink: after pool.json is lost, a
+// home is kept only if its journal link and the journal directory's group
+// both say it is the newly assigned agent's. A previous holder that pointed
+// its journal link at a sibling's journals cannot pass its files on to that
+// sibling.
+func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
+	h, _ := rootHarness(t)
+	ctrlC, ctrlD := rootChild(t, h, "c"), rootChild(t, h, "d")
+	h.start()
+	homeC := h.childHome(ctrlC)
+	h.childHome(ctrlD)
+	userC := ownerName(t, homeC)
+	uid, gid := lookupIDs(t, userC)
+	planted := filepath.Join(homeC, "planted.txt")
+	if err := os.WriteFile(planted, []byte("for d"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Lchown(planted, uid, gid)
+	link := filepath.Join(homeC, "journal")
+	os.Remove(link)
+	if err := os.Symlink(h.cfg.JournalDir(ctrlD), link); err != nil {
+		t.Fatal(err)
+	}
+	os.Lchown(link, uid, gid)
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	os.RemoveAll(ctrlC)
+	h.start()
+	waitFor(t, "d admitted as c's former user", func() bool {
+		return strings.Contains(h.logs.String(), "d: admitted as "+userC)
+	})
+	if _, err := os.Lstat(planted); !os.IsNotExist(err) {
+		t.Fatalf("d inherited c's planted file: %v", err)
+	}
+}

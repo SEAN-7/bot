@@ -360,3 +360,27 @@ func TestLostPoolKeepsOwnHome(t *testing.T) {
 		t.Fatal("a home with another agent's journal link was not cleared")
 	}
 }
+
+// The lost-pool keep rule trusts a journal link only if the journal
+// directory belongs to the newly assigned user's group: the link is in a
+// home the previous holder controlled, but only the daemon sets the group.
+func TestJournalOwnedBy(t *testing.T) {
+	dir := t.TempDir()
+	if !journalOwnedBy(dir, os.Getgid()) {
+		t.Fatal("own group not accepted")
+	}
+	if journalOwnedBy(dir, os.Getgid()+1) {
+		t.Fatal("another group accepted")
+	}
+	if journalOwnedBy(filepath.Join(dir, "missing"), os.Getgid()) {
+		t.Fatal("missing journal directory accepted")
+	}
+	link := filepath.Join(t.TempDir(), "link")
+	os.Symlink(dir, link)
+	if journalOwnedBy(link, os.Getgid()) {
+		t.Fatal("symlinked journal directory accepted")
+	}
+	if !journalOwnedBy(filepath.Join(dir, "missing"), -1) {
+		t.Fatal("without a credential (one user for every agent) the group cannot be checked")
+	}
+}

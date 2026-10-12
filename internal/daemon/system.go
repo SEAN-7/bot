@@ -91,17 +91,24 @@ func (s *execSystem) StopProcesses(user string) error {
 		s.run("systemctl", "stop", "--no-block", fmt.Sprintf("user@%d.service", cred.Uid)) // may not be running
 	}
 	for i := 0; i < killTries; i++ {
-		// By real uid: a process that changed only its effective uid (a
-		// setuid program) is still the user's.
+		// By effective and by real uid: a setuid program keeps one of them
+		// as the user's, whether the user ran it or it runs as the user.
+		s.run("pkill", "-KILL", "-u", user)
 		s.run("pkill", "-KILL", "-U", user)
-		_, err := s.run("pgrep", "-U", user)
-		var ee *exec.ExitError
-		if errors.As(err, &ee) && ee.ExitCode() == 1 {
-			return nil // no process left
+		if s.noProcess("-u", user) && s.noProcess("-U", user) {
+			return nil
 		}
 		time.Sleep(killPause)
 	}
 	return fmt.Errorf("processes of %s survived SIGKILL", user)
+}
+
+// noProcess reports whether pgrep finds no process of user by the given
+// uid flag; any other outcome counts as a process still running.
+func (s *execSystem) noProcess(flag, user string) bool {
+	_, err := s.run("pgrep", flag, user)
+	var ee *exec.ExitError
+	return errors.As(err, &ee) && ee.ExitCode() == 1
 }
 
 func (s *execSystem) RemoveCrontab(user string) error {

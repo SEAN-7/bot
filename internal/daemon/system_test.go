@@ -85,7 +85,7 @@ func TestExecSystemStopProcesses(t *testing.T) {
 				return nil, errors.New("not loaded") // ignored
 			case "pgrep":
 				pgreps++
-				if pgreps < 3 {
+				if pgreps < 4 {
 					return nil, nil // still running
 				}
 				return nil, exitStatus1(t)
@@ -102,15 +102,23 @@ func TestExecSystemStopProcesses(t *testing.T) {
 	if want := []string{"systemctl", "stop", "--no-block", "user@1003.service"}; !reflect.DeepEqual(calls[0], want) {
 		t.Fatal(calls[0])
 	}
-	// By real uid, so a process that changed only its effective uid is found.
-	if want := []string{"pkill", "-KILL", "-U", "agent-3"}; !reflect.DeepEqual(calls[1], want) {
-		t.Fatal(calls[1])
+	// By effective and by real uid, so a process that changed either one
+	// (a setuid program, run by or as the user) is found.
+	want := [][]string{
+		{"pkill", "-KILL", "-u", "agent-3"},
+		{"pkill", "-KILL", "-U", "agent-3"},
+		{"pgrep", "-u", "agent-3"},
 	}
-	if want := []string{"pgrep", "-U", "agent-3"}; !reflect.DeepEqual(calls[2], want) {
-		t.Fatal(calls[2])
+	if !reflect.DeepEqual(calls[1:4], want) {
+		t.Fatal(calls[1:4])
 	}
-	if pgreps != 3 {
-		t.Fatalf("pgrep ran %d times", pgreps)
+	// Rounds repeat until neither check finds a process: three rounds
+	// still found one by effective uid; the fourth found none by either.
+	if pgreps != 5 {
+		t.Fatalf("pgrep ran %d times: %v", pgreps, calls)
+	}
+	if last := calls[len(calls)-1]; !reflect.DeepEqual(last, []string{"pgrep", "-U", "agent-3"}) {
+		t.Fatal(last)
 	}
 }
 

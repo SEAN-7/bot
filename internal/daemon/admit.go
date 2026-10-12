@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
@@ -109,9 +111,29 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 
 // ownsHome reports whether a's home already holds a journal link to a's own
 // journal directory, which only a run of this agent creates.
+//
+// The link lives in a home the previous holder of this user controlled, so
+// it is trusted only if the journal directory also carries this user's
+// group, which only the daemon sets.
 func (a *agent) ownsHome() bool {
 	e, err := a.fs.Stat(filepath.Join(a.home, "journal"))
-	return err == nil && e.Type == "symlink" && e.Target == a.d.cfg.JournalDir(a.id)
+	dir := a.d.cfg.JournalDir(a.id)
+	return err == nil && e.Type == "symlink" && e.Target == dir && journalOwnedBy(dir, a.gid())
+}
+
+// journalOwnedBy reports whether dir is a real directory with group gid. It
+// runs as root on the root-owned journal tree. Without a credential (gid < 0:
+// every agent runs as the one current user) there is no group to check.
+func journalOwnedBy(dir string, gid int) bool {
+	if gid < 0 {
+		return true
+	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return ok && int(st.Gid) == gid
 }
 
 // repairHomeLink puts back the home link in a subagent's control directory
