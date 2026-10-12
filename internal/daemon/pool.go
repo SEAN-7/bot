@@ -21,6 +21,7 @@ type poolEntry struct {
 	User  string `json:"user"`
 	Agent string `json:"agent"`
 	State string `json:"state"`
+	Notes string `json:"notes,omitempty"` // newest release-notes version the agent has seen
 }
 
 // pool records which pool user each agent holds. Every change is persisted
@@ -127,6 +128,18 @@ func (p *pool) mark(user, state string) error {
 		return nil
 	}
 	e.State = state
+	return p.commit(p.with(user, e))
+}
+
+// setNotes records the release-notes version user's agent has seen.
+func (p *pool) setNotes(user, version string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	e, ok := p.byUser[user]
+	if !ok {
+		return nil
+	}
+	e.Notes = version
 	return p.commit(p.with(user, e))
 }
 

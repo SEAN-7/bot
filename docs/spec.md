@@ -224,13 +224,17 @@ agent user cannot read another user's process environment.
   first gives the user write permission on every directory it owns there
   (never following symlinks), so read-only directories such as a module
   cache cannot block it.
-- **Release notes.** On start, if `/var/lib/agent/version` differs from the
-  running version, the daemon writes the sections of its embedded release
-  notes (`internal/notes/notes.md`) newer than the recorded version, up to the
-  running one, to the main agent's inbox as one `<time>-harness-update.md`,
-  then records the version. With no record, it delivers every section up to
-  the running version. Fresh installs record the version at install time.
-  Development builds deliver nothing.
+- **Release notes.** Each `pool.json` assignment records `notes`, the newest
+  release-notes version that agent has seen. When a run is about to start
+  because the inbox holds work, and the embedded release notes
+  (`internal/notes/notes.md`) have sections newer than the agent's `notes`, up
+  to the running version, the daemon first writes them to its inbox as one
+  `<time>-harness-update.md`, then records the running version; the run
+  collects the file with the rest. Nobody is woken for notes alone. A newly
+  assigned agent records the running version at admission, an assignment
+  without `notes` has nothing to catch up on, and development builds deliver
+  nothing. `/var/lib/agent/version` only records the installed version for
+  `install.sh`.
 - **Message spools.** See Messages.
 
 ## The loop (per agent)

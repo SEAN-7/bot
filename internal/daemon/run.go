@@ -119,6 +119,7 @@ func (a *agent) run(ctx context.Context) {
 	// the error may have been written before a restart.
 	a.failedOwner = ""
 	a.clearError(MsgOwnerPrefix)
+	a.d.catchUp(a)
 	jdir := a.d.cfg.JournalDir(a.id)
 	if !strings.HasPrefix(jdir, filepath.Clean(a.d.cfg.Log)+"/") {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)

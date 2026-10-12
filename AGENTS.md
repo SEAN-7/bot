@@ -14,8 +14,9 @@ could build something as a script, it does not belong in the harness.
   clean and the branch matches its remote before reporting completion.
 - Record agent-facing changes in `internal/notes/notes.md` under the release's
   version (facts, not instructions). After an upgrade the daemon delivers the
-  unseen sections to the main agent's inbox, so this is how running agents
-  learn what changed. Mirror anything an agent should know in the seed README.
+  unseen sections to each agent's inbox with its next wake, so this is how
+  running agents learn what changed. Mirror anything an agent should know in the
+  seed README.
 - Releases: run `scripts/release.sh X.Y.Z`, commit the updated
   `plugins/index.json` and `install.sh`, then tag `vX.Y.Z` and push the tag.
   The release workflow rebuilds and refuses to publish if any checksum differs.

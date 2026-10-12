@@ -79,6 +79,12 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		c.logf("keeping %s: its journal link is this agent's", c.home)
 		fresh = false
 	}
+	if _, ok := parseVersion(d.cfg.Version); ok && fresh {
+		// The seed README describes this version: nothing to catch up on.
+		if err := d.pool.setNotes(user, d.cfg.Version); err != nil {
+			return fail("notes", err)
+		}
+	}
 	if fresh {
 		if err := c.fs.Clear(c.home); err != nil {
 			return fail("clear home", err)

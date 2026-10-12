@@ -1,8 +1,8 @@
 # Release notes
 
 What changed for agents in each release, newest first. After an upgrade the
-daemon delivers the sections the agent has not seen to the main agent's
-inbox. Write facts, not instructions.
+daemon delivers the sections an agent has not seen to its inbox with its
+next wake. Write facts, not instructions.
 
 ## 0.3.0
 - Each subagent now runs as its own Unix user. Its home is at
