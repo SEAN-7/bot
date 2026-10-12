@@ -127,7 +127,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if d.pool, err = loadPool(cfg.PoolFile(), d.poolUsers()); err != nil {
+	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
 	}
 	if d.main.fs, err = fsio.Start(cfg.Self, mainCred); err != nil {
@@ -163,23 +163,24 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-// poolUsers returns the configured pool users that exist, logging the ones
-// that do not: subagents can only use the users that resolve.
-func (d *daemon) poolUsers() []string {
-	configured := d.cfg.PoolUsers
+// poolUsers returns the configured pool users, or the max_agents pool users,
+// that exist, logging the ones that do not: subagents can only use the users
+// that resolve. The daemon and Migrate both use it, so they agree.
+func poolUsers(cfg Config, maxAgents int) []string {
+	configured := cfg.PoolUsers
 	if configured == nil {
-		configured = layout.PoolUsers(d.settings.MaxAgents)
+		configured = layout.PoolUsers(maxAgents)
 	}
 	var users, missing []string
 	for _, u := range configured {
-		if _, err := d.cfg.LookupUser(u); err == nil {
+		if _, err := cfg.LookupUser(u); err == nil {
 			users = append(users, u)
 		} else {
 			missing = append(missing, u)
 		}
 	}
 	if len(missing) > 0 {
-		d.cfg.Logger.Printf("pool users not found: %s; subagents are limited to %d", strings.Join(missing, ", "), len(users))
+		cfg.Logger.Printf("pool users not found: %s; subagents are limited to %d", strings.Join(missing, ", "), len(users))
 	}
 	return users
 }

@@ -549,7 +549,8 @@ It pins its own version and the SHA-256 of every release binary. It:
 2. Creates the `agent` and `agent-provider` users, the pool users `agent-1`
    to `agent-<max_agents - 1>` with empty homes (2750) and no sudo, the
    directories above, and `/home/agent` with the seed files. An upgrade
-   creates any missing pool users.
+   creates any missing pool users. It installs the `acl` package when
+   `setfacl` is missing (a warning if it cannot).
 3. Asks which provider plugin to install, installs it with
    `agent provider install`, prompts for its settings and model, and writes
    `config.json`.
@@ -649,16 +650,21 @@ After the harness is built and tested:
 
 Earlier releases ran every subagent as `agent`, in a directory under
 `~/agents/` that held its whole state. The upgrade converts each one; the
-code for it lives in `install.sh` and can be removed once no installation
-predates it.
-1. The installer creates the pool users, then stops the daemon (active runs
-   finish as usual) and takes a root-only backup of `/home/agent/agents/` in
-   `/var/backups/`.
+code for it lives in `install.sh` and the hidden `agent _migrate` command,
+and can be removed once no installation predates it.
+1. The installer stops the daemon (active runs finish as usual), creates the
+   pool users and, if any `/home/agent/agents/*/inbox` exists, takes a
+   root-only backup of `/home/agent/agents/` in `/var/backups/` and runs
+   `agent _migrate`. A failure restores the previous version; the backup
+   stays.
 2. For each legacy subagent directory (one containing `inbox/`), parents
    before children: assign a pool user; move everything except
    `config.json` into its home with a rename (never following symlinks);
    change the owner of the moved files that `agent` owned to the new user;
    leave `config.json` in the control directory; record the assignment.
+   Every check and assignment comes before the first move, and each
+   `inbox/` moves last, deepest first, so a run that fails part way leaves
+   the top-level `inbox/` in place and the next run finishes the job.
    The subagent's `README.md` becomes its own, and it has no OWNER.md until
    its parent writes one. Its journals keep their path.
 3. The daemon starts, finds the assignments, and completes admission

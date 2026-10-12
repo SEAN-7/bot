@@ -1,0 +1,398 @@
+package daemon
+
+import (
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"syscall"
+
+	"github.com/SEAN-7/bot/internal/layout"
+)
+
+// Migrate converts the subagents of earlier releases, which ran as the main
+// agent's user in a directory under agents/ holding their whole state, to
+// pool users. It runs once, as root, from install.sh with the daemon
+// stopped; it can be removed when no installation predates it.
+//
+// A legacy subagent is a real directory agents/NAME holding a real inbox/
+// directory and no home link, found from the main home down, parents before
+// children. Each gets a pool user, recorded under its id (its path as seen
+// from the main agent, so its journals keep their place); everything but
+// config.json moves into the pool user's empty home by rename; and what the
+// main agent's user owned there passes to the pool user. config.json stays in
+// the control directory, which belongs to the parent.
+//
+// Every check and assignment is made before anything moves. Files move
+// first, parents before children, and each inbox/ last, deepest first, so a
+// run that fails part way leaves every unfinished subagent (and the top-level
+// one above it) with its inbox/: the next run, which install.sh starts while
+// any top-level inbox/ remains, finds them and finishes. Nothing is
+// overwritten. All paths are opened beneath the homes directory, and every
+// component is checked not to be a symbolic link before a rename.
+func Migrate(cfg Config) error {
+	settings, _ := layout.LoadSettings(cfg.SettingsFile())
+	users := poolUsers(cfg, settings.MaxAgents)
+	p, err := loadPool(cfg.PoolFile(), users)
+	if err != nil {
+		return err
+	}
+	main, err := filepath.Rel(cfg.Homes, cfg.Home)
+	if err != nil || main == "." || strings.HasPrefix(main, "..") {
+		return fmt.Errorf("%s is not inside %s", cfg.Home, cfg.Homes)
+	}
+	root, err := os.OpenRoot(cfg.Homes)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	m := &migrator{cfg: cfg, root: root, fsys: root.FS(), pool: p}
+	if m.mainUID, _, err = m.ids(cfg.AgentUser); err != nil {
+		return err
+	}
+	if err := m.plan(filepath.ToSlash(main)); err != nil {
+		return err
+	}
+	if len(m.jobs) == 0 {
+		return nil
+	}
+	if err := m.assign(min(len(users), settings.MaxAgents-1), settings.MaxAgents); err != nil {
+		return err
+	}
+	for _, j := range m.jobs {
+		if err := m.moveFiles(j); err != nil {
+			return fmt.Errorf("%s: %w", j.name, err)
+		}
+	}
+	for i := len(m.jobs) - 1; i >= 0; i-- {
+		j := m.jobs[i]
+		if err := m.moveInbox(j); err != nil {
+			return fmt.Errorf("%s: %w", j.name, err)
+		}
+		cfg.Logger.Printf("migrated %s to %s", j.name, j.user)
+	}
+	return nil
+}
+
+// migration is one legacy subagent. Paths are relative to the homes root.
+type migration struct {
+	id     string // the subagent's id: main home + /agents/NAME...
+	name   string // id relative to the main home, for messages
+	parent int    // index of the parent's migration, or -1
+	src    string // its directory once its parent's files have moved
+	user   string
+	home   string // the pool user's home
+	uid    int
+	gid    int
+	resume bool // it held its user already: an earlier run was interrupted
+}
+
+type migrator struct {
+	cfg     Config
+	root    *os.Root
+	fsys    fs.FS
+	pool    *pool
+	mainUID int
+	jobs    []*migration
+	srcs    map[string]bool // every job's src
+}
+
+// node is an agent whose agents/ directory is searched: the dirs that may
+// hold it now, and home, where it ends up.
+type node struct {
+	id   string
+	dirs []string
+	home string
+	job  int
+}
+
+// plan finds the legacy subagents breadth-first, in the places they are now:
+// a legacy subagent's own subagents are in its directory, or in its pool
+// home if an interrupted run moved them. Subagents already migrated are
+// searched too, for legacy subagents an interrupted run left below them.
+func (m *migrator) plan(main string) error {
+	if err := m.realDirs(main); err != nil {
+		return err
+	}
+	queue := []node{{id: m.cfg.Home, dirs: []string{main}, home: main, job: -1}}
+	for i := 0; i < len(queue); i++ {
+		n := queue[i]
+		found := map[string]string{}
+		for _, dir := range n.dirs {
+			agents := path.Join(dir, "agents")
+			info, err := m.root.Lstat(agents)
+			if errors.Is(err, fs.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if info.Mode()&fs.ModeSymlink != 0 {
+				return fmt.Errorf("%s is a symbolic link; not migrating", m.abs(agents))
+			}
+			if !info.IsDir() {
+				continue
+			}
+			entries, err := fs.ReadDir(m.fsys, agents)
+			if err != nil {
+				return err
+			}
+			for _, e := range entries {
+				name, ctrl := e.Name(), path.Join(agents, e.Name())
+				if e.Type() != fs.ModeDir {
+					continue // only real directories are subagents
+				}
+				if other, ok := found[name]; ok {
+					return fmt.Errorf("%s and %s both exist; not migrating", m.abs(other), m.abs(ctrl))
+				}
+				found[name] = ctrl
+				id := n.id + "/agents/" + name
+				held := m.pool.userOf(id)
+				legacy, err := m.legacy(ctrl)
+				if err != nil {
+					return err
+				}
+				if !legacy {
+					if held != "" {
+						queue = append(queue, node{id: id, dirs: []string{m.rel(held)}, home: m.rel(held), job: -1})
+					}
+					continue
+				}
+				j := &migration{id: id, name: strings.TrimPrefix(id, m.cfg.Home+"/"), parent: n.job}
+				if n.job < 0 {
+					j.src = path.Join(n.home, "agents", name)
+				}
+				m.jobs = append(m.jobs, j)
+				child := node{id: id, dirs: []string{ctrl}, job: len(m.jobs) - 1}
+				if held != "" {
+					child.dirs = append(child.dirs, m.rel(held))
+				}
+				queue = append(queue, child)
+			}
+		}
+	}
+	return nil
+}
+
+// legacy reports whether the real directory ctrl is a legacy subagent: it
+// holds a real inbox/ directory, and no home link from an admission.
+func (m *migrator) legacy(ctrl string) (bool, error) {
+	info, err := m.root.Lstat(path.Join(ctrl, "inbox"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	_, err = m.root.Lstat(path.Join(ctrl, "home"))
+	if err == nil {
+		return false, nil
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
+}
+
+// assign gives every job a user, parents first, and checks its home: the
+// pool home must be empty unless an interrupted run already gave the job
+// that user. Nothing is assigned when there are too few users.
+func (m *migrator) assign(limit, maxAgents int) error {
+	need, free := 0, 0
+	for _, j := range m.jobs {
+		if m.pool.userOf(j.id) == "" {
+			need++
+		}
+	}
+	held := map[string]bool{}
+	for _, e := range m.pool.entries() {
+		held[e.User] = true
+	}
+	for _, u := range m.pool.users {
+		if !held[u] {
+			free++
+		}
+	}
+	free = max(0, min(free, limit-len(held)))
+	if need > free {
+		return fmt.Errorf("%d subagents need a pool user and %d are free (max_agents=%d, %d pool users exist); raise max_agents in %s or create the missing pool users",
+			need, free, maxAgents, len(m.pool.users), m.cfg.SettingsFile())
+	}
+	m.srcs = map[string]bool{}
+	for _, j := range m.jobs {
+		previous := m.pool.userOf(j.id)
+		user, err := m.pool.assign(j.id, limit)
+		if err != nil {
+			return err
+		}
+		if user == "" {
+			return fmt.Errorf("%s: no pool user available (its user may be being reclaimed)", j.name)
+		}
+		j.user, j.home, j.resume = user, m.rel(user), previous != ""
+		if j.parent >= 0 {
+			j.src = path.Join(m.jobs[j.parent].home, "agents", path.Base(j.id))
+		}
+		m.srcs[j.src] = true
+		if err := m.prepare(j); err != nil {
+			if !j.resume {
+				if ferr := m.pool.free(user); ferr != nil {
+					err = errors.Join(err, ferr)
+				}
+			}
+			return fmt.Errorf("%s: %w", j.name, err)
+		}
+	}
+	return nil
+}
+
+func (m *migrator) prepare(j *migration) error {
+	var err error
+	if j.uid, j.gid, err = m.ids(j.user); err != nil {
+		return err
+	}
+	if err := m.cfg.System.PrepareHome(j.user, m.abs(j.home)); err != nil {
+		return err
+	}
+	if err := m.realDirs(j.home); err != nil {
+		return err
+	}
+	if j.resume {
+		return nil
+	}
+	entries, err := fs.ReadDir(m.fsys, j.home)
+	if err != nil {
+		return err
+	}
+	if len(entries) > 0 {
+		return fmt.Errorf("pool home %s is not empty", m.abs(j.home))
+	}
+	return nil
+}
+
+// moveFiles moves everything but config.json and inbox/ into the pool home,
+// then gives the pool user what the main agent's user owned there. The
+// control directories of the job's own legacy subagents, and their
+// config.json, pass to the pool user, the parent; the rest of theirs is
+// left for their own turn.
+func (m *migrator) moveFiles(j *migration) error {
+	if err := m.realDirs(j.src); err != nil {
+		return err
+	}
+	entries, err := fs.ReadDir(m.fsys, j.src)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.Name() == "config.json" || e.Name() == "inbox" {
+			continue
+		}
+		if err := m.move(path.Join(j.src, e.Name()), path.Join(j.home, e.Name())); err != nil {
+			return err
+		}
+	}
+	return m.chown(j.home, j)
+}
+
+// moveInbox gives the pool user the inbox and then moves it, completing the
+// job: a legacy directory loses its inbox/ only once all else is done.
+func (m *migrator) moveInbox(j *migration) error {
+	if err := m.realDirs(path.Join(j.src, "inbox")); err != nil {
+		return err
+	}
+	if err := m.chown(path.Join(j.src, "inbox"), j); err != nil {
+		return err
+	}
+	return m.move(path.Join(j.src, "inbox"), path.Join(j.home, "inbox"))
+}
+
+// move renames from to to, never replacing anything. Its directory has been
+// checked; rename itself does not follow a link in its last component.
+func (m *migrator) move(from, to string) error {
+	if _, err := m.root.Lstat(to); err == nil {
+		return fmt.Errorf("%s already exists; not moving %s over it", m.abs(to), m.abs(from))
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return m.root.Rename(from, to)
+}
+
+// chown walks dir without following links and gives j's user what the main
+// agent's user owns.
+func (m *migrator) chown(dir string, j *migration) error {
+	return fs.WalkDir(m.fsys, dir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if err := m.lchown(p, j); err != nil {
+			return err
+		}
+		if m.srcs[p] {
+			// A legacy subagent's control directory: the parent's.
+			if err := m.lchown(path.Join(p, "config.json"), j); err != nil {
+				return err
+			}
+			return fs.SkipDir
+		}
+		return nil
+	})
+}
+
+func (m *migrator) lchown(p string, j *migration) error {
+	info, err := m.root.Lstat(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || int(st.Uid) != m.mainUID {
+		return nil
+	}
+	return m.root.Lchown(p, j.uid, j.gid)
+}
+
+// realDirs fails unless every component of rel is a directory, not a link.
+func (m *migrator) realDirs(rel string) error {
+	parts := strings.Split(rel, "/")
+	for i := range parts {
+		p := path.Join(parts[:i+1]...)
+		info, err := m.root.Lstat(p)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			return fmt.Errorf("%s is a symbolic link; not migrating", m.abs(p))
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s is not a directory", m.abs(p))
+		}
+	}
+	return nil
+}
+
+// ids resolves a user to its uid and gid; nil credentials mean this process.
+func (m *migrator) ids(user string) (int, int, error) {
+	cred, err := m.cfg.LookupUser(user)
+	if err != nil {
+		return 0, 0, err
+	}
+	if cred == nil {
+		return os.Getuid(), os.Getgid(), nil
+	}
+	return int(cred.Uid), int(cred.Gid), nil
+}
+
+// rel is a pool user's home relative to the homes root.
+func (m *migrator) rel(user string) string {
+	r, _ := filepath.Rel(m.cfg.Homes, m.cfg.PoolHome(user))
+	return filepath.ToSlash(r)
+}
+
+func (m *migrator) abs(rel string) string { return filepath.Join(m.cfg.Homes, filepath.FromSlash(rel)) }

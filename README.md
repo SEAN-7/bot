@@ -22,14 +22,19 @@ printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K -
 
 The installer verifies every download against pinned checksums, asks which
 provider plugin to use (anthropic or openai-compatible), its credentials and
-a model, then creates the `agent` user and `/home/agent`, installs the
-service, and starts it. The token is not stored and is
+a model, then creates the `agent` user and `/home/agent`, the subagent users
+`agent-1` to `agent-<max_agents-1>`, installs the `acl` package if `setfacl`
+is missing, installs the service, and starts it. The token is not stored and is
 passed to curl on stdin, so it never shows up in process listings.
 
 Running a newer release's `install.sh` upgrades in place, keeping the agent's
 files, journals and credentials. The previous binary is kept as
 `/usr/local/bin/agent.prev`, and a failed upgrade restores it and restarts the
-service.
+service. An upgrade from a release before 0.3.0 first backs up
+`/home/agent/agents` to `/var/backups/agent-subagents-<UTC time>.tgz` (root
+only), then moves each subagent's files to its own user's home, leaving its
+`config.json` in place; if that fails, the upgrade is rolled back and the
+backup kept.
 
 `--sudo` (append `-s -- --sudo` after `sh`) gives the agent passwordless sudo;
 rerunning without it leaves an existing grant alone (remove

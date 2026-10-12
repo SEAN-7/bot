@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -140,6 +141,19 @@ func run(args []string) error {
 			return err
 		}
 		return seed.Write(args[1], config)
+	case "_migrate":
+		// install.sh runs this with the daemon stopped, to move subagents of
+		// releases before 0.3.0 to pool users.
+		if os.Geteuid() != 0 {
+			return errors.New("agent _migrate must run as root")
+		}
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		cfg := daemon.DefaultConfig(self)
+		cfg.Logger = log.New(os.Stdout, "", 0)
+		return daemon.Migrate(cfg)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 		return nil

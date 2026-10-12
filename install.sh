@@ -52,9 +52,18 @@ main() {
 	[ "$(id -u)" = 0 ] || die "run as root (sudo)"
 	[ -n "${GITHUB_TOKEN:-}" ] || die "set GITHUB_TOKEN to a token with read access to $REPO"
 	[ "$VERSION" != dev ] || die "this install.sh is not from a release; use the one at a release tag"
-	for tool in curl sha256sum useradd systemctl loginctl crontab; do
+	for tool in curl sha256sum useradd gpasswd pkill pgrep systemctl loginctl crontab; do
 		command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
 	done
+	# Agents share files with each other through setfacl, from the acl package.
+	if ! command -v setfacl >/dev/null 2>&1; then
+		if command -v apt-get >/dev/null 2>&1; then
+			DEBIAN_FRONTEND=noninteractive apt-get install -y acl >/dev/null ||
+				say "warning: could not install the acl package; agents cannot share files with setfacl until it is installed"
+		else
+			say "warning: setfacl is missing; install the acl package so agents can share files"
+		fi
+	fi
 
 	case $(uname -m) in
 	x86_64) ARCH=amd64 ;;
@@ -114,6 +123,38 @@ main() {
 	install -d -m 700 -o root -g root /var/lib/agent/owner
 	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16, "repository": "%s"}\n' "$REPO" >/etc/agent/settings.json
 	chmod 600 /etc/agent/settings.json
+
+	# Subagent users agent-1 to agent-<max_agents - 1>. Their homes start
+	# empty (no skeleton files), as a subagent's home does.
+	max_agents=$(sed -n 's/.*"max_agents": *\([0-9]*\).*/\1/p' /etc/agent/settings.json | head -n 1)
+	max_agents=${max_agents:-16}
+	i=1
+	while [ "$i" -lt "$max_agents" ]; do
+		id "agent-$i" >/dev/null 2>&1 ||
+			useradd --no-create-home --home-dir "/home/agent-$i" --user-group --shell /bin/bash "agent-$i"
+		mkdir -p "/home/agent-$i"
+		chown "agent-$i:agent-$i" "/home/agent-$i"
+		chmod 2750 "/home/agent-$i"
+		i=$((i + 1))
+	done
+	chmod 750 /home/agent
+
+	# Releases before 0.3.0 ran every subagent as agent, in a directory under
+	# /home/agent/agents holding its inbox/. Move them to pool users, after a
+	# root-only backup. A failure stops the install and restores the
+	# previous version; the backup stays.
+	legacy=no
+	for dir in /home/agent/agents/*/inbox; do
+		if [ -d "$dir" ]; then legacy=yes; fi
+	done
+	if [ "$legacy" = yes ]; then
+		mkdir -p /var/backups
+		backup=/var/backups/agent-subagents-$(date -u +%Y%m%dT%H%M%SZ).tgz
+		say "Backing up /home/agent/agents to $backup..."
+		(umask 077; tar -C /home/agent -czf "$backup" agents)
+		chmod 600 "$backup"
+		/usr/local/bin/agent _migrate || die "could not move the subagents to their own users; the backup is $backup"
+	fi
 
 	if [ -f /home/agent/config.json ]; then
 		# Upgrade: keep the configuration and refresh installed plugins.

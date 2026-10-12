@@ -608,3 +608,73 @@ func TestPrivilegeChildOwnerMd(t *testing.T) {
 		t.Fatal("OWNER.md ERROR not cleared")
 	}
 }
+
+// TestPrivilegeMigrateOwnership: Migrate gives each pool user what the main
+// agent's user owned of its subagent, links included but never their
+// targets, leaves other owners' files alone, and gives a nested control
+// directory to the parent's user; the daemon then admits both without
+// reclaiming anything.
+func TestPrivilegeMigrateOwnership(t *testing.T) {
+	h, name := rootHarness(t)
+	mainUID, mainGID := lookupIDs(t, name)
+	secret := secretFile(t, h, 0o600, "root only")
+	legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+	nested := filepath.Join(legacy, "agents", "scraper")
+	legacyAgent(t, legacy, map[string]string{"TASK.md": "recipes task", "notes/n.md": "note"})
+	legacyAgent(t, nested, map[string]string{"TASK.md": "scraper task"})
+	if err := os.Symlink(secret, filepath.Join(legacy, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := filepath.WalkDir(h.cfg.Home, func(path string, _ fs.DirEntry, err error) error {
+		if err == nil {
+			err = os.Lchown(path, mainUID, mainGID)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, "rootfile"), []byte("root's"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(h.cfg); err != nil {
+		t.Fatal(err)
+	}
+	user1, user2 := h.cfg.PoolUsers[0], h.cfg.PoolUsers[1]
+	uid1, gid1 := lookupIDs(t, user1)
+	uid2, gid2 := lookupIDs(t, user2)
+	home1, home2 := h.cfg.PoolHome(user1), h.cfg.PoolHome(user2)
+	statIs(t, filepath.Join(home1, "TASK.md"), uid1, gid1, 0o644)
+	statIs(t, filepath.Join(home1, "notes"), uid1, gid1, fs.ModeDir|0o755)
+	statIs(t, filepath.Join(home1, "notes", "n.md"), uid1, gid1, 0o644)
+	statIs(t, filepath.Join(home1, "inbox", "processed"), uid1, gid1, fs.ModeDir|0o755)
+	statIs(t, filepath.Join(home1, "agents"), uid1, gid1, fs.ModeDir|0o755)
+	if info, err := os.Lstat(filepath.Join(home1, "link")); err != nil || int(info.Sys().(*syscall.Stat_t).Uid) != uid1 {
+		t.Fatalf("link: %v %v", info, err)
+	}
+	statIs(t, secret, 0, 0, 0o600)
+	statIs(t, filepath.Join(home1, "rootfile"), 0, 0, 0o644)
+	// Control directories belong to the parent.
+	statIs(t, legacy, mainUID, mainGID, fs.ModeDir|0o755)
+	statIs(t, filepath.Join(legacy, "config.json"), mainUID, mainGID, 0o644)
+	ctrl := filepath.Join(home1, "agents", "scraper")
+	statIs(t, ctrl, uid1, gid1, fs.ModeDir|0o755)
+	statIs(t, filepath.Join(ctrl, "config.json"), uid1, gid1, 0o644)
+	statIs(t, filepath.Join(home2, "TASK.md"), uid2, gid2, 0o644)
+	statIs(t, filepath.Join(home2, "inbox"), uid2, gid2, fs.ModeDir|0o755)
+	h.start()
+	if got := h.childHome(legacy); got != home1 {
+		t.Fatalf("recipes home %q", got)
+	}
+	if got := h.childHome(ctrl); got != home2 {
+		t.Fatalf("scraper home %q", got)
+	}
+	time.Sleep(300 * time.Millisecond) // several polls
+	for path, want := range map[string]string{filepath.Join(home1, "TASK.md"): "recipes task", filepath.Join(home2, "TASK.md"): "scraper task"} {
+		if got, err := os.ReadFile(path); err != nil || string(got) != want {
+			t.Fatalf("%s: %q %v", path, got, err)
+		}
+	}
+	if strings.Contains(h.logs.String(), "reclaimed") {
+		t.Fatalf("reclaimed after migration:\n%s", h.logs)
+	}
+}
