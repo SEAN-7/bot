@@ -89,6 +89,11 @@ func (d *daemon) collectMessages() {
 			delete(d.unremoved, k)
 		}
 	}
+	for k := range d.retries {
+		if k.agent != ownerSpoolAgent && !pass.listed[listedKey(k.agent, k.path)] && !pass.unlisted[k.agent] {
+			delete(d.retries, k)
+		}
+	}
 }
 
 // spoolKey names one delivered spool file: its sender, path and content.
@@ -146,16 +151,19 @@ func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
 			err = d.appendConversation(d.cfg.MessagesFile(), a.gid(), map[string]any{"from": "agent", "agent": a.name, "text": logText(data)})
 		} else {
 			name := filepath.Base(a.ctrl)
-			if err = d.deliver(a.parent, noteName(name, time.Now()), data, "agents/"+name); err == nil {
+			if err = d.deliver(a.parent, d.inboxName(k, name), data, "agents/"+name); err == nil {
 				if err := d.appendConversation(d.cfg.ConversationFile(a.id), a.gid(), map[string]any{"from": "agent", "text": logText(data)}); err != nil {
 					a.logf("conversation log: %v", err)
 				}
 			}
 		}
 		if err != nil {
-			a.logf("message %s: %v", filepath.Base(path), err)
+			if d.deliveryFailed(k) {
+				a.logf("message %s: %v", filepath.Base(path), err)
+			}
 			return
 		}
+		delete(d.retries, k)
 		d.settle(a, k, pass)
 	}
 }
@@ -210,10 +218,13 @@ func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 		if done {
 			continue
 		}
-		if err := d.deliver(target, noteName("owner", time.Now()), data, "owner"); err != nil {
-			a.logf("message %s: %v", path, err)
+		if err := d.deliver(target, d.inboxName(k, "owner"), data, "owner"); err != nil {
+			if d.deliveryFailed(k) {
+				a.logf("message %s: %v", path, err)
+			}
 			return
 		}
+		delete(d.retries, k)
 		if err := d.appendConversation(d.cfg.ConversationFile(target.id), target.gid(), map[string]any{"from": "owner", "text": logText(data)}); err != nil {
 			target.logf("conversation log: %v", err)
 		}

@@ -80,9 +80,14 @@ func (d *delivered) append(r deliveryRecord) error {
 	return err
 }
 
+// add records a delivery, unless the same one is already pending: a retry
+// of a delivery that failed after it was recorded.
 func (d *delivered) add(agent, name, sum, from string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.pending[deliveryKey(agent, name, sum)] == from {
+		return nil
+	}
 	if err := d.append(deliveryRecord{Agent: agent, Name: name, SHA256: sum, From: from}); err != nil {
 		return err
 	}
@@ -118,6 +123,39 @@ func (d *daemon) deliver(to *agent, name string, data []byte, from string) error
 	return to.fs.Write(filepath.Join(to.home, "inbox", name), data)
 }
 
+// retry is a spool file whose delivery failed.
+type retry struct {
+	name   string // the inbox name every attempt uses
+	logged bool   // its failure was logged
+}
+
+// inboxName is the inbox name for delivering spool file k: a new one, or the
+// one its failed attempts used, so a retry matches their delivery record.
+func (d *daemon) inboxName(k spoolKey, kind string) string {
+	if r := d.retries[k]; r != nil {
+		return r.name
+	}
+	name := noteName(kind, time.Now())
+	d.retries[k] = &retry{name: name}
+	return name
+}
+
+// deliveryFailed reports whether to log a failed delivery of spool file k:
+// once while it keeps failing. (The errors differ: each attempt writes a
+// new temporary file.)
+func (d *daemon) deliveryFailed(k spoolKey) bool {
+	r := d.retries[k]
+	if r == nil {
+		return true
+	}
+	first := !r.logged
+	r.logged = true
+	return first
+}
+
+// ownerSpoolAgent keys the human's spool files in retries.
+const ownerSpoolAgent = ""
+
 // deliverOwner moves the human's spooled messages into the main agent's inbox.
 func (d *daemon) deliverOwner() {
 	entries, err := os.ReadDir(d.cfg.OwnerSpool())
@@ -127,23 +165,36 @@ func (d *daemon) deliverOwner() {
 		}
 		return
 	}
+	listed := map[string]bool{}
 	for _, e := range entries {
 		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		spooled := filepath.Join(d.cfg.OwnerSpool(), e.Name())
+		listed[spooled] = true
 		data, err := os.ReadFile(spooled)
 		if err != nil {
 			d.cfg.Logger.Printf("owner spool: %v", err)
 			continue
 		}
-		if err := d.deliver(d.main, noteName("owner", time.Now()), data, "owner"); err != nil {
-			d.cfg.Logger.Printf("owner delivery: %v", err)
+		sum := sha256.Sum256(data)
+		k := spoolKey{ownerSpoolAgent, spooled, hex.EncodeToString(sum[:])}
+		if err := d.deliver(d.main, d.inboxName(k, "owner"), data, "owner"); err != nil {
+			if d.deliveryFailed(k) {
+				d.cfg.Logger.Printf("owner delivery: %v", err)
+			}
 			continue
 		}
+		delete(d.retries, k)
 		if err := d.appendConversation(d.cfg.MessagesFile(), d.main.gid(), map[string]any{"from": "owner", "text": logText(data)}); err != nil {
 			d.cfg.Logger.Printf("messages log: %v", err)
 		}
 		os.Remove(spooled)
+	}
+	// Forget the names kept for files no longer there.
+	for k := range d.retries {
+		if k.agent == ownerSpoolAgent && !listed[k.path] {
+			delete(d.retries, k)
+		}
 	}
 }

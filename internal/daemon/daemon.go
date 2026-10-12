@@ -110,7 +110,11 @@ type daemon struct {
 	// unremoved holds spool files delivered but not yet removed, so they are
 	// not delivered again while they stay; only the poll goroutine touches it.
 	unremoved map[spoolKey]bool
-	wg        sync.WaitGroup
+	// retries holds spool files whose delivery failed: the inbox name they
+	// keep for every retry, so one delivery record serves them all, and the
+	// error already logged; only the poll goroutine touches it.
+	retries map[spoolKey]*retry
+	wg      sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -122,7 +126,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
 	}
 	syscall.Umask(0o022)
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, stop: ctx}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username

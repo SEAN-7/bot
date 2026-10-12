@@ -347,3 +347,51 @@ func TestStartTightensOldLogs(t *testing.T) {
 		return err1 == nil && err2 == nil && err3 == nil && m.Mode().Perm() == 0o640 && r.Mode().Perm() == 0o640 && o.Mode().Perm() == 0o751
 	})
 }
+
+// deliveryRecords counts the delivery records naming a file ending in suffix.
+func deliveryRecords(h *harness, suffix string, consumed bool) int {
+	n := 0
+	for _, r := range readRecords(h.cfg.DeliveredFile()) {
+		if name, _ := r["name"].(string); strings.HasSuffix(name, suffix) && (r["consumed"] == true) == consumed {
+			n++
+		}
+	}
+	return n
+}
+
+// A delivery that keeps failing is retried under the same inbox name, with
+// one delivery record and one log line, and delivered once when it can be.
+func TestFailingDeliveryRetriedOnce(t *testing.T) {
+	skipIfRoot(t)
+	h := newHarness(t, doneFor(parentMark), doneFor(parentMark))
+	h.markParent()
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	inbox := filepath.Join(h.cfg.Home, "inbox")
+	if err := os.Chmod(inbox, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(inbox, 0o755) })
+	h.queue(filepath.Join(home, ".messages"), "report once")
+	waitFor(t, "failed delivery", func() bool { return strings.Contains(h.logs.String(), "c: message ") })
+	time.Sleep(30 * h.cfg.Poll)
+	if n := deliveryRecords(h, "-c.md", false); n != 1 {
+		t.Fatalf("%d delivery records while failing", n)
+	}
+	if n := strings.Count(h.logs.String(), "c: message "); n != 1 {
+		t.Fatalf("failure logged %d times", n)
+	}
+	os.Chmod(inbox, 0o755)
+	waitFor(t, "labelled delivery", func() bool { return h.sawRecord(`"from":"agents/c"`, "report once") })
+	time.Sleep(10 * h.cfg.Poll)
+	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
+		t.Fatalf("delivered %d times", n)
+	}
+	if n := deliveryRecords(h, "-c.md", false); n != 1 {
+		t.Fatalf("%d delivery records", n)
+	}
+	if log := readRecords(h.cfg.ConversationFile(ctrl)); len(log) != 1 {
+		t.Fatalf("conversation log %v", log)
+	}
+}
