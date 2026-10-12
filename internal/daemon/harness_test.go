@@ -312,4 +312,75 @@ func fileContains(path, text string) bool {
 	return err == nil && strings.Contains(string(data), text)
 }
 
-var _ = fmt.Sprint
+// queue writes text to dir/<UTC>.md with an atomic dot-name rename, as
+// `agent message` and `agent send` do, creating dir if needed.
+func (h *harness) queue(dir, text string) string {
+	h.t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		h.t.Fatal(err)
+	}
+	temp := filepath.Join(dir, ".m")
+	if err := os.WriteFile(temp, []byte(text), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	path := filepath.Join(dir, time.Now().UTC().Format("20060102T150405.000000000Z")+".md")
+	if err := os.Rename(temp, path); err != nil {
+		h.t.Fatal(err)
+	}
+	return path
+}
+
+// spoolDown queues a message from the agent at fromHome to its child name.
+func (h *harness) spoolDown(fromHome, name, text string) string {
+	h.t.Helper()
+	return h.queue(filepath.Join(fromHome, ".messages", "agents", name), text)
+}
+
+// sawRecord reports whether any request message contains every fragment.
+func (h *harness) sawRecord(fragments ...string) bool {
+	for _, req := range h.requests() {
+		for _, m := range req.Messages {
+			all := true
+			for _, f := range fragments {
+				if !strings.Contains(m.Content, f) {
+					all = false
+					break
+				}
+			}
+			if all {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// spoolCommand is the shell command an agent runs to queue text in dir
+// atomically: what `agent message` and `agent send` do.
+func spoolCommand(dir, text string) string {
+	return fmt.Sprintf("mkdir -p %[1]s && printf %%s %[2]s > %[1]s/.m && mv %[1]s/.m %[1]s/$(date -u +%%Y%%m%%dT%%H%%M%%SZ).md", dir, shellQuote(text))
+}
+
+// sendMessageText queues text for the agent's owner.
+func sendMessageText(text string) string { return spoolCommand("~/.messages", text) }
+
+// sendDownText queues text for the agent's child name.
+func sendDownText(name, text string) string { return spoolCommand("~/.messages/agents/"+name, text) }
+
+// Replay match strings that tell a main agent's requests from a seeded
+// subagent's: the harness gives main this README, and a subagent's README
+// is the seed's.
+const (
+	parentMark = "parent-readme"
+	childMark  = "These are starting suggestions"
+)
+
+func (h *harness) markParent() {
+	os.WriteFile(filepath.Join(h.cfg.Home, "README.md"), []byte(parentMark), 0o644)
+}
+
+func doneFor(mark string) string {
+	return `{"match":"` + mark + `","text":"done","usage":{"input_tokens":10}}`
+}

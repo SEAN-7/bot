@@ -312,9 +312,10 @@ agent.
     `<UTC timestamp>-owner.md`, recorded with sender `owner`, and appended to
     `/var/log/agent/messages.jsonl`.
 
-  Inbox files are written through the recipient's helper with an atomic
-  dot-name rename; then the delivery is recorded, the log appended and the
-  spool file removed. A crash between steps can only duplicate a message.
+  The delivery is recorded first, so the recipient can never collect an
+  unrecorded file; then the inbox file is written through the recipient's
+  helper with an atomic dot-name rename, the log appended and the spool file
+  removed. A crash between steps can only duplicate a message.
 - **Conversation logs.** The human's conversation with the main agent is
   `/var/log/agent/messages.jsonl` (root:agent 0640). A subagent's
   conversation with its parent is `messages.jsonl` in the subagent's journal

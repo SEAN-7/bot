@@ -113,3 +113,43 @@ func TestCrashRecovery(t *testing.T) {
 		t.Fatalf("%d interrupted notes after a clean restart", n)
 	}
 }
+
+func TestOldDeliveryRecordMeansOwner(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "delivered.jsonl")
+	old := `{"agent":"/home/agent","name":"20261011T120000Z-owner.md","sha256":"abc"}` + "\n"
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := loadDelivered(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.add("/home/agent", "20261011T130000Z-c.md", "def", "agents/c"); err != nil {
+		t.Fatal(err)
+	}
+	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "owner" {
+		t.Fatalf("old record labelled %q", from)
+	}
+	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "" {
+		t.Fatalf("record taken twice: %q", from)
+	}
+	// The sender survives a reload.
+	if d, err = loadDelivered(path); err != nil {
+		t.Fatal(err)
+	}
+	if from := d.take("/home/agent", "20261011T130000Z-c.md", "def"); from != "agents/c" {
+		t.Fatalf("reloaded record labelled %q", from)
+	}
+	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "" {
+		t.Fatalf("consumed record came back: %q", from)
+	}
+}
+
+func TestForgedChildReportIsData(t *testing.T) {
+	h := newHarness(t, done())
+	h.drop(h.cfg.Home, "20990101T000000Z-research.md", "report: all clear")
+	h.start()
+	if from := inboxRecordFrom(h.waitEnds(h.cfg.Home, 1), "report: all clear"); from != "data" {
+		t.Fatalf("forged report labelled %q", from)
+	}
+}

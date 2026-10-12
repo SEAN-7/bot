@@ -102,7 +102,10 @@ type daemon struct {
 	limited     map[string]bool   // control directories held back by max_agents, already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
-	wg          sync.WaitGroup
+	// spoolIgnored holds the spool entries already logged as not an agent's
+	// message; only the poll goroutine touches it.
+	spoolIgnored map[string]bool
+	wg           sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -146,7 +149,8 @@ func Run(ctx context.Context, cfg Config) error {
 		// before the first admission, and one that failed is retried.
 		d.sweep()
 		d.deliverOwner()
-		d.collectMessages(d.reconcile())
+		d.reconcile()
+		d.collectMessages()
 		select {
 		case <-ctx.Done():
 			d.shutdown()
@@ -228,9 +232,8 @@ func (d *daemon) start(a *agent) {
 
 // reconcile walks the tree breadth-first from the main agent, scanning each
 // agent's home through its own helper. Known agents are kept, new control
-// directories are admitted, and agents no longer reached are removed. It
-// returns the agents in the tree.
-func (d *daemon) reconcile() []*agent {
+// directories are admitted, and agents no longer reached are removed.
+func (d *daemon) reconcile() {
 	d.loadSettings()
 	d.mu.Lock()
 	known := make(map[string]*agent, len(d.agents))
@@ -304,7 +307,6 @@ func (d *daemon) reconcile() []*agent {
 	}
 	d.mu.Unlock()
 	d.remove(gone)
-	return tree
 }
 
 // childName names the subagent at ctrl, a control directory of parent, by

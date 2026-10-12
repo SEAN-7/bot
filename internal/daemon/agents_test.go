@@ -84,31 +84,21 @@ func TestChildWithoutConfigWaits(t *testing.T) {
 }
 
 func TestParentChildReport(t *testing.T) {
-	t.Skip("Task 6")
-	create := "mkdir -p agents/c/inbox && cp config.json agents/c/ && printf 'child-task: say hi' > agents/c/inbox/.t && mv agents/c/inbox/.t agents/c/inbox/task.md"
-	report := "printf 'report: hi' > ../../inbox/.r && mv ../../inbox/.r ../../inbox/report.md"
+	create := "mkdir -p agents/c && cp config.json agents/c/ && " + sendDownText("c", "child-task: say hi")
 	h := newHarness(t,
-		matchStep("inbox/processed/task.md", report, 100),
-		matchStep("parent-readme", create, 100),
-		`{"match":"inbox/processed/task.md","text":"done"}`,
-		`{"match":"parent-readme","text":"done"}`,
-		`{"match":"parent-readme","text":"done"}`,
-		`{"match":"parent-readme","text":"done"}`,
+		matchStep(parentMark, create, 100), doneFor(parentMark),
+		matchStep(childMark, sendMessageText("report: hi"), 100), doneFor(childMark),
+		doneFor(parentMark), doneFor(parentMark),
 	)
-	os.WriteFile(filepath.Join(h.cfg.Home, "README.md"), []byte("parent-readme"), 0o644)
+	h.markParent()
 	h.drop(h.cfg.Home, "go.md", "make a child")
 	h.start()
-	want := `{\"file\":\"inbox/processed/report.md\",\"from\":\"data\",\"content\":\"report: hi\"}`
 	waitFor(t, "parent receiving the report", func() bool {
-		for _, req := range h.requests() {
-			for _, m := range req.Messages {
-				if strings.Contains(m.Content, strings.ReplaceAll(want, `\"`, `"`)) {
-					return true
-				}
-			}
-		}
-		return false
+		return h.sawRecord(`"file":"inbox/processed/`, `-c.md","from":"agents/c","content":"report: hi"}`)
 	})
+	if !h.sawRecord(`-owner.md","from":"owner","content":"child-task: say hi"}`) {
+		t.Fatal("child task not delivered from owner")
+	}
 	if records := h.waitEnds(filepath.Join(h.cfg.Home, "agents", "c"), 1); lastEnd(records) != "done" {
 		t.Fatalf("child end %v", records)
 	}

@@ -152,7 +152,7 @@ func TestVanishedInboxDoesNotCallModel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer fs.Close()
-	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]bool{}},
+	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}},
 		runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
 	main := newMain(d)
 	main.fs = fs

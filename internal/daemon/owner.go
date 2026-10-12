@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -14,26 +15,27 @@ import (
 	"time"
 )
 
-// delivered records owner messages moved from the root-only spool into the
-// main agent's inbox. A record labels its file "owner" once; a copy of an
-// old owner message put back into the inbox is plain data.
+// delivered records the messages the daemon put into inbox files, with
+// their sender. A record labels its file once; a copy of an old message put
+// back into the inbox is plain data.
 type delivered struct {
 	path    string
 	mu      sync.Mutex
-	pending map[string]bool
+	pending map[string]string // delivery key → sender
 }
 
 type deliveryRecord struct {
 	Agent    string `json:"agent"`
 	Name     string `json:"name"`
 	SHA256   string `json:"sha256"`
+	From     string `json:"from,omitempty"` // "" in records from earlier versions: the owner
 	Consumed bool   `json:"consumed,omitempty"`
 }
 
 func deliveryKey(agent, name, sum string) string { return agent + "\x00" + name + "\x00" + sum }
 
 func loadDelivered(path string) (*delivered, error) {
-	d := &delivered{path: path, pending: map[string]bool{}}
+	d := &delivered{path: path, pending: map[string]string{}}
 	f, err := os.Open(path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return d, nil
@@ -50,8 +52,10 @@ func loadDelivered(path string) (*delivered, error) {
 		key := deliveryKey(r.Agent, r.Name, r.SHA256)
 		if r.Consumed {
 			delete(d.pending, key)
+		} else if r.From == "" {
+			d.pending[key] = "owner"
 		} else {
-			d.pending[key] = true
+			d.pending[key] = r.From
 		}
 	}
 	return d, scanner.Err()
@@ -76,34 +80,45 @@ func (d *delivered) append(r deliveryRecord) error {
 	return err
 }
 
-func (d *delivered) add(agent, name, sum string) error {
+func (d *delivered) add(agent, name, sum, from string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if err := d.append(deliveryRecord{Agent: agent, Name: name, SHA256: sum}); err != nil {
+	if err := d.append(deliveryRecord{Agent: agent, Name: name, SHA256: sum, From: from}); err != nil {
 		return err
 	}
-	d.pending[deliveryKey(agent, name, sum)] = true
+	d.pending[deliveryKey(agent, name, sum)] = from
 	return nil
 }
 
-// take reports whether the file was delivered by the owner, consuming the record.
-func (d *delivered) take(agent, name, sum string) bool {
+// take returns the sender of a file the daemon delivered, consuming the
+// record, or "" when it did not deliver this file.
+func (d *delivered) take(agent, name, sum string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	key := deliveryKey(agent, name, sum)
-	if !d.pending[key] {
-		return false
+	from := d.pending[key]
+	if from == "" {
+		return ""
 	}
 	delete(d.pending, key)
 	if err := d.append(deliveryRecord{Agent: agent, Name: name, SHA256: sum, Consumed: true}); err != nil {
-		return false
+		return ""
 	}
-	return true
+	return from
 }
 
-// deliverOwner moves spooled owner messages into the main agent's inbox. The
-// record is written before the inbox file, so a delivered file is always
-// recognised; a crash in between can only cause a duplicate delivery.
+// deliver writes data to the recipient's inbox through its helper, recording
+// the sender first: the agent may collect the file the moment it appears,
+// and a crash in between can only cause a duplicate delivery.
+func (d *daemon) deliver(to *agent, name string, data []byte, from string) error {
+	sum := sha256.Sum256(data)
+	if err := d.delivered.add(to.id, name, hex.EncodeToString(sum[:]), from); err != nil {
+		return fmt.Errorf("delivery record: %w", err)
+	}
+	return to.fs.Write(filepath.Join(to.home, "inbox", name), data)
+}
+
+// deliverOwner moves the human's spooled messages into the main agent's inbox.
 func (d *daemon) deliverOwner() {
 	entries, err := os.ReadDir(d.cfg.OwnerSpool())
 	if err != nil {
@@ -122,17 +137,11 @@ func (d *daemon) deliverOwner() {
 			d.cfg.Logger.Printf("owner spool: %v", err)
 			continue
 		}
-		sum := sha256.Sum256(data)
-		name := noteName("owner", time.Now())
-		if err := d.delivered.add(d.main.id, name, hex.EncodeToString(sum[:])); err != nil {
-			d.cfg.Logger.Printf("owner delivery record: %v", err)
-			continue
-		}
-		if err := d.main.fs.Write(filepath.Join(d.main.home, "inbox", name), data); err != nil {
+		if err := d.deliver(d.main, noteName("owner", time.Now()), data, "owner"); err != nil {
 			d.cfg.Logger.Printf("owner delivery: %v", err)
 			continue
 		}
-		if err := d.appendMessage(map[string]any{"from": "owner", "text": strings.ToValidUTF8(string(data), "\uFFFD")}); err != nil {
+		if err := d.appendConversation(d.cfg.MessagesFile(), d.main.gid(), map[string]any{"from": "owner", "text": logText(data)}); err != nil {
 			d.cfg.Logger.Printf("messages log: %v", err)
 		}
 		os.Remove(spooled)

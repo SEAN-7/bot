@@ -21,4 +21,5 @@ const (
 	MsgSubagentFmt      = "Subagent %s did not start: %s"
 	MsgLimitFmt         = "Agent limit reached (max_agents=%d); this agent was not started."
 	MsgLimitParentFmt   = "Subagent %s was not started: agent limit reached (max_agents=%d)."
+	MsgUndeliveredFmt   = "Message to %s dropped: there is no subagent by that name."
 )
