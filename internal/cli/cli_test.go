@@ -48,6 +48,17 @@ func TestSendWritesSpool(t *testing.T) {
 	if data, _ := os.ReadFile(filepath.Join(spool, entries[0].Name())); string(data) != "hello agent" {
 		t.Fatalf("content %q", data)
 	}
+	// /etc/agent is traversable by every user: root's spool keeps them out.
+	for path, want := range map[string]os.FileMode{
+		filepath.Join(l.RootHome(), ".messages"):           0o700,
+		filepath.Join(l.RootHome(), ".messages", "agents"): 0o700,
+		spool:                                   0o700,
+		filepath.Join(spool, entries[0].Name()): 0o600,
+	} {
+		if info, err := os.Stat(path); err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", path, info.Mode().Perm(), err, want)
+		}
+	}
 }
 
 func TestFormat(t *testing.T) {

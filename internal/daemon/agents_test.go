@@ -512,3 +512,57 @@ func TestRestartKeepsAdmittedChild(t *testing.T) {
 		t.Fatalf("a second user was prepared: %v", sys)
 	}
 }
+
+// After pool.json is lost every agent looks unheld on start, so its journals
+// are handed to its nearest held ancestor's group (root's, for main) before
+// admission asks whether a home is the agent's own. The group the journal
+// directory had must still count, or main's whole home, its children's
+// control directories included, is cleared. The harness's helpers run
+// without credentials, so the groups here come from LookupUser alone.
+func TestLostPoolKeepsJournalEvidence(t *testing.T) {
+	other := -1
+	groups, _ := os.Getgroups()
+	for _, g := range groups {
+		if g != os.Getgid() {
+			other = g
+			break
+		}
+	}
+	if other < 0 {
+		t.Skip("needs a second group")
+	}
+	h := newHarness(t)
+	self := uint32(os.Getuid())
+	h.cfg.RootUser = "root-test"
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		switch name {
+		case "agent-1":
+			return &syscall.Credential{Uid: self, Gid: uint32(other)}, nil
+		case "root-test":
+			return &syscall.Credential{Uid: self, Gid: uint32(os.Getgid())}, nil
+		}
+		return nil, nil
+	}
+	dir := h.cfg.JournalDir(h.mainID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(dir, -1, other); err != nil {
+		t.Skip(err)
+	}
+	os.MkdirAll(h.mainHome, 0o755)
+	os.Symlink(dir, filepath.Join(h.mainHome, "journal"))
+	d := &daemon{cfg: h.cfg}
+	var err error
+	if d.pool, err = loadPool(h.cfg.PoolFile(), h.cfg.PoolUsers); err != nil {
+		t.Fatal(err)
+	}
+	main := detachedMain(t, h, d)
+	d.secureUnheldJournals(d.root.id)
+	if journalOwnedBy(dir, other) {
+		t.Fatal("unheld journals not handed to root's group")
+	}
+	if !main.ownsHome() {
+		t.Fatal("main's own home not recognised after a lost pool.json")
+	}
+}

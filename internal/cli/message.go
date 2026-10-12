@@ -25,7 +25,7 @@ func Message(home, text string, now time.Time) error {
 	if home == "" {
 		return errors.New("HOME is not set; run agent message from an agent's shell")
 	}
-	return queue(filepath.Join(home, ".messages"), text, now)
+	return queue(filepath.Join(home, ".messages"), text, now, false)
 }
 
 // cleanName reports whether name is one plain directory name.
@@ -37,6 +37,13 @@ func cleanName(name string) bool {
 // direct child name. The daemon delivers it as the owner's, and records it in
 // the child's conversation.
 func SendChild(home, name, text string, now time.Time) error {
+	return sendChild(home, name, text, now, false)
+}
+
+// sendChild is SendChild with a private spool for root, whose spool sits in
+// /etc/agent, which every user may traverse; an agent's home already keeps
+// other users out.
+func sendChild(home, name, text string, now time.Time, private bool) error {
 	if home == "" {
 		return errors.New("HOME is not set; run agent send from an agent's shell")
 	}
@@ -46,24 +53,29 @@ func SendChild(home, name, text string, now time.Time) error {
 	if info, err := os.Stat(filepath.Join(home, "agents", name, "config.json")); err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("no subagent %q (expected ~/agents/%s/config.json)", name, name)
 	}
-	return queue(filepath.Join(home, ".messages", "agents", name), text, now)
+	return queue(filepath.Join(home, ".messages", "agents", name), text, now, private)
 }
 
 // queue writes one message into a spool directory with an atomic dot-name
-// rename, so the daemon never reads half a message.
-func queue(dir, text string, now time.Time) error {
+// rename, so the daemon never reads half a message. A private spool is
+// readable by its owner alone.
+func queue(dir, text string, now time.Time, private bool) error {
+	dirMode, fileMode := os.FileMode(0o755), os.FileMode(0o644)
+	if private {
+		dirMode, fileMode = 0o700, 0o600
+	}
 	if strings.TrimSpace(text) == "" {
 		return errors.New("message is empty")
 	}
 	if len(text) > MessageLimit {
 		return fmt.Errorf("message is over %d KiB; write the details to a file and send its path", MessageLimit>>10)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
 	name := now.UTC().Format("20060102T150405.000000000Z") + ".md"
 	temp := filepath.Join(dir, "."+name)
-	if err := os.WriteFile(temp, []byte(text), 0o644); err != nil {
+	if err := os.WriteFile(temp, []byte(text), fileMode); err != nil {
 		return err
 	}
 	return os.Rename(temp, filepath.Join(dir, name))

@@ -91,7 +91,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	}
 	l := layout.Layout{Homes: filepath.Join(root, "home"), Etc: filepath.Join(root, "etc", "agent"), Lib: filepath.Join(root, "lib"), Log: filepath.Join(root, "log")}
 	tmp := filepath.Join(root, "tmp")
-	for _, dir := range []string{l.Plugins(), l.Credentials(), l.Lib, l.Log, tmp} {
+	for _, dir := range []string{l.Plugins(), l.Credentials(), l.Homes, l.Lib, l.Log, tmp} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}

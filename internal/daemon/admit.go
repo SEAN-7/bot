@@ -114,11 +114,19 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 //
 // The link lives in a home the previous holder of this user controlled, so
 // it is trusted only if the journal directory also carries this user's
-// group, which only the daemon sets.
+// group, which only the daemon sets: the group it had on start, if
+// secureUnheldJournals has changed it since.
 func (a *agent) ownsHome() bool {
 	e, err := a.fs.Stat(filepath.Join(a.home, "journal"))
 	dir := a.d.cfg.JournalDir(a.id)
-	return err == nil && e.Type == "symlink" && e.Target == dir && journalOwnedBy(dir, a.gid())
+	if err != nil || e.Type != "symlink" || e.Target != dir {
+		return false
+	}
+	gid := a.gid()
+	if prior, ok := a.d.journalGids[dir]; ok {
+		return gid < 0 || prior == gid
+	}
+	return journalOwnedBy(dir, gid)
 }
 
 // journalOwnedBy reports whether dir is a real directory with group gid. It

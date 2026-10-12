@@ -108,6 +108,10 @@ type daemon struct {
 	// unremoved holds spool files delivered but not yet removed, so they are
 	// not delivered again while they stay; only the poll goroutine touches it.
 	unremoved map[spoolKey]bool
+	// journalGids holds the group each journal directory had before
+	// secureUnheldJournals changed it, by path: admission's evidence that a
+	// home is its agent's own, which a lost pool.json would otherwise erase.
+	journalGids map[string]int
 	// retries holds spool files whose delivery failed: the inbox name they
 	// keep for every retry, so one delivery record serves them all, and the
 	// error already logged; only the poll goroutine touches it.
@@ -197,12 +201,38 @@ func (d *daemon) secureUnheldJournals(id string) {
 		}
 		gid, err := d.ancestorGid(child)
 		if err == nil {
+			d.rememberGroups(d.cfg.JournalDir(child))
 			err = journal.SecureTree(d.cfg.JournalDir(child), gid)
 		}
 		if err != nil {
 			d.cfg.Logger.Printf("%s: journal permissions: %v", child, err)
 		}
 	}
+}
+
+// rememberGroups records the group of every directory under dir that has
+// none recorded yet, before secureUnheldJournals hands dir to another group.
+// After a lost pool.json every agent looks unheld, and ownsHome still needs
+// the group the daemon gave its journal directory.
+func (d *daemon) rememberGroups(dir string) {
+	if d.journalGids == nil {
+		d.journalGids = map[string]int{}
+	}
+	filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
+		if err != nil || !e.IsDir() {
+			return nil
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			if _, seen := d.journalGids[path]; !seen {
+				d.journalGids[path] = int(st.Gid)
+			}
+		}
+		return nil
+	})
 }
 
 // poolUsers returns the configured pool users, or the max_agents pool users,

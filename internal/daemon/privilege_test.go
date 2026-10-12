@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/SEAN-7/bot/internal/cli"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
 )
@@ -75,6 +76,9 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	h.cfg.PoolUsers = strings.Split(pool, ",")
 	h.mainHome = h.cfg.PoolHome(h.cfg.PoolUsers[0])
 	sys := newExecSystem()
+	if !withSystemd() {
+		sys = noLinger{sys} // a container without systemd: everything else is real
+	}
 	h.cfg.System = sys
 	if err := os.Chmod(h.cfg.Homes, 0o755); err != nil {
 		t.Fatal(err)
@@ -104,6 +108,12 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	})
 	return h, h.cfg.PoolUsers[0]
 }
+
+// noLinger is the real System without lingering, which needs systemd.
+type noLinger struct{ System }
+
+func (noLinger) EnableLinger(string) error  { return nil }
+func (noLinger) DisableLinger(string) error { return nil }
 
 // lookupIDs returns the uid and primary gid of a test user.
 func lookupIDs(t *testing.T, name string) (int, int) {
@@ -702,5 +712,29 @@ func TestPrivilegeLostPoolIgnoresPlantedJournalLink(t *testing.T) {
 	})
 	if _, err := os.Lstat(planted); !os.IsNotExist(err) {
 		t.Fatalf("d inherited c's planted file: %v", err)
+	}
+}
+
+// TestPrivilegeRootSpoolPrivate: an owner message root queued for main,
+// waiting in /etc/agent (which every user may traverse), cannot be listed or
+// read by another pool user.
+func TestPrivilegeRootSpoolPrivate(t *testing.T) {
+	h, _ := rootHarness(t)
+	if err := cli.Send(h.cfg.Layout, "owner secret", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")
+	entries, err := os.ReadDir(spool)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("spool %v %v", entries, err)
+	}
+	uid, gid := lookupIDs(t, h.cfg.PoolUsers[1])
+	for _, args := range [][]string{{"ls", spool}, {"cat", filepath.Join(spool, entries[0].Name())}} {
+		cmd := exec.Command(args[0], args[1:]...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+		out, err := cmd.CombinedOutput()
+		if err == nil || strings.Contains(string(out), "owner secret") {
+			t.Fatalf("%s as %s: %v %q", strings.Join(args, " "), h.cfg.PoolUsers[1], err, out)
+		}
 	}
 }
