@@ -71,22 +71,34 @@ func readMainOwner(path string, uid int) ([]byte, error) {
 	if dirErr != nil {
 		return nil, dirErr
 	}
-	if err := checkSafe(dir, dirInfo.IsDir(), "a directory", fileUID(dirInfo), uid, uint32(dirInfo.Mode().Perm())); err != nil {
-		return nil, err
-	}
 	info, err := f.Stat()
 	if err != nil {
 		return nil, err
 	}
-	if err := checkSafe(path, info.Mode().IsRegular(), "a regular file", fileUID(info), uid, uint32(info.Mode().Perm())); err != nil {
+	if err := checkMainOwner(dir, dirInfo, path, info, uid); err != nil {
 		return nil, err
 	}
 	return io.ReadAll(io.LimitReader(f, segmentLimit))
 }
 
+// checkMainOwner applies the rule to main's OWNER.md and its directory, as
+// stat'ed by readMainOwner.
+func checkMainOwner(dir string, dirInfo fs.FileInfo, path string, info fs.FileInfo, uid int) error {
+	if err := checkSafe(dir, dirInfo.IsDir(), "a directory", fileUID(dirInfo), uid, uint32(dirInfo.Mode().Perm())); err != nil {
+		return err
+	}
+	return checkSafe(path, info.Mode().IsRegular(), "a regular file", fileUID(info), uid, uint32(info.Mode().Perm()))
+}
+
+// ownerReader is the part of a parent's helper that reads OWNER.md.
+type ownerReader interface {
+	Stat(path string) (fsio.Entry, error)
+	Read(path string, limit int64) ([]byte, int64, error)
+}
+
 // readChildOwner reads a subagent's OWNER.md through its parent's helper:
 // the control directory belongs to the parent, who wrote the file.
-func readChildOwner(parent *fsio.Client, uid int, path string) ([]byte, error) {
+func readChildOwner(parent ownerReader, uid int, path string) ([]byte, error) {
 	dir := filepath.Dir(path)
 	file, err := parent.Stat(path)
 	if err != nil {

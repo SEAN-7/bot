@@ -104,12 +104,14 @@ func (a *agent) run(ctx context.Context) {
 	owner, err := a.readOwner()
 	if err != nil {
 		// Running without the owner's instructions would be worse than
-		// not running: report once per distinct problem and wait.
-		if text := err.Error(); text != a.failedOwner {
+		// not running: log once per distinct problem, and keep it in ERROR
+		// while it lasts, though a config error or a person replaced it.
+		text := MsgOwnerPrefix + err.Error()
+		if text != a.failedOwner {
 			a.failedOwner = text
-			a.logf("not starting: %s%s", MsgOwnerPrefix, text)
-			a.setError(MsgOwnerPrefix + text)
+			a.logf("not starting: %s", text)
 		}
+		a.ensureError(text)
 		return
 	}
 	// Cleared on every safe read, not only after a problem this daemon saw:
@@ -319,6 +321,15 @@ func (a *agent) setError(text string) {
 	if err := ctl.Write(filepath.Join(dir, "ERROR"), []byte(text+"\n")); err != nil {
 		a.logf("write ERROR: %v", err)
 	}
+}
+
+// ensureError writes the agent's ERROR unless it already holds text.
+func (a *agent) ensureError(text string) {
+	ctl, dir := a.ctl()
+	if data, _, err := ctl.Read(filepath.Join(dir, "ERROR"), 4096); err == nil && string(data) == text+"\n" {
+		return
+	}
+	a.setError(text)
 }
 
 // clearError removes the agent's ERROR if it holds an error of the given kind.

@@ -184,3 +184,32 @@ func TestPrivilegeMessagesLogNotWritable(t *testing.T) {
 		t.Fatal("messages log modified by the agent")
 	}
 }
+
+// TestPrivilegeOwnerFileOfOtherUser gives /etc/agent/OWNER.md to the agent's
+// own user in the root-owned /etc/agent: only the file fails the check.
+func TestPrivilegeOwnerFileOfOtherUser(t *testing.T) {
+	h, name := rootHarness(t, done())
+	owner := h.cfg.OwnerFile()
+	os.WriteFile(owner, []byte("Be brief."), 0o644)
+	u, _ := user.Lookup(name)
+	uid, _ := strconv.Atoi(u.Uid)
+	if err := os.Chown(owner, uid, -1); err != nil {
+		t.Fatal(err)
+	}
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	want := MsgOwnerPrefix + owner + " is not owned by its owner\n"
+	waitFor(t, "OWNER.md ERROR", func() bool {
+		data, _ := os.ReadFile(errorFile)
+		return string(data) == want
+	})
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("%d requests with an OWNER.md the agent owns", n)
+	}
+	os.Chown(owner, 0, -1)
+	h.waitEnds(h.cfg.Home, 1)
+	if got := h.requests()[0].System[0].Text; got != SystemPrompt+ownerSegment("Be brief.") {
+		t.Fatalf("first segment %q", got)
+	}
+}

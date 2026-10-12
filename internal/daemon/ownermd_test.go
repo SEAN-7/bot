@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,13 +248,16 @@ func ownerAgents(t *testing.T, h *harness) (*agent, *agent) {
 	return main, child
 }
 
-func TestOwnerOfOtherUserRejected(t *testing.T) {
+// The harness runs as one user, so a directory and file with different
+// owners need root (TestPrivilegeOwnerFileOfOtherUser). Without root, a
+// wrong expected owner fails at the directory, which is checked first.
+func TestOwnerDirectoryOfOtherUserRejected(t *testing.T) {
 	h := newHarness(t)
 	h.cfg.OwnerUID = os.Getuid() + 1
 	main, _ := ownerAgents(t, h)
 	os.WriteFile(h.cfg.OwnerFile(), []byte("x"), 0o644)
-	if _, err := main.readOwner(); err == nil || !strings.Contains(err.Error(), "is not owned by its owner") {
-		t.Fatalf("main OWNER.md of another user: %v", err)
+	if _, err := main.readOwner(); err == nil || err.Error() != h.cfg.Etc+" is not owned by its owner" {
+		t.Fatalf("main OWNER.md in another user's directory: %v", err)
 	}
 	os.Remove(h.cfg.OwnerFile())
 	if text, err := main.readOwner(); text != "" || err != nil {
@@ -261,15 +265,66 @@ func TestOwnerOfOtherUserRejected(t *testing.T) {
 	}
 }
 
-func TestChildOwnerOfOtherUserRejected(t *testing.T) {
+func TestChildOwnerDirectoryOfOtherUserRejected(t *testing.T) {
 	h := newHarness(t)
 	other := uint32(os.Getuid() + 1)
 	h.cfg.LookupUser = func(string) (*syscall.Credential, error) { return &syscall.Credential{Uid: other, Gid: other}, nil }
 	_, child := ownerAgents(t, h)
-	owner := filepath.Join(child.ctrl, "OWNER.md")
-	os.WriteFile(owner, []byte("x"), 0o644)
-	if _, err := child.readOwner(); err == nil || !strings.Contains(err.Error(), "is not owned by its owner") {
-		t.Fatalf("child OWNER.md not owned by the parent's user: %v", err)
+	os.WriteFile(filepath.Join(child.ctrl, "OWNER.md"), []byte("x"), 0o644)
+	if _, err := child.readOwner(); err == nil || err.Error() != child.ctrl+" is not owned by its owner" {
+		t.Fatalf("child OWNER.md in a directory the parent's user does not own: %v", err)
+	}
+}
+
+// fakeInfo is a stat result with a chosen owner.
+type fakeInfo struct {
+	mode fs.FileMode
+	uid  uint32
+}
+
+func (f fakeInfo) Name() string       { return "" }
+func (f fakeInfo) Size() int64        { return 0 }
+func (f fakeInfo) Mode() fs.FileMode  { return f.mode }
+func (f fakeInfo) ModTime() time.Time { return time.Time{} }
+func (f fakeInfo) IsDir() bool        { return f.mode.IsDir() }
+func (f fakeInfo) Sys() any           { return &syscall.Stat_t{Uid: f.uid} }
+
+func TestMainOwnerFileOfOtherUserRejected(t *testing.T) {
+	dir, path := "/etc/agent", "/etc/agent/OWNER.md"
+	safeDir := fakeInfo{fs.ModeDir | 0o711, 0}
+	if err := checkMainOwner(dir, safeDir, path, fakeInfo{0o644, 0}, 0); err != nil {
+		t.Fatalf("safe OWNER.md rejected: %v", err)
+	}
+	if err := checkMainOwner(dir, safeDir, path, fakeInfo{0o644, 1000}, 0); err == nil || err.Error() != path+" is not owned by its owner" {
+		t.Fatalf("OWNER.md of another user in a safe directory: %v", err)
+	}
+}
+
+// fakeParent is a parent's helper whose Stat reports chosen owners.
+type fakeParent map[string]fsio.Entry
+
+func (f fakeParent) Stat(path string) (fsio.Entry, error) {
+	e, ok := f[path]
+	if !ok {
+		return fsio.Entry{}, fs.ErrNotExist
+	}
+	return e, nil
+}
+
+func (f fakeParent) Read(path string, limit int64) ([]byte, int64, error) {
+	return []byte("rules"), 5, nil
+}
+
+func TestChildOwnerFileOfOtherUserRejected(t *testing.T) {
+	ctrl := "/home/agent/agents/c"
+	path := ctrl + "/OWNER.md"
+	parent := fakeParent{ctrl: {Type: "dir", UID: 1000, Mode: 0o755}, path: {Type: "file", UID: 1000, Mode: 0o644}}
+	if data, err := readChildOwner(parent, 1000, path); err != nil || string(data) != "rules" {
+		t.Fatalf("safe OWNER.md: %q, %v", data, err)
+	}
+	parent[path] = fsio.Entry{Type: "file", UID: 1001, Mode: 0o644}
+	if _, err := readChildOwner(parent, 1000, path); err == nil || err.Error() != path+" is not owned by its owner" {
+		t.Fatalf("OWNER.md of another user in the parent's directory: %v", err)
 	}
 }
 
@@ -331,5 +386,48 @@ func TestOwnerSuccessKeepsOtherErrors(t *testing.T) {
 	h.waitEnds(h.cfg.Home, 1)
 	if !fileContains(errorFile, "something else") {
 		t.Fatal("an ERROR that is not an OWNER.md error was cleared")
+	}
+}
+
+// unsafeOwner starts the daemon with a group-writable OWNER.md and a message
+// waiting, and returns the ERROR path once the problem is reported.
+func unsafeOwner(t *testing.T, h *harness) string {
+	t.Helper()
+	os.WriteFile(h.cfg.OwnerFile(), []byte("Be brief."), 0o644)
+	os.Chmod(h.cfg.OwnerFile(), 0o664)
+	h.drop(h.cfg.Home, "go.md", "go")
+	h.start()
+	errorFile := filepath.Join(h.cfg.Home, "ERROR")
+	waitFor(t, "OWNER.md ERROR", func() bool { return fileContains(errorFile, MsgOwnerPrefix) })
+	return errorFile
+}
+
+func TestOwnerErrorSurvivesConfigError(t *testing.T) {
+	h := newHarness(t)
+	errorFile := unsafeOwner(t, h)
+	want, _ := os.ReadFile(errorFile)
+	config := filepath.Join(h.cfg.Home, "config.json")
+	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
+	waitFor(t, "config ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
+	os.WriteFile(config, []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	waitFor(t, "OWNER.md ERROR again", func() bool {
+		got, _ := os.ReadFile(errorFile)
+		return string(got) == string(want)
+	})
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("%d requests with an unsafe OWNER.md", n)
+	}
+	if n := strings.Count(h.logs.String(), "is writable by group or others"); n != 1 {
+		t.Fatalf("OWNER.md error logged %d times:\n%s", n, h.logs)
+	}
+}
+
+func TestOwnerErrorRewrittenWhenDeleted(t *testing.T) {
+	h := newHarness(t)
+	errorFile := unsafeOwner(t, h)
+	os.Remove(errorFile)
+	waitFor(t, "OWNER.md ERROR rewritten", func() bool { return fileContains(errorFile, MsgOwnerPrefix) })
+	if n := len(h.requests()); n != 0 {
+		t.Fatalf("%d requests with an unsafe OWNER.md", n)
 	}
 }

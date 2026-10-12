@@ -29,7 +29,7 @@ type agent struct {
 	done   chan struct{} // closed when loop returns
 
 	failedConfig string // hash of a config.json already reported invalid
-	failedOwner  string // an OWNER.md problem already reported
+	failedOwner  string // the OWNER.md error already logged
 
 	conv *conversation // the last run's conversation, if it ended normally
 }
