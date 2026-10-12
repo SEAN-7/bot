@@ -38,11 +38,19 @@ overprescribed in the seed README: the lifecycle becomes commands listed by
   admission the daemon moves it into the new home (written through the
   child's helper, removed through the parent's helper, as root for root's
   children).
+- Root is a node of the tree like any agent, with `/etc/agent` in place of a
+  home: its control directories are `/etc/agent/agents/NAME/` and its spool
+  for a child is `/etc/agent/.messages/agents/NAME/`, so the same code serves
+  root and agents. It has no loop, no inbox and no owner. The daemon reaches
+  `/etc/agent` through a helper running as root, its own user there.
 - Discovery: a control directory is a real directory (not a symlink) owned by
-  the parent's user (root for `/etc/agent/agents/`) that either holds a
-  regular `config.json` (not yet admitted) or is recorded in `pool.json`
-  (admitted). Identity still includes the directory's device and inode, so
-  removing and recreating a directory between polls admits a new agent.
+  the parent's user (root for `/etc/agent/agents/`) that holds a regular
+  `config.json` (not yet admitted) or a `home` symlink and a `pool.json`
+  record (admitted, for example after a daemon restart). A `config.json` that
+  appears in an admitted agent's control directory is ignored: the child's
+  config is its own. Identity still includes the directory's device and
+  inode, so removing and recreating a directory between polls admits a new
+  agent.
 - Groups are unchanged in principle: each agent's ancestors (excluding root,
   which needs none) are members of its group.
 
@@ -73,8 +81,8 @@ an agent could create by hand, and the daemon's poll does the rest.
 
 ## Messages and logs
 
-- Root's messages to a child go through a root-owned spool
-  `/var/lib/agent/spool/NAME/` and are delivered like any parent's: to the
+- Root's messages to a child go through root's spool
+  `/etc/agent/.messages/agents/NAME/` (root-owned) and are delivered like any parent's: to the
   child's inbox as `<time>-owner.md`, recorded in `delivered.jsonl` with
   sender `owner`, appended to the child's conversation log.
 - A top-level agent's `agent message` is appended to its conversation log and
@@ -117,7 +125,8 @@ Every guarantee in `philosophy.md` holds for every agent.
   collected with the rest of the inbox in the same run. No run is started for
   notes alone.
 - At admission `notes` is the running version: the seed README already
-  describes current behaviour.
+  describes current behaviour. An assignment without `notes` has nothing to
+  catch up on.
 - `/var/lib/agent/version` remains, recording the installed version for
   `install.sh`; it no longer drives delivery. Development builds deliver
   nothing.
@@ -173,7 +182,7 @@ below); `install.sh` creates other missing pool users only after the rename.
      (`home/agent` becomes `main`); add `main` assigned to `agent-M`; set
      every assignment's `notes` to the version being upgraded from.
    - Move undelivered files from `/var/lib/agent/owner/` to
-     `/var/lib/agent/spool/main/`.
+     `/etc/agent/.messages/agents/main/`.
    - Delete `/etc/sudoers.d/agent`.
    - Remove the marker.
 5. **Start.** The daemon repairs `~/journal` links, recomputes group
