@@ -661,7 +661,8 @@ and can be removed once no installation predates it.
    the previous version is restored. Once files have moved (exit status 2,
    or an earlier run's marker `/var/lib/agent/migrating` remains), the
    previous version never runs again: the new binary stays, the agent stays
-   stopped, and rerunning `install.sh` finishes the migration. The backup,
+   stopped (the daemon refuses to start while the marker exists, even after
+   a reboot), and rerunning `install.sh` finishes the migration. The backup,
    of the untouched tree, is taken only by the first run and stays.
 2. For each legacy subagent directory (one containing `inbox/`), parents
    before children: assign a pool user; move everything except

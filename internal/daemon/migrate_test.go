@@ -1,11 +1,13 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 const replayConfig = `{"provider":"replay","model":"replay-1"}`
@@ -427,5 +429,30 @@ func TestMigrateSkipsLinkedAgentsOfMigratedSubagent(t *testing.T) {
 	}
 	if got := readFile(t, filepath.Join(h.cfg.PoolHome("agent-1"), "TASK.md")); got != "keep me" {
 		t.Fatalf("TASK.md %q", got)
+	}
+}
+
+// TestDaemonRefusesUnfinishedMigration: while install.sh's marker says a
+// migration stopped part way, the daemon does not start; admitting the
+// unfinished subagents would strand the files still in their control
+// directories.
+func TestDaemonRefusesUnfinishedMigration(t *testing.T) {
+	h := newHarness(t)
+	legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+	legacyAgent(t, legacy, map[string]string{"TASK.md": "keep me"})
+	if err := os.WriteFile(h.cfg.MigratingFile(), []byte("/var/backups/x.tgz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err := Run(ctx, h.cfg)
+	if err == nil || !strings.Contains(err.Error(), h.cfg.MigratingFile()) || !strings.Contains(err.Error(), "rerun install.sh") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(legacy, "home")); !os.IsNotExist(err) {
+		t.Fatal("subagent admitted:", err)
+	}
+	if names := dirNames(t, legacy); strings.Join(names, " ") != "TASK.md config.json inbox" {
+		t.Fatalf("legacy directory holds %v", names)
 	}
 }

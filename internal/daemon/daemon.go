@@ -5,6 +5,8 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io/fs"
 	"log"
 	"os"
 	"os/user"
@@ -112,6 +114,13 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
+	// Admitting subagents whose migration stopped part way would strand the
+	// files still in their control directories; install.sh finishes it.
+	if _, err := os.Lstat(cfg.MigratingFile()); err == nil {
+		return fmt.Errorf("not starting: %s marks an unfinished migration of subagents; rerun install.sh to finish it", cfg.MigratingFile())
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
+	}
 	syscall.Umask(0o022)
 	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())

@@ -19,6 +19,9 @@ SHA_agent_linux_arm64=cacdfe78caaba50f0bed3a3ab41cad18c10aa478542978f952ebcde692
 
 ROLLBACK=no
 MIGRATED=no
+# Marks a migration of subagents that stopped part way; the daemon refuses to
+# start while it exists (layout.MigratingFile).
+MIGRATING=/var/lib/agent/migrating
 
 # finish cleans up, and restores the previous binary and service if an
 # upgrade failed after it was stopped. Once subagents have been migrated,
@@ -112,7 +115,7 @@ main() {
 	fi
 	# An earlier run migrated subagents part way: the previous release must
 	# never run on them again, whatever fails now.
-	if [ -e /var/lib/agent/migrating ]; then
+	if [ -e "$MIGRATING" ]; then
 		ROLLBACK=no
 		MIGRATED=yes
 	fi
@@ -168,7 +171,7 @@ main() {
 		if [ -d "$dir" ] && [ ! -L "${dir%/inbox}/home" ]; then legacy=yes; fi
 	done
 	if [ "$legacy" = yes ]; then
-		marker=/var/lib/agent/migrating
+		marker=$MIGRATING
 		if [ ! -e "$marker" ]; then
 			mkdir -p /var/backups
 			backup=/var/backups/agent-subagents-$(date -u +%Y%m%dT%H%M%SZ).tgz
@@ -199,8 +202,8 @@ main() {
 			die "the migration stopped part way; the backup of /home/agent/agents from before it is $backup"
 			;;
 		esac
-	elif [ -e /var/lib/agent/migrating ]; then
-		rm -f /var/lib/agent/migrating # no legacy subagent is left
+	elif [ -e "$MIGRATING" ]; then
+		rm -f "$MIGRATING" # no legacy subagent is left
 	fi
 
 	configured=no
@@ -266,6 +269,9 @@ UNIT
 	fi
 
 	systemctl daemon-reload
+	# A daemon refusing to start during an unfinished migration may have hit
+	# systemd's start limit.
+	systemctl reset-failed agent 2>/dev/null || true
 	systemctl enable --now agent
 	ROLLBACK=no
 
