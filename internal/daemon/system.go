@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -25,11 +26,18 @@ type System interface {
 	// StopProcesses ends the user's systemd instance and every process it owns.
 	StopProcesses(user string) error
 	RemoveCrontab(user string) error
+	// RenameUser renames user old and its group to new, keeping their ids,
+	// and makes home its home directory. A rerun finishes a rename that
+	// stopped part way.
+	RenameUser(old, new, home string) error
+	// RenameCrontab gives old's crontab, if it has one, to new.
+	RenameCrontab(old, new string) error
 }
 
 type execSystem struct {
-	run    func(name string, args ...string) ([]byte, error)
-	lookup func(string) (*syscall.Credential, error)
+	run      func(name string, args ...string) ([]byte, error)
+	lookup   func(string) (*syscall.Credential, error)
+	crontabs string // cron's spool of user crontabs
 }
 
 func newExecSystem() System {
@@ -37,7 +45,8 @@ func newExecSystem() System {
 		run: func(name string, args ...string) ([]byte, error) {
 			return exec.Command(name, args...).CombinedOutput()
 		},
-		lookup: osuser.Lookup,
+		lookup:   osuser.Lookup,
+		crontabs: "/var/spool/cron/crontabs",
 	}
 }
 
@@ -117,6 +126,78 @@ func (s *execSystem) RemoveCrontab(user string) error {
 		return fmt.Errorf("crontab -r -u %s: %v: %s", user, err, strings.TrimSpace(string(out)))
 	}
 	return nil
+}
+
+// RenameUser skips each part already done: usermod refuses to change a user
+// whose processes run, as the renamed user's do once it lingers again. A
+// user or group already named new stops it before anything changes.
+func (s *execSystem) RenameUser(old, new, home string) error {
+	if _, err := s.lookup(old); err == nil {
+		if _, err := s.lookup(new); err == nil {
+			return fmt.Errorf("users %s and %s both exist", old, new)
+		}
+		group, err := s.getent("group", new)
+		if err != nil {
+			return err
+		}
+		if group != "" {
+			return fmt.Errorf("group %s already exists", new)
+		}
+		if err := s.do("usermod", "-l", new, old); err != nil {
+			return err
+		}
+	}
+	group, err := s.getent("group", old)
+	if err != nil {
+		return err
+	}
+	if group != "" {
+		if err := s.do("groupmod", "-n", new, old); err != nil {
+			return err
+		}
+	}
+	entry, err := s.getent("passwd", new)
+	if err != nil {
+		return err
+	}
+	if entry == "" {
+		return fmt.Errorf("no such user %q", new)
+	}
+	if fields := strings.Split(entry, ":"); len(fields) > 5 && fields[5] == home {
+		return nil
+	}
+	return s.do("usermod", "-d", home, new)
+}
+
+// getent returns key's entry in database, or "" when it has none.
+func (s *execSystem) getent(database, key string) (string, error) {
+	out, err := s.run("getent", database, key)
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 2 {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("getent %s %s: %v: %s", database, key, err, strings.TrimSpace(string(out)))
+	}
+	line, _, _ := strings.Cut(string(out), "\n")
+	return line, nil
+}
+
+// RenameCrontab renames the crontab file, which cron reads by user name;
+// its owner is the uid, which the rename keeps. It never replaces one.
+func (s *execSystem) RenameCrontab(old, new string) error {
+	from, to := filepath.Join(s.crontabs, old), filepath.Join(s.crontabs, new)
+	if _, err := os.Lstat(from); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	if _, err := os.Lstat(to); err == nil {
+		return fmt.Errorf("%s and %s both exist", from, to)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return os.Rename(from, to)
 }
 
 func (s *execSystem) do(name string, args ...string) error {

@@ -25,6 +25,9 @@ jobs:
           for n in 1 2 3; do
             sudo useradd --system --no-create-home --user-group agent-test-$n
           done
+          # The migration test renames it to the first free pool user,
+          # agent-test-4, which must not exist.
+          sudo useradd --system --no-create-home --user-group agent-test-main
           sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
       - name: Reproducible release build
         run: sh scripts/release_test.sh

@@ -2,8 +2,11 @@ package daemon
 
 import (
 	"errors"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -131,5 +134,125 @@ func TestExecSystemStopProcessesGivesUp(t *testing.T) {
 	}
 	if err := s.StopProcesses("agent-3"); err == nil {
 		t.Fatal("expected an error when processes survive")
+	}
+}
+
+// fakeAccounts is a passwd and group database behind getent, usermod and
+// groupmod, for the real System's commands.
+type fakeAccounts struct {
+	t      *testing.T
+	homes  map[string]string // user → home
+	groups map[string]bool
+	calls  []string // the commands that change something
+}
+
+func (a *fakeAccounts) system() *execSystem {
+	return &execSystem{run: a.run, lookup: func(name string) (*syscall.Credential, error) {
+		if _, ok := a.homes[name]; ok {
+			return &syscall.Credential{Uid: 1001}, nil
+		}
+		return nil, errors.New("unknown user " + name)
+	}}
+}
+
+func (a *fakeAccounts) run(name string, args ...string) ([]byte, error) {
+	notFound := func() ([]byte, error) {
+		err := exec.Command("sh", "-c", "exit 2").Run()
+		return nil, err
+	}
+	switch cmd := name + " " + strings.Join(args[:len(args)-1], " "); {
+	case cmd == "getent passwd":
+		home, ok := a.homes[args[1]]
+		if !ok {
+			return notFound()
+		}
+		return []byte(args[1] + ":x:1001:1001::" + home + ":/bin/bash\n"), nil
+	case cmd == "getent group":
+		if !a.groups[args[1]] {
+			return notFound()
+		}
+		return []byte(args[1] + ":x:1001:\n"), nil
+	case strings.HasPrefix(cmd, "usermod -l "):
+		a.homes[args[1]] = a.homes[args[2]]
+		delete(a.homes, args[2])
+	case strings.HasPrefix(cmd, "groupmod -n "):
+		a.groups[args[1]] = true
+		delete(a.groups, args[2])
+	case strings.HasPrefix(cmd, "usermod -d "):
+		a.homes[args[2]] = args[1]
+	default:
+		a.t.Fatalf("unexpected command %s %q", name, args)
+	}
+	a.calls = append(a.calls, name+" "+strings.Join(args, " "))
+	return nil, nil
+}
+
+func TestExecSystemRenameUser(t *testing.T) {
+	a := &fakeAccounts{t: t, homes: map[string]string{"agent": "/home/agent"}, groups: map[string]bool{"agent": true}}
+	s := a.system()
+	if err := s.RenameUser("agent", "agent-16", "/home/agent-16"); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"usermod -l agent-16 agent", "groupmod -n agent-16 agent", "usermod -d /home/agent-16 agent-16"}
+	if !reflect.DeepEqual(a.calls, want) {
+		t.Fatal(a.calls)
+	}
+	if a.homes["agent-16"] != "/home/agent-16" || !a.groups["agent-16"] || a.groups["agent"] {
+		t.Fatal(a.homes, a.groups)
+	}
+	// Done: nothing runs again. usermod refuses to touch a user whose
+	// processes run, as the renamed user's do once it lingers again.
+	a.calls = nil
+	if err := s.RenameUser("agent", "agent-16", "/home/agent-16"); err != nil || a.calls != nil {
+		t.Fatal(err, a.calls)
+	}
+	// Stopped after renaming the user: the rest is finished.
+	a = &fakeAccounts{t: t, homes: map[string]string{"agent-16": "/home/agent"}, groups: map[string]bool{"agent": true}}
+	if err := a.system().RenameUser("agent", "agent-16", "/home/agent-16"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"groupmod -n agent-16 agent", "usermod -d /home/agent-16 agent-16"}; !reflect.DeepEqual(a.calls, want) {
+		t.Fatal(a.calls)
+	}
+	// A user or group already named new: nothing is changed.
+	for _, a := range []*fakeAccounts{
+		{t: t, homes: map[string]string{"agent": "/home/agent", "agent-16": "/x"}, groups: map[string]bool{"agent": true}},
+		{t: t, homes: map[string]string{"agent": "/home/agent"}, groups: map[string]bool{"agent": true, "agent-16": true}},
+	} {
+		if err := a.system().RenameUser("agent", "agent-16", "/home/agent-16"); err == nil || a.calls != nil {
+			t.Fatal(err, a.calls)
+		}
+	}
+	// Neither user exists.
+	a = &fakeAccounts{t: t, homes: map[string]string{}, groups: map[string]bool{}}
+	if err := a.system().RenameUser("agent", "agent-16", "/home/agent-16"); err == nil {
+		t.Fatal("renamed a missing user")
+	}
+}
+
+func TestExecSystemRenameCrontab(t *testing.T) {
+	dir := t.TempDir()
+	s := &execSystem{crontabs: dir}
+	old, new := filepath.Join(dir, "agent"), filepath.Join(dir, "agent-16")
+	if err := s.RenameCrontab("agent", "agent-16"); err != nil {
+		t.Fatalf("no crontab: %v", err)
+	}
+	os.WriteFile(old, []byte("* * * * * true\n"), 0o600)
+	if err := s.RenameCrontab("agent", "agent-16"); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(new); err != nil || string(data) != "* * * * * true\n" {
+		t.Fatal(string(data), err)
+	}
+	if err := s.RenameCrontab("agent", "agent-16"); err != nil {
+		t.Fatalf("already renamed: %v", err)
+	}
+	// Both: neither is replaced.
+	os.WriteFile(old, []byte("old\n"), 0o600)
+	if err := s.RenameCrontab("agent", "agent-16"); err == nil {
+		t.Fatal("replaced a crontab")
+	}
+	if data, _ := os.ReadFile(new); string(data) != "* * * * * true\n" {
+		t.Fatal(string(data))
 	}
 }

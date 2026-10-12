@@ -48,9 +48,14 @@ func PoolUsers(maxAgents int) []string {
 	return users
 }
 
-// MigratingFile marks a migration of subagents that stopped part way:
+// MigratingFile marks an upgrade's migration that has not finished:
 // install.sh writes it, and the daemon does not start while it exists.
 func (l Layout) MigratingFile() string { return filepath.Join(l.Lib, "migrating") }
+
+// MigratingUserFile records the pool user an upgrade from 0.3 is renaming
+// the main agent's user to, from before its first change until it is done,
+// so a rerun finishes with the same user.
+func (l Layout) MigratingUserFile() string { return filepath.Join(l.Lib, "migrating-user") }
 
 // VersionFile records the last version whose release notes the agent got.
 func (l Layout) VersionFile() string { return filepath.Join(l.Lib, "version") }

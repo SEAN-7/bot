@@ -35,6 +35,8 @@ type Config struct {
 	PoolUsers  []string                                  // agent users; nil = the max_agents pool users that exist
 	LookupUser func(string) (*syscall.Credential, error) // resolves user names; osuser.Lookup by default
 	TmpDirs    []string                                  // shared directories swept when a user is reclaimed
+	LegacyUser string                                    // the main agent's user before 0.4.0, which Migrate renames
+	SudoersDir string                                    // where 0.3 granted LegacyUser sudo
 
 	Poll           time.Duration
 	CommandTimeout time.Duration
@@ -62,6 +64,8 @@ func DefaultConfig(self string) Config {
 		System:         newExecSystem(),
 		LookupUser:     osuser.Lookup,
 		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
+		LegacyUser:     "agent",
+		SudoersDir:     "/etc/sudoers.d",
 		Poll:           time.Second,
 		CommandTimeout: 120 * time.Second,
 		RetryBase:      2 * time.Second,
@@ -120,10 +124,10 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	// Admitting subagents whose migration stopped part way would strand the
-	// files still in their control directories; install.sh finishes it.
+	// On a tree an upgrade migrated part way, the daemon would take agents
+	// for removed and reclaim their users; install.sh finishes it.
 	if _, err := os.Lstat(cfg.MigratingFile()); err == nil {
-		return fmt.Errorf("not starting: %s marks an unfinished migration of subagents; rerun install.sh to finish it", cfg.MigratingFile())
+		return fmt.Errorf("not starting: %s marks an unfinished migration; rerun install.sh to finish it", cfg.MigratingFile())
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
 	}

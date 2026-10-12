@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -191,39 +190,12 @@ func (p *pool) commit(next map[string]poolEntry) error {
 	return nil
 }
 
-// save writes the entries through a temp file, synced before the rename and
-// followed by a directory sync, so a crash never leaves a torn or lost file.
+// save writes the entries with replaceFile, so a crash never leaves a torn
+// or lost file.
 func (p *pool) save(m map[string]poolEntry) error {
 	data, err := json.Marshal(sortedEntries(m))
 	if err != nil {
 		return err
 	}
-	dir := filepath.Dir(p.path)
-	tmp, err := os.CreateTemp(dir, ".pool-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	_, werr := tmp.Write(data)
-	if werr == nil {
-		werr = tmp.Chmod(0o600)
-	}
-	if werr == nil {
-		werr = tmp.Sync()
-	}
-	if cerr := tmp.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		return werr
-	}
-	if err := os.Rename(tmp.Name(), p.path); err != nil {
-		return err
-	}
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return replaceFile(p.path, data, 0o600)
 }

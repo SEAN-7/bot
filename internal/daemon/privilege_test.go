@@ -784,3 +784,104 @@ func TestPrivilegeRootSpoolPrivate(t *testing.T) {
 		}
 	}
 }
+
+// A 0.3 main agent's user becomes the first free pool user in place: the
+// same uid and gid, its home moved with a root-owned link at the old path,
+// its crontab renamed, and its journal link repointed by a helper running
+// as the renamed user.
+func TestPrivilegeMigrateRenamesUser(t *testing.T) {
+	h, _ := rootHarness(t)
+	const legacy, target = "agent-test-main", "agent-test-4"
+	if _, err := user.Lookup(target); err == nil {
+		t.Fatalf("%s must not exist", target)
+	}
+	uid, gid := lookupIDs(t, legacy)
+	cfg := h.cfg
+	cfg.LegacyUser = legacy
+	cfg.PoolUsers = append(append([]string(nil), h.cfg.PoolUsers...), target)
+	cfg.SudoersDir = filepath.Join(h.root, "sudoers.d")
+	old, home := filepath.Join(cfg.Homes, legacy), cfg.PoolHome(target)
+	oldLog := filepath.Join(cfg.Log, "home", legacy)
+
+	// The home, journals and crontab as 0.3 left them.
+	for dir, owner := range map[string]int{old: uid, oldLog: 0} {
+		if err := os.MkdirAll(dir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		os.Chown(dir, owner, gid)
+	}
+	for _, name := range []string{"notes.txt", "ERROR"} {
+		path := filepath.Join(old, name)
+		os.WriteFile(path, []byte(name), 0o644)
+		os.Chown(path, uid, gid)
+	}
+	os.Symlink(oldLog, filepath.Join(old, "journal"))
+	os.Lchown(filepath.Join(old, "journal"), uid, gid)
+	crontab := exec.Command("crontab", "-u", legacy, "-")
+	crontab.Stdin = strings.NewReader("* * * * * cd $HOME && true\n")
+	if out, err := crontab.CombinedOutput(); err != nil {
+		t.Fatalf("crontab: %v: %s", err, out)
+	}
+	// Put the user back as the test found it, for the next run.
+	t.Cleanup(func() {
+		if _, err := user.Lookup(target); err != nil {
+			return
+		}
+		cfg.System.DisableLinger(target)
+		cfg.System.StopProcesses(target)
+		for _, args := range [][]string{
+			{"crontab", "-r", "-u", target},
+			{"usermod", "-l", legacy, target},
+			{"groupmod", "-n", legacy, target},
+			{"usermod", "-d", "/home/" + legacy, legacy},
+		} {
+			if out, err := exec.Command(args[0], args[1:]...).CombinedOutput(); err != nil {
+				t.Logf("cleanup %q: %v: %s", args, err, out)
+			}
+		}
+	})
+
+	if err := Migrate(cfg); err != nil {
+		t.Fatal(err)
+	}
+	if u, g := lookupIDs(t, target); u != uid || g != gid {
+		t.Fatalf("%s is %d:%d, was %d:%d", target, u, g, uid, gid)
+	}
+	if _, err := user.Lookup(legacy); err == nil {
+		t.Fatalf("%s still exists", legacy)
+	}
+	if g, err := user.LookupGroup(target); err != nil || g.Gid != strconv.Itoa(gid) {
+		t.Fatalf("group %s: %v %v", target, g, err)
+	}
+	if u, _ := user.Lookup(target); u.HomeDir != home {
+		t.Fatalf("home field %s, want %s", u.HomeDir, home)
+	}
+	statIs(t, home, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
+	if got := readLink(t, old); got != home {
+		t.Fatalf("%s -> %s", old, got)
+	}
+	if owner := ownerName(t, old); owner != "root" {
+		t.Fatalf("%s owned by %s", old, owner)
+	}
+	if !exists(filepath.Join(home, "notes.txt")) || exists(filepath.Join(home, "ERROR")) {
+		t.Fatal("home contents")
+	}
+	journal := filepath.Join(home, "journal")
+	if got := readLink(t, journal); got != cfg.JournalDir("main") {
+		t.Fatalf("journal -> %s", got)
+	}
+	if owner := ownerName(t, journal); owner != target {
+		t.Fatalf("journal link owned by %s", owner)
+	}
+	statIs(t, cfg.JournalDir("main"), 0, gid, fs.ModeDir|0o750)
+	out, err := exec.Command("crontab", "-l", "-u", target).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "cd $HOME && true") {
+		t.Fatalf("crontab of %s: %v: %s", target, err, out)
+	}
+	if exists(filepath.Join("/var/spool/cron/crontabs", legacy)) {
+		t.Fatalf("%s still has a crontab", legacy)
+	}
+	if withSystemd() && (!lingering(target) || lingering(legacy)) {
+		t.Fatal("lingering not moved to the renamed user")
+	}
+}
