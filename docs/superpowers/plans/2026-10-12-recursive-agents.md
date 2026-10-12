@@ -289,7 +289,7 @@ Replaces the 0.3.0 migration (delete it and its tests).
     4. `Etc/agents/main/` (0700); move `Etc/OWNER.md` into it if present; remove `PoolHome(target)/ERROR`.
     5. For each `pool.json` entry: rewrite `Agent` from `<Homes>/<legacy>/agents/x…` to `main/agents/x…`; move its control directory's `config.json` into its home (owner = its user, mode 0644, `O_NOFOLLOW` at every component) unless the home already has one; set `Notes` to the version read from `VersionFile()`.
     6. Add `{User: target, Agent: "main", State: active, Notes: <old version>}`.
-    7. `os.Rename(Log/home/<legacy>, Log/main)`; `os.Rename(Log/messages.jsonl, Log/main/messages.jsonl)`; repoint the `journal` symlink in main's home and in each pool entry's home to `JournalDir(<new id>)` (as root on a root-owned link target is not allowed: write it through a helper running as that home's user, `fsio.Client.Symlink`).
+    7. `os.Rename(Log/home/<legacy>, Log/main)`; `os.Rename(Log/messages.jsonl, Log/main/messages.jsonl)`; repoint the `journal` symlink in main's home and in each pool entry's home to `JournalDir(<new id>)`, through a helper running as that home's user (`fsio.Client.Symlink`), since the daemon never writes inside a home as root.
     8. Rewrite `delivered.jsonl` agent fields with the same id mapping (main's old id `<Homes>/<legacy>` → `main`).
     9. Move files from `Lib/owner/` to `RootHome()/.messages/agents/main/`; remove `Lib/owner/`.
     10. Remove `/etc/sudoers.d/<legacy>` (path from `Config.SudoersDir`, default `/etc/sudoers.d`).
