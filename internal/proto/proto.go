@@ -23,13 +23,14 @@ type Tool struct {
 }
 
 // Message is one conversation entry. Roles are "user" (Content), "assistant"
-// (Text, Command, CallID, Opaque) and "tool" (CallID, Content). Opaque is set
-// by the plugin and returned to it unchanged.
+// (Text, Command, Wait, CallID, Opaque) and "tool" (CallID, Content). Opaque
+// is set by the plugin and returned to it unchanged.
 type Message struct {
 	Role    string          `json:"role"`
 	Content string          `json:"content,omitempty"`
 	Text    string          `json:"text,omitempty"`
 	Command *string         `json:"command,omitempty"`
+	Wait    json.RawMessage `json:"wait,omitempty"`
 	CallID  string          `json:"call_id,omitempty"`
 	Opaque  json.RawMessage `json:"opaque,omitempty"`
 }
@@ -66,10 +67,14 @@ type CompleteRequest struct {
 	Messages []Message      `json:"messages"`
 }
 
+// CompleteResponse carries the model's reply. Wait is the sh call's wait
+// argument exactly as the model gave it, absent when it gave none; the daemon
+// interprets it.
 type CompleteResponse struct {
 	Protocol int             `json:"protocol"`
 	Text     string          `json:"text"`
 	Command  *string         `json:"command,omitempty"`
+	Wait     json.RawMessage `json:"wait,omitempty"`
 	Usage    Usage           `json:"usage"`
 	Opaque   json.RawMessage `json:"opaque,omitempty"`
 	Error    *Error          `json:"error,omitempty"`
@@ -108,8 +113,8 @@ type DescribeResponse struct {
 func ShTool() Tool {
 	return Tool{
 		Name:        "sh",
-		Description: "Run a shell command on this machine as your user, in your home directory. Returns combined output and exit status.",
-		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The command to run"}},"required":["command"]}`),
+		Description: "Run a shell command on this machine as your user, in your home directory. Returns combined output and exit status. A command still running after its wait is killed.",
+		InputSchema: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string","description":"The command to run"},"wait":{"type":"integer","description":"Seconds to wait for the command before killing it. Default 120, maximum 600."}},"required":["command"]}`),
 	}
 }
 

@@ -189,10 +189,10 @@ type textBlock struct {
 }
 
 type toolUseBlock struct {
-	Type  string            `json:"type"`
-	ID    string            `json:"id"`
-	Name  string            `json:"name"`
-	Input map[string]string `json:"input"`
+	Type  string         `json:"type"`
+	ID    string         `json:"id"`
+	Name  string         `json:"name"`
+	Input map[string]any `json:"input"`
 }
 
 type toolResultBlock struct {
@@ -421,9 +421,12 @@ func buildMessages(in []proto.Message) ([]apiMessage, error) {
 				blocks = append(blocks, mustJSON(textBlock{Type: "text", Text: m.Text}))
 			}
 			if m.Command != nil {
+				input := map[string]any{"command": *m.Command}
+				if len(m.Wait) > 0 {
+					input["wait"] = m.Wait
+				}
 				blocks = append(blocks, mustJSON(toolUseBlock{
-					Type: "tool_use", ID: m.CallID, Name: "sh",
-					Input: map[string]string{"command": *m.Command},
+					Type: "tool_use", ID: m.CallID, Name: "sh", Input: input,
 				}))
 			}
 			add("assistant", blocks...)
@@ -533,12 +536,13 @@ func parseResponse(data []byte) proto.CompleteResponse {
 				continue
 			}
 			var input struct {
-				Command *string `json:"command"`
+				Command *string         `json:"command"`
+				Wait    json.RawMessage `json:"wait"`
 			}
 			if err := json.Unmarshal(b.Input, &input); err != nil || input.Command == nil {
 				return fail("anthropic: tool_use %s has no string command: %s", b.Name, b.Input)
 			}
-			out.Command = input.Command
+			out.Command, out.Wait = input.Command, input.Wait
 		}
 	}
 	out.Text = strings.Join(texts, "\n\n")

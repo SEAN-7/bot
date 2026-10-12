@@ -11,7 +11,7 @@ const (
 	MsgInterrupted      = "You were interrupted. Resume from TASK.md."
 	MsgResetFmt         = "Context reset. Continue from TASK.md. Previous journal: %s"
 	MsgWarn80           = "Context is 80% full. Save your state to TASK.md and notes now."
-	MsgTimeoutFmt       = "Command timed out after %s; its process group was killed. Run long jobs with systemd-run --user."
+	MsgTimeoutFmt       = "Command timed out after %s; its process group was killed. Give it a longer wait (up to %s), or run it in the background with systemd-run --user."
 	MsgOutputSavedFmt   = "[full output: %s]"
 	MsgInboxClipFmt     = "[file clipped; full file: %s]"
 	MsgGuardFmt         = "Context is over 95%% full at the start of a run (%d of %d tokens); not starting. Reduce README.md, TASK.md or inbox files."

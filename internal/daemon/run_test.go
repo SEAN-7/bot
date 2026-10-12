@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -78,15 +79,63 @@ func TestOutputClipping(t *testing.T) {
 
 func TestCommandTimeout(t *testing.T) {
 	h := newHarness(t, step("sleep 30", 100), done())
-	h.cfg.CommandTimeout = 300 * time.Millisecond
+	h.cfg.CommandWait = 300 * time.Millisecond
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")
 	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
 		t.Fatalf("end %s", end)
 	}
 	tool := h.requests()[1].Messages[2].Content
-	if !strings.HasPrefix(tool, "Command timed out after 300ms") {
+	if !strings.HasPrefix(tool, "Command timed out after 300ms; its process group was killed. Give it a longer wait (up to 3s)") {
 		t.Fatalf("tool %q", tool)
+	}
+}
+
+// The model's wait replaces the default, up to the maximum, and is passed
+// back to the plugin with the rest of the call.
+func TestCommandWait(t *testing.T) {
+	h := newHarness(t, waitStep("sleep 0.5; echo slept", 1, 100), waitStep("sleep 30", 600, 100), done())
+	h.cfg.CommandWait, h.cfg.MaxCommandWait = 100*time.Millisecond, 2*time.Second
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
+		t.Fatalf("end %s", end)
+	}
+	reqs := h.requests()
+	if got := reqs[1].Messages[2].Content; got != "exit status 0\nslept\n" {
+		t.Fatalf("waited command: %q", got)
+	}
+	if got := string(reqs[1].Messages[1].Wait); got != "1" {
+		t.Fatalf("wait sent back to the plugin: %q", got)
+	}
+	if got := reqs[2].Messages[4].Content; !strings.HasPrefix(got, "Command timed out after 2s") {
+		t.Fatalf("capped command: %q", got)
+	}
+}
+
+func TestCommandWaitArgument(t *testing.T) {
+	def, limit := 120*time.Second, 600*time.Second
+	for raw, want := range map[string]time.Duration{
+		``:        def,
+		`30`:      30 * time.Second,
+		`30.9`:    30 * time.Second,
+		`"45"`:    45 * time.Second,
+		`0`:       time.Second,
+		`-5`:      time.Second,
+		`600`:     limit,
+		`99999`:   limit,
+		`1e308`:   limit,
+		`"Inf"`:   limit,
+		`"NaN"`:   def,
+		`"soon"`:  def,
+		`null`:    def,
+		`true`:    def,
+		`[60]`:    def,
+		`{"s":1}`: def,
+	} {
+		if got := commandWait(json.RawMessage(raw), def, limit); got != want {
+			t.Errorf("wait %s: got %v, want %v", raw, got, want)
+		}
 	}
 }
 

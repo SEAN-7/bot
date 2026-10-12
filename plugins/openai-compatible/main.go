@@ -307,8 +307,12 @@ func buildRequest(req proto.CompleteRequest) ([]byte, error) {
 	return json.Marshal(body)
 }
 
-func commandArguments(command string) string {
-	args, _ := json.Marshal(map[string]string{"command": command})
+func commandArguments(command string, wait json.RawMessage) string {
+	v := map[string]any{"command": command}
+	if len(wait) > 0 {
+		v["wait"] = wait
+	}
+	args, _ := json.Marshal(v)
 	return string(args)
 }
 
@@ -329,7 +333,7 @@ func assistantMessage(m proto.Message) (any, error) {
 				"type": "function",
 				"function": map[string]any{
 					"name":      "sh",
-					"arguments": commandArguments(*m.Command),
+					"arguments": commandArguments(*m.Command, m.Wait),
 				},
 			}}
 		}
@@ -357,7 +361,7 @@ func assistantMessage(m proto.Message) (any, error) {
 		// Not a reply this plugin produced; describe the call from the message.
 		calls = []map[string]json.RawMessage{{
 			"type":     json.RawMessage(`"function"`),
-			"function": mustJSON(map[string]string{"name": "sh", "arguments": commandArguments(*m.Command)}),
+			"function": mustJSON(map[string]string{"name": "sh", "arguments": commandArguments(*m.Command, m.Wait)}),
 		}}
 	}
 	call := calls[0]
@@ -404,33 +408,35 @@ func parseResponse(data []byte) proto.CompleteResponse {
 		resp.Text = msg.Refusal
 	}
 	if len(msg.ToolCalls) > 0 {
-		command, err := parseCommand(msg.ToolCalls[0].Function.Arguments)
+		command, wait, err := parseCommand(msg.ToolCalls[0].Function.Arguments)
 		if err != nil {
 			return fail("tool call %s: %v", msg.ToolCalls[0].Function.Name, err)
 		}
-		resp.Command = &command
+		resp.Command, resp.Wait = &command, wait
 	}
 	return resp
 }
 
-// parseCommand reads {"command": "..."} from a tool call's arguments, which
-// are normally a JSON-encoded string but are an object on some servers.
-func parseCommand(raw json.RawMessage) (string, error) {
+// parseCommand reads {"command": "...", "wait": ...} from a tool call's
+// arguments, which are normally a JSON-encoded string but are an object on
+// some servers. The wait is returned as given, or nil.
+func parseCommand(raw json.RawMessage) (string, json.RawMessage, error) {
 	args := []byte(raw)
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		args = []byte(s)
 	}
 	var v struct {
-		Command *string `json:"command"`
+		Command *string         `json:"command"`
+		Wait    json.RawMessage `json:"wait"`
 	}
 	if err := json.Unmarshal(args, &v); err != nil {
-		return "", fmt.Errorf("arguments are not valid JSON: %v: %s", err, clip(string(args), 500))
+		return "", nil, fmt.Errorf("arguments are not valid JSON: %v: %s", err, clip(string(args), 500))
 	}
 	if v.Command == nil {
-		return "", fmt.Errorf("arguments have no command: %s", clip(string(args), 500))
+		return "", nil, fmt.Errorf("arguments have no command: %s", clip(string(args), 500))
 	}
-	return *v.Command, nil
+	return *v.Command, v.Wait, nil
 }
 
 // contentText accepts a string, null, or an array of text parts.

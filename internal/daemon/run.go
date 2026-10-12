@@ -4,11 +4,14 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -207,10 +210,10 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		callID := fmt.Sprintf("call-%d", calls+n)
 		msg := proto.Message{Role: "assistant", Text: resp.Text, CallID: callID, Opaque: resp.Opaque}
 		if resp.Command != nil && strings.TrimSpace(*resp.Command) != "" {
-			msg.Command = resp.Command
+			msg.Command, msg.Wait = resp.Command, resp.Wait
 		}
 		messages = append(messages, msg)
-		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
+		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "wait": msg.Wait, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
 		if used := resp.Usage.Total(); contextTokens > 0 && msg.Command != nil {
 			switch {
 			case used*100 >= 95*contextTokens && n == 1 && fresh:
@@ -237,9 +240,10 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			a.conv = &conversation{cfg: cfg, owner: owner, system: system, messages: messages, calls: calls + n, warned: warned, ended: time.Now(), journal: j.Path()}
 			return "done"
 		}
-		result, runErr := a.command(ctx, *msg.Command)
-		content, saved := a.toolContent(runID, n, result, runErr)
-		j.Record("result", map[string]any{"call_id": callID, "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content, "full_output": saved})
+		wait := commandWait(msg.Wait, d.cfg.CommandWait, d.cfg.MaxCommandWait)
+		result, runErr := a.command(ctx, *msg.Command, wait)
+		content, saved := a.toolContent(runID, n, result, runErr, wait)
+		j.Record("result", map[string]any{"call_id": callID, "wait": seconds(wait), "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content, "full_output": saved})
 		if ctx.Err() != nil {
 			return a.stopReason(ctx)
 		}
@@ -343,15 +347,45 @@ func (a *agent) clearError(prefix string) {
 	}
 }
 
+// commandWait interprets the model's wait argument: seconds as a JSON number
+// or a string holding one, rounded down and kept between 1s and limit.
+// Anything else, including no argument, means def.
+func commandWait(raw json.RawMessage, def, limit time.Duration) time.Duration {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return def
+	}
+	var secs float64
+	switch v := v.(type) {
+	case float64:
+		secs = v
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil {
+			return def
+		}
+		secs = f
+	default:
+		return def
+	}
+	if math.IsNaN(secs) {
+		return def
+	}
+	if secs = math.Max(math.Floor(secs), 1); secs >= limit.Seconds() {
+		return limit
+	}
+	return time.Duration(secs) * time.Second
+}
+
 // command runs one model command in the agent's home as its user, looked up
 // now so that current group memberships apply.
-func (a *agent) command(ctx context.Context, command string) (shell.Result, error) {
+func (a *agent) command(ctx context.Context, command string, wait time.Duration) (shell.Result, error) {
 	cred, err := a.cred()
 	if err != nil {
 		return shell.Result{}, fmt.Errorf("look up user %s: %w", a.userName(), err)
 	}
 	return shell.Run(ctx, command, shell.Options{
-		Dir: a.home, Home: a.home, Env: shell.Env(a.home, a.userName(), credUID(cred)), User: cred, Timeout: a.d.cfg.CommandTimeout,
+		Dir: a.home, Home: a.home, Env: shell.Env(a.home, a.userName(), credUID(cred)), User: cred, Timeout: wait,
 	})
 }
 
@@ -363,14 +397,14 @@ func seconds(d time.Duration) string {
 }
 
 // toolContent formats a command result, saving clipped output in full.
-func (a *agent) toolContent(runID string, n int, r shell.Result, err error) (string, string) {
+func (a *agent) toolContent(runID string, n int, r shell.Result, err error, wait time.Duration) (string, string) {
 	if err != nil {
 		return "could not run command: " + err.Error(), ""
 	}
 	output, clipped := shell.Clip(r.Output, a.d.cfg.OutputClip)
 	var content string
 	if r.TimedOut {
-		content = fmt.Sprintf(MsgTimeoutFmt, seconds(a.d.cfg.CommandTimeout)) + "\n" + output
+		content = fmt.Sprintf(MsgTimeoutFmt, seconds(wait), seconds(a.d.cfg.MaxCommandWait)) + "\n" + output
 	} else {
 		content = fmt.Sprintf("exit status %d\n%s", r.ExitCode, output)
 	}

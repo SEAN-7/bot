@@ -471,3 +471,30 @@ func TestContextOverflowKind(t *testing.T) {
 		t.Fatalf("other 400 marked as overflow: %+v", r.Error)
 	}
 }
+
+// The sh call's wait argument passes through unchanged in both directions,
+// and a call without one is rebuilt exactly as before wait existed.
+func TestWaitArgument(t *testing.T) {
+	f := newFake(t, 200, `{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[{"id":"x","type":"function","function":{"name":"sh","arguments":"{\"command\":\"make\",\"wait\":600}"}}]}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+	req := baseRequest()
+	req.Messages = append(req.Messages,
+		proto.Message{Role: "assistant", Command: strp("make"), Wait: json.RawMessage(`600`), CallID: "c1"},
+		proto.Message{Role: "tool", CallID: "c1", Content: "ok"},
+		proto.Message{Role: "assistant", Command: strp("ls"), CallID: "c2"},
+		proto.Message{Role: "tool", CallID: "c2", Content: "ok"},
+	)
+	resp := handlerFor(f).Complete(context.Background(), req)
+	if resp.Error != nil || resp.Command == nil || *resp.Command != "make" || string(resp.Wait) != "600" {
+		t.Fatalf("response %+v", resp)
+	}
+	msgs := messagesOf(t, f.bodies[0])
+	args := func(m map[string]any) any {
+		return m["tool_calls"].([]any)[0].(map[string]any)["function"].(map[string]any)["arguments"]
+	}
+	if got := args(msgs[2]); got != `{"command":"make","wait":600}` {
+		t.Errorf("arguments with wait = %v", got)
+	}
+	if got := args(msgs[4]); got != `{"command":"ls"}` {
+		t.Errorf("arguments without wait = %v", got)
+	}
+}

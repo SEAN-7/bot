@@ -72,6 +72,12 @@ func step(command string, totalTokens int) string {
 	return string(line)
 }
 
+// waitStep is a step whose sh call also gives a wait argument.
+func waitStep(command string, wait any, totalTokens int) string {
+	line, _ := json.Marshal(map[string]any{"command": command, "wait": wait, "usage": map[string]int{"input_tokens": totalTokens}})
+	return string(line)
+}
+
 func matchStep(match, command string, totalTokens int) string {
 	line, _ := json.Marshal(map[string]any{"match": match, "command": command, "usage": map[string]int{"input_tokens": totalTokens}})
 	return string(line)
@@ -113,7 +119,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg.System = &fakeSystem{}
 	h.cfg.TmpDirs = []string{tmp}
 	h.cfg.Poll = 10 * time.Millisecond
-	h.cfg.CommandTimeout = 2 * time.Second
+	h.cfg.CommandWait, h.cfg.MaxCommandWait = 2*time.Second, 3*time.Second
 	h.cfg.RetryBase, h.cfg.RetryMax = 10*time.Millisecond, 50*time.Millisecond
 	h.cfg.DrainTimeout = 2 * time.Second
 	h.cfg.Logger = log.New(io.MultiWriter(h.logs, testWriter{t}), "", 0)

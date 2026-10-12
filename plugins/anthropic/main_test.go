@@ -469,3 +469,30 @@ func TestCacheMarkersCappedWithManySystemBlocks(t *testing.T) {
 		t.Fatal("last system block lost its breakpoint")
 	}
 }
+
+// The sh call's wait argument passes through unchanged in both directions,
+// and a call without one is rebuilt exactly as before wait existed.
+func TestWaitArgument(t *testing.T) {
+	api := &fakeAPI{status: 200, body: `{"type":"message","role":"assistant","content":[
+		{"type":"tool_use","id":"toolu_1","name":"sh","input":{"command":"make","wait":600}}
+	],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`}
+	srv := api.serve(t)
+	resp := complete(t, newHandler(srv), proto.CompleteRequest{
+		Messages: []proto.Message{
+			{Role: "user", Content: "go"},
+			{Role: "assistant", Command: strp("make"), Wait: json.RawMessage(`600`), CallID: "c1"},
+			{Role: "tool", CallID: "c1", Content: "ok"},
+			{Role: "assistant", Command: strp("ls"), CallID: "c2"},
+			{Role: "tool", CallID: "c2", Content: "ok"},
+		},
+	})
+	if resp.Error != nil || resp.Command == nil || *resp.Command != "make" || string(resp.Wait) != "600" {
+		t.Fatalf("response %+v", resp)
+	}
+	raw := string(api.requests[0].raw)
+	for _, want := range []string{`"input":{"command":"make","wait":600}`, `"input":{"command":"ls"}`} {
+		if !strings.Contains(raw, want) {
+			t.Errorf("request lacks %s: %s", want, raw)
+		}
+	}
+}

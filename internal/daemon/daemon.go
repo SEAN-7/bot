@@ -39,7 +39,8 @@ type Config struct {
 	SudoersDir string                                    // where 0.3 granted LegacyUser sudo
 
 	Poll           time.Duration
-	CommandTimeout time.Duration
+	CommandWait    time.Duration // how long a command runs when the model gives no wait
+	MaxCommandWait time.Duration // the longest wait the model can ask for
 	RetryBase      time.Duration
 	RetryMax       time.Duration
 	ErrorAfter     int
@@ -67,7 +68,8 @@ func DefaultConfig(self string) Config {
 		LegacyUser:     "agent",
 		SudoersDir:     "/etc/sudoers.d",
 		Poll:           time.Second,
-		CommandTimeout: 120 * time.Second,
+		CommandWait:    120 * time.Second,
+		MaxCommandWait: 600 * time.Second,
 		RetryBase:      2 * time.Second,
 		RetryMax:       10 * time.Minute,
 		ErrorAfter:     3,

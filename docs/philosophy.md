@@ -17,8 +17,9 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## What the harness guarantees
 
-- Commands run as the agent's own unprivileged user, with a timeout that
-  kills the whole process group.
+- Commands run as the agent's own unprivileged user, with a time limit the
+  agent chooses per command (up to 10 minutes) that kills the whole process
+  group.
 - Every agent has one owner: the human for the main agent, its parent for a
   subagent. Messages between them are labelled with their sender; nothing an
   agent writes can carry another's label.

@@ -267,14 +267,31 @@ a dot.
 - After each step, new inbox files (collected the same way) are appended as a
   user message after the command result.
 
-**Steps.** Call the model with the single tool `sh(command)`.
-- A reply with a command: run it with a 120-second timeout. On timeout, kill
-  the process group with SIGKILL and say so, suggesting `systemd-run --user`
-  for long jobs. Combined stdout and stderr plus the exit status are returned.
+**Steps.** Call the model with the single tool `sh(command, wait)` (see The
+sh tool).
+- A reply with a command: run it for up to `wait` seconds. The model's
+  `wait` is rounded down and kept within 1–600; a missing `wait`, or one that
+  is neither a number nor a string holding one, means 120. When the time is
+  up, kill the process group with SIGKILL and say so, suggesting a longer
+  wait or `systemd-run --user`. Combined stdout and stderr plus the exit
+  status are returned.
   Output over 16 KiB is clipped to its first and last 8 KiB, and the full text
   is saved to `~/.outputs/<run>-<step>.txt` (through the helper) with the path
   included in the result.
 - A reply with no command ends the run (`reason: "done"`).
+
+**The sh tool** (verbatim; it is part of every agent's cached prefix, so it
+changes rarely and deliberately):
+- Description: "Run a shell command on this machine as your user, in your
+  home directory. Returns combined output and exit status. A command still
+  running after its wait is killed."
+- Parameters: `command` (string, required: "The command to run") and `wait`
+  (integer: "Seconds to wait for the command before killing it. Default 120,
+  maximum 600.").
+
+The harness does nothing else for long or interactive commands: an agent
+starts what should outlive its wait with `systemd-run --user` (output in
+`journalctl --user`) and drives interactive programs through `tmux`.
 
 **Continuation.** A run that ends with a reply without a command keeps its
 conversation in memory. The next run continues it (the new inbox records are
@@ -483,11 +500,15 @@ service log. Every request and response carries `"protocol": 1`.
   plugins can place cache markers), `tools` (the `sh` definition with its
   JSON Schema), and `messages`:
   - `{role: "user", content}`
-  - `{role: "assistant", text, command, call_id, opaque}`
+  - `{role: "assistant", text, command, wait, call_id, opaque}`
   - `{role: "tool", call_id, content}`
-- Response: `{text, command, usage: {input_tokens, output_tokens,
+- Response: `{text, command, wait, usage: {input_tokens, output_tokens,
   cache_read_tokens, cache_write_tokens}, opaque}`, or `{error: {message,
-  kind}}`. `kind` is optional; `"context_overflow"` means the request exceeds
+  kind}}`. `wait` is the `sh` call's `wait` argument exactly as the model
+  gave it, absent when it gave none; the plugin passes it between the
+  provider's tool input and the protocol unchanged, and the daemon
+  interprets it. A plugin that predates it leaves it out, which means the
+  default. `kind` is optional; `"context_overflow"` means the request exceeds
   the model's context window. The daemon does not retry it: it ends the run
   with a reset note, or applies the first-call guard on a run's first call.
   The daemon assigns `call_id`. The plugin may set `opaque` on its response.
@@ -549,7 +570,11 @@ relative to `/home/agent/agents`.
 - `README.md`: the suggestions from the brief, written as advice the agent
   may revise: memory, task state, stopping, messages and subagents. The same
   seed goes into every agent's home. It adds:
-  - long-running jobs go through `systemd-run --user`;
+  - commands are killed after 120 seconds, or after their `wait` (up to
+    600); longer jobs and anything meant to keep running, such as servers,
+    go through `systemd-run --user`, with their output in
+    `journalctl --user -u NAME`, and can tell the agent they finished by
+    writing a file to its inbox; interactive programs work through `tmux`;
   - inbox records labelled `"from": "owner"` are verified messages from the
     agent's owner, and `"from": "agents/NAME"` from its child NAME;
   - `agent message` reaches the owner, permanently;
@@ -606,7 +631,8 @@ the release.
 Using the replay plugin:
 - a basic run
 - output clipping
-- command timeout
+- command timeout, and the model's `wait`: it replaces the default, is
+  capped at the maximum, and is passed back to the plugin unchanged
 - mid-run inbox delivery
 - the 80% warning
 - the 95% reset, and the first-call guard

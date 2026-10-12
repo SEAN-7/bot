@@ -1,7 +1,7 @@
 // Command replay is a scripted provider plugin for tests.
 //
 // REPLAY_SCRIPT is JSONL: a header {"models":[...]} followed by one step per
-// line: {"match","text","command","usage","opaque","error"}. Each complete
+// line: {"match","text","command","wait","usage","opaque","error"}. Each complete
 // request consumes the first unconsumed step whose match is empty or appears
 // in the request. REPLAY_LOG records {"index","request"} per call; a step is
 // consumed once its index is in the log. With no step left, the reply has no
@@ -24,6 +24,7 @@ type step struct {
 	Match   string          `json:"match"`
 	Text    string          `json:"text"`
 	Command *string         `json:"command"`
+	Wait    json.RawMessage `json:"wait"`
 	Usage   proto.Usage     `json:"usage"`
 	Opaque  json.RawMessage `json:"opaque"`
 	Error   string          `json:"error"`
@@ -140,5 +141,5 @@ func (handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.Co
 	if s.Error != "" {
 		return proto.CompleteResponse{Error: &proto.Error{Message: s.Error, Kind: s.Kind}}
 	}
-	return proto.CompleteResponse{Text: s.Text, Command: s.Command, Usage: s.Usage, Opaque: s.Opaque}
+	return proto.CompleteResponse{Text: s.Text, Command: s.Command, Wait: s.Wait, Usage: s.Usage, Opaque: s.Opaque}
 }

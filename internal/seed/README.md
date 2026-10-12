@@ -33,10 +33,17 @@ yours to revise: edit this file as you learn what works.
   are waiting on a reply or a background job.
 - Never poll. To check back later, schedule a wake-up (a cron entry that
   writes a file into ~/inbox) and stop.
-- Commands time out after 120 seconds. Run long jobs in the background with
-  systemd-run --user (for example `systemd-run --user --unit=myjob ./job.sh`);
-  such jobs keep running across harness restarts. Have them write a file to
-  your inbox when they finish.
+- Each command is killed after 120 seconds, or after `wait` seconds if you
+  give one (up to 600). Raise it for a command you expect to be slow.
+- Run longer jobs, and anything meant to keep running such as servers, in
+  the background with systemd-run --user (for example
+  `systemd-run --user --unit=myjob ./job.sh`); such jobs keep running across
+  harness restarts. Read their output with `journalctl --user -u myjob`, and
+  have them write a file to your inbox when they finish. Python and some
+  other programs hold back output that is not going to a terminal; set
+  PYTHONUNBUFFERED=1 or use `stdbuf -oL` to see it promptly.
+- For interactive programs, use tmux: `tmux new -d -s NAME`, then
+  `tmux send-keys -t NAME '...' Enter` and `tmux capture-pane -p -t NAME`.
 
 ## Messages
 

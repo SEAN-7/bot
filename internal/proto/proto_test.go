@@ -20,6 +20,9 @@ func TestShToolSchema(t *testing.T) {
 		t.Fatalf("name %q", tool.Name)
 	}
 	var schema struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
 		Required []string `json:"required"`
 	}
 	if err := json.Unmarshal(tool.InputSchema, &schema); err != nil {
@@ -28,16 +31,19 @@ func TestShToolSchema(t *testing.T) {
 	if len(schema.Required) != 1 || schema.Required[0] != "command" {
 		t.Fatalf("required %v", schema.Required)
 	}
+	if schema.Properties["command"].Type != "string" || schema.Properties["wait"].Type != "integer" {
+		t.Fatalf("properties %+v", schema.Properties)
+	}
 }
 
 func TestMessageRoundTrip(t *testing.T) {
 	cmd := "ls"
-	in := Message{Role: "assistant", Command: &cmd, CallID: "c1", Opaque: json.RawMessage(`{"x":1}`)}
+	in := Message{Role: "assistant", Command: &cmd, Wait: json.RawMessage(`30`), CallID: "c1", Opaque: json.RawMessage(`{"x":1}`)}
 	data, err := json.Marshal(in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{`"call_id":"c1"`, `"opaque":{"x":1}`, `"command":"ls"`} {
+	for _, key := range []string{`"call_id":"c1"`, `"opaque":{"x":1}`, `"command":"ls"`, `"wait":30`} {
 		if !strings.Contains(string(data), key) {
 			t.Errorf("missing %s in %s", key, data)
 		}
@@ -46,11 +52,11 @@ func TestMessageRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &out); err != nil {
 		t.Fatal(err)
 	}
-	if out.Role != "assistant" || *out.Command != "ls" || out.CallID != "c1" || string(out.Opaque) != `{"x":1}` {
+	if out.Role != "assistant" || *out.Command != "ls" || string(out.Wait) != "30" || out.CallID != "c1" || string(out.Opaque) != `{"x":1}` {
 		t.Fatalf("got %+v", out)
 	}
 	none, _ := json.Marshal(Message{Role: "assistant"})
-	if strings.Contains(string(none), "command") {
+	if strings.Contains(string(none), "command") || strings.Contains(string(none), "wait") {
 		t.Fatalf("nil command serialized: %s", none)
 	}
 }

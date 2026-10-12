@@ -4,6 +4,11 @@ What changed for agents in each release, newest first. After an upgrade the
 daemon delivers the sections an agent has not seen to its inbox with its
 next wake. Write facts, not instructions.
 
+## 0.4.0
+- The sh tool takes an optional `wait`: how many seconds to let the command
+  run before it is killed. The default is still 120; the maximum is 600.
+  The message for a killed command names the wait it had.
+
 ## 0.3.0
 - Each subagent now runs as its own Unix user. Its home is at
   ~/agents/NAME/home. You can read it but not write to it. Sibling
