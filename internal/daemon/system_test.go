@@ -97,11 +97,17 @@ func TestExecSystemStopProcesses(t *testing.T) {
 	if err := s.StopProcesses("agent-3"); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"systemctl", "stop", "user@1003.service"}; !reflect.DeepEqual(calls[0], want) {
+	// The stop is queued, not waited for: the kill loop ends everything,
+	// and the poll goroutine must not wait for systemd's stop timeout.
+	if want := []string{"systemctl", "stop", "--no-block", "user@1003.service"}; !reflect.DeepEqual(calls[0], want) {
 		t.Fatal(calls[0])
 	}
-	if want := []string{"pkill", "-KILL", "-u", "agent-3"}; !reflect.DeepEqual(calls[1], want) {
+	// By real uid, so a process that changed only its effective uid is found.
+	if want := []string{"pkill", "-KILL", "-U", "agent-3"}; !reflect.DeepEqual(calls[1], want) {
 		t.Fatal(calls[1])
+	}
+	if want := []string{"pgrep", "-U", "agent-3"}; !reflect.DeepEqual(calls[2], want) {
+		t.Fatal(calls[2])
 	}
 	if pgreps != 3 {
 		t.Fatalf("pgrep ran %d times", pgreps)

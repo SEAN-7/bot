@@ -86,11 +86,15 @@ func (s *execSystem) DisableLinger(user string) error {
 
 func (s *execSystem) StopProcesses(user string) error {
 	if cred, err := s.lookup(user); err == nil && cred != nil {
-		s.run("systemctl", "stop", fmt.Sprintf("user@%d.service", cred.Uid)) // may not be running
+		// Queued, not waited for: the poll goroutine must not wait for
+		// systemd's stop timeout, and the kill loop ends everything anyway.
+		s.run("systemctl", "stop", "--no-block", fmt.Sprintf("user@%d.service", cred.Uid)) // may not be running
 	}
 	for i := 0; i < killTries; i++ {
-		s.run("pkill", "-KILL", "-u", user)
-		_, err := s.run("pgrep", "-u", user)
+		// By real uid: a process that changed only its effective uid (a
+		// setuid program) is still the user's.
+		s.run("pkill", "-KILL", "-U", user)
+		_, err := s.run("pgrep", "-U", user)
 		var ee *exec.ExitError
 		if errors.As(err, &ee) && ee.ExitCode() == 1 {
 			return nil // no process left
