@@ -30,6 +30,7 @@ type pool struct {
 	path   string
 	users  []string // assignment order
 	byUser map[string]poolEntry
+	gen    int // counts the changes made
 }
 
 func loadPool(path string, users []string) (*pool, error) {
@@ -187,7 +188,15 @@ func (p *pool) commit(next map[string]poolEntry) error {
 		return err
 	}
 	p.byUser = next
+	p.gen++
 	return nil
+}
+
+// generation changes whenever the pool does.
+func (p *pool) generation() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.gen
 }
 
 // save writes the entries with replaceFile, so a crash never leaves a torn

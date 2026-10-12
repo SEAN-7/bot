@@ -3,6 +3,8 @@ package daemon
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -135,8 +137,8 @@ func TestDevBuildDeliversNoNotes(t *testing.T) {
 	}
 }
 
-// An entry without notes (recorded before they existed, or recovered) has
-// nothing to catch up on.
+// An entry without notes (recorded before they existed) has nothing to
+// catch up on: admission records the running version, delivering nothing.
 func TestNoRecordedNotesDeliversNothing(t *testing.T) {
 	h := notesHarness(t, "", done())
 	os.WriteFile(h.cfg.PoolFile(), []byte(`[{"user":"agent-1","agent":"main","state":"active"}]`), 0o600)
@@ -146,7 +148,36 @@ func TestNoRecordedNotesDeliversNothing(t *testing.T) {
 	if n := countNotes(h.mainHome, "-harness-update.md"); n != 0 {
 		t.Fatalf("%d notes", n)
 	}
-	if got := poolNotes(h, h.mainID); got != "" {
+	if got := poolNotes(h, h.mainID); got != "0.4.0" {
 		t.Fatalf("notes %q", got)
+	}
+}
+
+// An agent recovered by its home's evidence after pool.json was lost starts
+// from the running version, and gets the notes of the next release.
+func TestRecoveredAgentGetsLaterNotes(t *testing.T) {
+	h := notesHarness(t, "0.3.1", done(), done(), done())
+	h.start()
+	h.sendOwner("hello")
+	h.waitEnds(h.mainID, 1)
+	h.stop()
+	os.Remove(h.cfg.PoolFile())
+	h.start()
+	waitFor(t, "main recovered", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
+	if got := poolNotes(h, h.mainID); got != "0.4.0" {
+		t.Fatalf("recovered with notes %q", got)
+	}
+	h.stop()
+	h.cfg.Version, h.cfg.ReleaseNotes = "0.4.1", "## 0.4.1\n- newest thing\n\n"+testNotes
+	h.start()
+	h.sendOwner("again")
+	h.waitEnds(h.mainID, 2)
+	if n := countNotes(h.mainHome, "-harness-update.md"); n != 2 {
+		t.Fatalf("%d notes", n)
+	}
+	notes, _ := filepath.Glob(filepath.Join(h.mainHome, "inbox", "*", "*-harness-update.md"))
+	sort.Strings(notes)
+	if text := fileText(t, notes[len(notes)-1]); !strings.Contains(text, "## 0.4.1\n- newest thing") || strings.Contains(text, "## 0.4.0") {
+		t.Fatalf("latest notes %q", text)
 	}
 }

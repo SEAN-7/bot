@@ -223,20 +223,27 @@ agent user cannot read another user's process environment.
      whose home holds another agent's evidence is never handed out, so a
      lost `pool.json` cannot wipe a live home.
 
-  Otherwise it is left alone (it may still be being written). A
-  `config.json` that appears in an admitted agent's control directory is
-  ignored: the agent's config is its own. A known agent the scan misses is
+  Otherwise it is left alone (it may still be being written), and the
+  evidence found in a free user's home is remembered until the pool or a
+  journal directory's group changes, so a control directory that stays
+  unadmitted does not start a helper at every poll. A `config.json` that
+  appears in an admitted agent's control directory is ignored: the
+  agent's config is its own. When the agent is next admitted (after a
+  daemon restart) it is renamed `config.json.ignored`, replacing an older
+  one, and the service log says so. A known agent the scan misses is
   kept unless its control directory is certainly gone.
 - **Admission.** The daemon takes the lowest free usable pool user and
   records the assignment in `pool.json`, then: prepares the home
   (`/home/agent-N`, 2750, setgid to the user's group); starts the user's
-  helper; for a user new to this agent whose home does not hold this
-  agent's evidence, records the running version as the release notes it has
-  seen and clears what a previous holder left in the home; sets the members of the user's group to the agent's ancestors other
+  helper; when its entry records no release notes seen (a new agent, or
+  one recovered by its home's evidence), records the running version; for
+  a user new to this agent whose home does not hold this agent's evidence,
+  clears what a previous holder left in the home; sets the members of the user's group to the agent's ancestors other
   than root; seeds the home with the seed `README.md`, `TASK.md`, `inbox/`
   and `agents/` where missing; moves the starting `config.json` from the
   control directory into the home (written through the agent's helper,
-  removed through the parent's; a home that already has one keeps it);
+  removed through the parent's; a home that already has one keeps it, and
+  the parent's is renamed `config.json.ignored`);
   enables lingering; creates its journal directory; and writes the `home`
   symlink into the control directory. Every step goes through the helpers,
   and a failed step is retried at the next poll. An agent's identity also
@@ -285,10 +292,11 @@ agent user cannot read another user's process environment.
   (`internal/notes/notes.md`) have sections newer than the agent's `notes`, up
   to the running version, the daemon first writes them to its inbox as one
   `<time>-harness-update.md`, then records the running version; the run
-  collects the file with the rest. Nobody is woken for notes alone. A newly
-  assigned agent records the running version at admission, an assignment
-  without `notes` has nothing to catch up on, and development builds deliver
-  nothing. `/var/lib/agent/version` only records the installed version, for
+  collects the file with the rest. Nobody is woken for notes alone. An
+  assignment without `notes` (a newly assigned agent, one recovered after
+  a lost `pool.json`, or one from before notes were recorded) records the
+  running version at admission, with nothing to catch up on, and gets the
+  notes of later releases; development builds deliver nothing. `/var/lib/agent/version` only records the installed version, for
   `install.sh` and the migration.
 - **Message spools.** See Messages.
 
@@ -747,14 +755,16 @@ Using the replay plugin:
   ignored, and root's spool is private
 - discovery: a restart keeps every agent's home; after a lost `pool.json`
   agents are recovered by their home's evidence, and a new agent never gets
-  a user whose home holds another agent's evidence
+  a user whose home holds another agent's evidence; a control directory
+  left unadmitted does not check a free user's home at every poll
 - isolation: an agent cannot write its parent's or a sibling's home, its
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither
 - config: admission moves `config.json` into the home; an agent's edit makes
   its next run fresh with the new model; an invalid config writes `ERROR` in
   the control directory, which the agent cannot remove; a `config.json`
-  written into an admitted agent's control directory is ignored
+  written into an admitted agent's control directory is ignored, and
+  renamed `config.json.ignored` when the agent is admitted again
 - CLI: `agent new` rejects an invalid config before creating anything,
   reports the control directory's `ERROR`, defaults to the caller's config,
   requires `--model` from root and refuses an existing NAME; `agent remove`
@@ -770,7 +780,8 @@ Using the replay plugin:
 - messages: an agent cannot write its conversation log, and journals and
   logs left readable by an earlier release are tightened on start
 - release notes: an idle agent is not woken; a woken agent receives unseen
-  sections once; a new agent and a development build receive none
+  sections once; a new agent and a development build receive none; a
+  recovered agent receives the next release's
 - OWNER.md: its content follows the system prompt in the first segment for
   a top-level agent and for a deeper one; a parent's OWNER.md does not reach
   its child; a missing or empty file leaves the segment identical to the

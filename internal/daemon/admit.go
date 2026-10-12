@@ -79,10 +79,14 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		c.logf("keeping %s: its journal link is this agent's", c.home)
 		fresh = false
 	}
-	if _, ok := parseVersion(d.cfg.Version); ok && fresh {
-		// The seed README describes this version: nothing to catch up on.
-		if err := d.pool.setNotes(user, d.cfg.Version); err != nil {
-			return fail("notes", err)
+	if e, _ := d.pool.entryOf(id); e.Notes == "" {
+		if _, ok := parseVersion(d.cfg.Version); ok {
+			// A new agent's seed README describes this version; an entry
+			// without notes (recovered, or from before they existed) does
+			// not know what it saw. Nothing to catch up on, either way.
+			if err := d.pool.setNotes(user, d.cfg.Version); err != nil {
+				return fail("notes", err)
+			}
 		}
 	}
 	if fresh {
@@ -133,6 +137,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 //     live home.
 func (d *daemon) admission(parent *agent, ctrl, id, held string) (usable func(string) bool, keep bool) {
 	own := d.cfg.JournalDir(id)
+	if gen := d.pool.generation(); d.homes == nil || gen != d.homesGen {
+		d.homes, d.homesGen = map[string]string{}, gen
+	}
 	if held != "" {
 		return func(string) bool { return false }, true // assign returns the held user
 	}
@@ -166,8 +173,23 @@ func (d *daemon) linkedUser(parent *agent, ctrl string) string {
 
 // homeEvidence returns the journal directory that user's home is evidence
 // for (see evidence), looking through a helper running as user: the daemon
-// never opens a home as root.
+// never opens a home as root. A result is kept until the pool or a journal
+// directory's group changes (see daemon.homes): a free user's home was
+// cleared before it was freed, or is a lost pool.json's unrecovered agent's,
+// and the daemon writes into neither. An error is not kept. It never locks
+// the pool, so assign's usable can call it.
 func (d *daemon) homeEvidence(user string) (string, error) {
+	if dir, ok := d.homes[user]; ok {
+		return dir, nil
+	}
+	dir, err := d.checkHome(user)
+	if err == nil && d.homes != nil {
+		d.homes[user] = dir
+	}
+	return dir, err
+}
+
+func (d *daemon) checkHome(user string) (string, error) {
 	cred, err := d.cfg.LookupUser(user)
 	if err != nil {
 		return "", err
@@ -219,11 +241,10 @@ func (d *daemon) evidence(helper *fsio.Client, home string, gid int) (string, er
 // ownsHome reads the group from the directory from here on.
 func (d *daemon) secureJournal(id string, gid int) error {
 	dir := d.cfg.JournalDir(id)
-	if err := journal.Secure(dir, gid); err != nil {
-		return err
-	}
+	// Before Secure, which may change the group and then fail.
 	delete(d.journalGids, dir)
-	return nil
+	d.homes = nil
+	return journal.Secure(dir, gid)
 }
 
 // ownsHome reports whether a's home holds evidence (see evidence) that it is
@@ -289,8 +310,10 @@ func (a *agent) seed() error {
 // the home, which the agent owns from then on: written through the agent's
 // helper, read and removed through its parent's. Only a regular file is a
 // starting config. A home that already holds one (a daemon restart) keeps
-// it, and a config.json the parent wrote since is dropped. With neither,
-// admission goes on: the first run reports the missing config.
+// it, and a config.json the parent wrote since is renamed config.json.ignored
+// in the control directory, replacing an older one, so the parent loses
+// nothing. With neither, admission goes on: the first run reports the
+// missing config.
 func (c *agent) adoptConfig() error {
 	from, to := filepath.Join(c.ctrl, "config.json"), filepath.Join(c.home, "config.json")
 	e, err := c.parent.fs.Stat(from)
@@ -303,15 +326,25 @@ func (c *agent) adoptConfig() error {
 		return nil
 	}
 	_, err = c.fs.Stat(to)
-	if errors.Is(err, fs.ErrNotExist) {
-		var data []byte
-		var size int64
-		if data, size, err = c.parent.fs.Read(from, configLimit); err == nil && size > int64(len(data)) {
-			err = fmt.Errorf("%s is larger than %d bytes", from, configLimit)
+	if err == nil {
+		ignored := from + ".ignored"
+		if err := c.parent.fs.Remove(ignored); err != nil {
+			return err
 		}
-		if err == nil {
-			err = c.fs.Write(to, data)
+		if err := c.parent.fs.Rename(from, ignored); err != nil {
+			return err
 		}
+		c.logf("kept its own config.json; the one in its control directory is now %s", ignored)
+		return nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	data, size, err := c.parent.fs.Read(from, configLimit)
+	if err == nil && size > int64(len(data)) {
+		err = fmt.Errorf("%s is larger than %d bytes", from, configLimit)
+	}
+	if err == nil {
+		err = c.fs.Write(to, data)
 	}
 	if err != nil {
 		return err

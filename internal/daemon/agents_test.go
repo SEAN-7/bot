@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -839,27 +840,120 @@ func TestRestartWithoutOwnConfigReports(t *testing.T) {
 	}
 }
 
-// TestRestartDropsStrayConfig: a config.json the parent left in an admitted
-// agent's control directory is removed when the agent is admitted again, and
-// the agent keeps its own; anything else of that name is left alone.
-func TestRestartDropsStrayConfig(t *testing.T) {
+// TestRestartSetsAsideStrayConfig: a config.json the parent left in an
+// admitted agent's control directory is renamed config.json.ignored, replacing
+// an older one, when the agent is admitted again, and said so once in the
+// service log; the agent keeps its own. Anything else of that name is left
+// alone.
+func TestRestartSetsAsideStrayConfig(t *testing.T) {
 	h := newHarness(t)
 	h.start()
 	ctrl := makeChild(t, h, "c", true)
 	home := h.childHome(ctrl)
-	stray := filepath.Join(ctrl, "config.json")
-	h.stop()
-	os.WriteFile(stray, []byte(`{"provider":"replay","model":"other"}`), 0o644)
-	h.start()
-	waitFor(t, "stray config removed", func() bool { _, err := os.Lstat(stray); return os.IsNotExist(err) })
+	stray, ignored := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "config.json.ignored")
+	for _, text := range []string{`{"provider":"replay","model":"other"}`, `{"provider":"replay","model":"newer"}`} {
+		h.stop()
+		os.WriteFile(stray, []byte(text), 0o644)
+		h.start()
+		waitFor(t, "stray config set aside", func() bool { _, err := os.Lstat(stray); return os.IsNotExist(err) })
+		if got := fileText(t, ignored); got != text {
+			t.Fatalf("config.json.ignored %q", got)
+		}
+	}
+	if n := strings.Count(h.logs.String(), "config.json.ignored"); n != 2 {
+		t.Fatalf("logged %d times:\n%s", n, h.logs)
+	}
 	if data, _ := os.ReadFile(filepath.Join(home, "config.json")); string(data) != testConfig {
 		t.Fatalf("~/config.json %q", data)
 	}
 	h.stop()
 	os.MkdirAll(filepath.Join(stray, "keep"), 0o755)
 	h.start()
-	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 3 })
+	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 4 })
 	if _, err := os.Stat(filepath.Join(stray, "keep")); err != nil {
 		t.Fatalf("directory named config.json removed: %v", err)
+	}
+}
+
+// countLookups makes the harness count the lookups of user, which after
+// startup only a check of a free user's home for evidence makes.
+func countLookups(h *harness, user string) *atomic.Int32 {
+	var n atomic.Int32
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		if name == user {
+			n.Add(1)
+		}
+		return nil, nil
+	}
+	return &n
+}
+
+// stableAt waits a while and reports a count that changed meanwhile.
+func stableAt(t *testing.T, h *harness, n *atomic.Int32, want int32) {
+	t.Helper()
+	waitFor(t, fmt.Sprintf("%d checks", want), func() bool { return n.Load() >= want })
+	time.Sleep(30 * h.cfg.Poll)
+	if got := n.Load(); got != want {
+		t.Fatalf("%d evidence checks, want %d", got, want)
+	}
+}
+
+// A control directory with only a home link naming a free user is checked
+// for that user's evidence once, not at every poll (each check starts a
+// helper process as that user), until the pool changes.
+func TestLinkOnlyControlDirCheckedOnce(t *testing.T) {
+	h := newHarness(t)
+	checks := countLookups(h, "agent-3")
+	h.start()
+	start := checks.Load() // resolving the pool users
+	ctrl := filepath.Join(h.cfg.RootHome(), "agents", "x")
+	if err := os.Mkdir(ctrl, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
+	stableAt(t, h, checks, start+1)
+	// Another agent takes agent-2: agent-3's home is checked again.
+	h.childHome(makeChild(t, h, "c", true))
+	waitFor(t, "a check after the pool changed", func() bool { return checks.Load() > start+1 })
+	stableAt(t, h, checks, checks.Load())
+	if _, err := os.Lstat(filepath.Join(ctrl, "ERROR")); !os.IsNotExist(err) {
+		t.Fatalf("link-only control directory reported: %v", err)
+	}
+}
+
+// A new agent held back because every free user's home holds another
+// agent's evidence checks those homes once, not at every poll.
+func TestHeldBackAgentCheckedOnce(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.PoolUsers = []string{"agent-1", "agent-2"}
+	checks := countLookups(h, "agent-2")
+	ghost := h.cfg.JournalDir("ghost")
+	os.MkdirAll(ghost, 0o755)
+	os.MkdirAll(h.cfg.PoolHome("agent-2"), 0o755)
+	os.Symlink(ghost, filepath.Join(h.cfg.PoolHome("agent-2"), "journal"))
+	h.start()
+	start := checks.Load()
+	topLevel(t, h, "y")
+	stableAt(t, h, checks, start+1)
+	if strings.Contains(h.logs.String(), "y: admitted") {
+		t.Fatal("y given a home holding another agent's evidence")
+	}
+}
+
+// The group remembered for a journal directory is forgotten before its group
+// is set again, even if setting it fails part way: from then on the
+// directory's real group is the evidence.
+func TestSecureJournalForgetsGroupFirst(t *testing.T) {
+	h := newHarness(t)
+	d := &daemon{cfg: h.cfg, journalGids: map[string]int{}}
+	dir := h.cfg.JournalDir("main")
+	d.journalGids[dir] = 1234
+	// A file where the journal directory goes: Secure fails.
+	os.WriteFile(dir, nil, 0o644)
+	if err := d.secureJournal("main", -1); err == nil {
+		t.Fatal("no error")
+	}
+	if _, ok := d.journalGids[dir]; ok {
+		t.Fatal("remembered group kept after a failed Secure")
 	}
 }

@@ -81,7 +81,9 @@ yours to revise: edit this file as you learn what works.
   `agent remove NAME`. `agent help` lists the commands, and how to share
   files with a subagent and clean up before removing it. A new subagent gets
   a copy of your config.json unless you choose another model (`--model`),
-  and starts work when you `agent send` it a task.
+  and starts work when you `agent send` it a task. Once it starts, that
+  config.json is its own: one you write into ~/agents/NAME/ later is
+  ignored, and renamed config.json.ignored when the harness restarts.
 - Each subagent is its own Unix user with its own home, ~/agents/NAME/home,
   and its own config.json, README.md, TASK.md and memory. You can read its
   home but not write to it, and it cannot reach yours unless you grant

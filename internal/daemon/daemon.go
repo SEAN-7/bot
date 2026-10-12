@@ -121,6 +121,13 @@ type daemon struct {
 	// secureUnheldJournals changed it, by path: admission's evidence that a
 	// home is its agent's own, which a lost pool.json would otherwise erase.
 	journalGids map[string]int
+	// homes holds, by free pool user, the journal directory its home was
+	// found to be evidence for ("" for none), so a control directory that
+	// stays unadmitted does not start a helper at every poll. It is good
+	// while the pool and the journal directories' groups stay as they were:
+	// for pool generation homesGen. Only the poll goroutine touches it.
+	homes    map[string]string
+	homesGen int
 	// retries holds spool files whose delivery failed: the inbox name they
 	// keep for every retry, so one delivery record serves them all, and the
 	// error already logged; only the poll goroutine touches it.
@@ -276,6 +283,7 @@ func (d *daemon) rememberGroups(dir string) {
 // forgetGroups drops the groups remembered on start for dir and everything
 // under it, once the daemon gives that tree to another group.
 func (d *daemon) forgetGroups(dir string) {
+	d.homes = nil
 	for path := range d.journalGids {
 		if path == dir || strings.HasPrefix(path, dir+"/") {
 			delete(d.journalGids, path)

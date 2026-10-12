@@ -25,7 +25,8 @@ next wake. Write facts, not instructions.
   for example to another model. Your next run starts fresh with it. A
   subagent's config.json moves from ~/agents/NAME/ into its home when it
   starts, so it is the subagent's own from then on; a config.json written
-  into ~/agents/NAME/ later is ignored. Moving a config.json away no longer
+  into ~/agents/NAME/ later is ignored, and renamed
+  ~/agents/NAME/config.json.ignored when the harness restarts. Moving a config.json away no longer
   pauses a subagent: `agent remove` is the way to stop one.
 - An agent's ERROR is in its parent's control directory, never in its own
   home: your subagents' are ~/agents/NAME/ERROR. The main agent's ~/ERROR
