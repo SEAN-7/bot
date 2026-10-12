@@ -66,7 +66,7 @@ func (d *daemon) collectMessages() {
 	}
 	d.mu.Unlock()
 	sort.Strings(ids)
-	pass := &spoolPass{ignored: map[string]bool{}, kept: map[spoolKey]bool{}, unlisted: map[string]bool{}}
+	pass := &spoolPass{ignored: map[string]bool{}, listed: map[string]bool{}, unlisted: map[string]bool{}}
 	for _, id := range ids {
 		a := agents[id]
 		uid := a.uid()
@@ -80,11 +80,12 @@ func (d *daemon) collectMessages() {
 	}
 	// Remember only what is still there, so a path is reported once while
 	// it stays and again if it comes back, and a delivered file the agent
-	// kept is forgotten once it is gone. A spool that could not be listed
-	// keeps its entries: the file may still be there.
+	// kept is forgotten only once its spool no longer lists it, whatever
+	// became of it this poll. A spool that could not be listed keeps its
+	// entries: the file may still be there.
 	d.spoolIgnored = pass.ignored
 	for k := range d.unremoved {
-		if !pass.kept[k] && !pass.unlisted[k.agent] {
+		if !pass.listed[listedKey(k.agent, k.path)] && !pass.unlisted[k.agent] {
 			delete(d.unremoved, k)
 		}
 	}
@@ -95,10 +96,12 @@ type spoolKey struct{ agent, path, sum string }
 
 // spoolPass is what one poll's collection saw.
 type spoolPass struct {
-	ignored  map[string]bool   // entries that are not messages
-	kept     map[spoolKey]bool // delivered files still in place
-	unlisted map[string]bool   // agents with a spool that could not be listed
+	ignored  map[string]bool // entries that are not messages
+	listed   map[string]bool // every spool entry seen, by listedKey
+	unlisted map[string]bool // agents with a spool that could not be listed
 }
+
+func listedKey(agent, path string) string { return agent + "\x00" + path }
 
 // alreadyDelivered reports whether the spool file at path with this content was
 // already delivered but could not be removed. Such a file is not delivered
@@ -121,7 +124,6 @@ func (d *daemon) settle(a *agent, k spoolKey, pass *spoolPass) {
 			a.logf("message %s delivered but not removed: %v", k.path, err)
 		}
 		d.unremoved[k] = true
-		pass.kept[k] = true
 		return
 	}
 	delete(d.unremoved, k)
@@ -253,10 +255,11 @@ func (d *daemon) spoolFiles(a *agent, uid int, dir string, pass *spoolPass) []st
 	}
 	var paths []string
 	for _, e := range entries {
+		path := filepath.Join(dir, e.Name)
+		pass.listed[listedKey(a.id, path)] = true
 		if strings.HasPrefix(e.Name, ".") || e.Type == "dir" {
 			continue
 		}
-		path := filepath.Join(dir, e.Name)
 		if e.Type != "file" || e.UID != uid {
 			d.ignoreSpool(a, path, "not a regular file the agent owns", pass)
 			continue

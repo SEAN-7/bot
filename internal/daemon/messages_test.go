@@ -226,22 +226,63 @@ func TestOwnerMessageLogged(t *testing.T) {
 	}
 }
 
-func TestUnremovableChildMessageDeliveredOnce(t *testing.T) {
-	h := newHarness(t, doneFor(parentMark), doneFor(parentMark), doneFor(parentMark))
+// skipIfRoot skips a test that relies on file modes, which root ignores.
+func skipIfRoot(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("file modes do not stop root")
+	}
+}
+
+// unremovableChildMessage admits child c, then restarts the daemon with a
+// message queued in c's read-only spool, and waits for its delivery.
+func unremovableChildMessage(t *testing.T, h *harness, text string) (ctrl, spool, spooled string) {
+	t.Helper()
 	h.markParent()
-	ctrl := makeChild(t, h, "c", true)
+	ctrl = makeChild(t, h, "c", true)
 	h.start()
 	home := h.childHome(ctrl)
 	h.stop()
-	// The child keeps its spooled message from being removed.
-	spool := filepath.Join(home, ".messages")
-	spooled := h.queue(spool, "report once")
+	spool = filepath.Join(home, ".messages")
+	spooled = h.queue(spool, text)
 	if err := os.Chmod(spool, 0o555); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chmod(spool, 0o755) })
 	h.start()
 	waitFor(t, "delivery", func() bool { return countNotes(h.cfg.Home, "-c.md") == 1 })
+	return ctrl, spool, spooled
+}
+
+func TestUnreadableUnremovedMessageNotRedelivered(t *testing.T) {
+	skipIfRoot(t)
+	h := newHarness(t, doneFor(parentMark), doneFor(parentMark), doneFor(parentMark))
+	_, spool, spooled := unremovableChildMessage(t, h, "report once")
+	time.Sleep(100 * time.Millisecond)
+	// The sender makes the delivered file unreadable for a few polls.
+	if err := os.Chmod(spooled, 0); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	os.Chmod(spooled, 0o644)
+	time.Sleep(200 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
+		t.Fatalf("parent received %d deliveries of one message", n)
+	}
+	os.Chmod(spool, 0o755)
+	waitFor(t, "spool file removed", func() bool {
+		_, err := os.Stat(spooled)
+		return os.IsNotExist(err)
+	})
+	time.Sleep(100 * time.Millisecond)
+	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
+		t.Fatalf("parent received %d deliveries after the file was removed", n)
+	}
+}
+
+func TestUnremovableChildMessageDeliveredOnce(t *testing.T) {
+	skipIfRoot(t)
+	h := newHarness(t, doneFor(parentMark), doneFor(parentMark), doneFor(parentMark))
+	ctrl, spool, spooled := unremovableChildMessage(t, h, "report once")
 	time.Sleep(300 * time.Millisecond)
 	if n := countNotes(h.cfg.Home, "-c.md"); n != 1 {
 		t.Fatalf("parent received %d deliveries of one message", n)
@@ -264,6 +305,7 @@ func TestUnremovableChildMessageDeliveredOnce(t *testing.T) {
 }
 
 func TestUnremovableMainMessageLoggedOnce(t *testing.T) {
+	skipIfRoot(t)
 	h := newHarness(t)
 	spool := filepath.Join(h.cfg.Home, ".messages")
 	h.queue(spool, "log me once")
