@@ -9,6 +9,7 @@ could build something as a script, it does not belong in the harness.
 - Go standard library only. Run `go vet ./...` and `go test ./...` before
   committing; CI also runs the root privilege tests and the reproducible
   release check (`scripts/release_test.sh`).
+- Work on `main` directly; don't create feature branches.
 - Commit and push completed changes by default. Verify the working tree is
   clean and the branch matches its remote before reporting completion.
 - Releases: run `scripts/release.sh X.Y.Z`, commit the updated
