@@ -30,6 +30,9 @@ be a script the agent writes, it stays out of the harness.
   systemd's default kill behaviour, so stopping it stops everything it
   started. Lingering gives the `agent` user a persistent user manager; the
   daemon sets `XDG_RUNTIME_DIR` so `systemd-run --user` works from commands.
+- **Quick follow-ups continue the conversation.** A message within 4 minutes
+  of a run ending continues it with a warm cache; the agent can force a fresh
+  start with `~/.reset`.
 - **No daily heartbeat.** The agent wakes on messages and on wake-ups it
   schedules itself.
 - **Subagents are not isolated from each other.** All agents run as the one
@@ -169,6 +172,17 @@ a dot.
   included in the result.
 - A reply with no command ends the run (`reason: "done"`).
 
+**Continuation.** A run that ends with a reply without a command keeps its
+conversation in memory. The next run continues it (the new inbox records are
+appended, and the system sections, call numbering and 80% warning state carry
+over unchanged, so the provider's cached prefix stays identical) when all of
+these hold: it starts within 4 minutes of that run ending (shorter than the
+provider's 5-minute cache, so the cache is always warm), the configuration is
+unchanged, and `~/.reset` does not exist. Otherwise it starts fresh. The
+daemon deletes `~/.reset` when it starts a run. Each run still has its own
+journal; a continued run's `start` record names the run it continues. A
+daemon restart, interruption, error or context reset always starts fresh.
+
 **Context size.** After each call, context used = input + cache read + cache
 write + output tokens from the plugin's usage, compared with the model's
 context size from `describe`.
@@ -176,7 +190,7 @@ context size from `describe`.
   full. Save your state to TASK.md and notes now."
 - At 95%, end the run (`reason: "context"`) and write to the agent's inbox:
   "Context reset. Continue from TASK.md. Previous journal: <path>".
-- Guard: if the first call of a run is already at 95%, write the reason to
+- Guard: if the first call of a fresh run is already at 95%, write the reason to
   `~/ERROR` and the service log instead of a reset note, and wait for new
   inbox input. This prevents an endless reset loop.
 
@@ -283,7 +297,8 @@ Sources live in `plugins/<name>/` (each its own `main` package).
   `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODELS` (`id=context_tokens`
   pairs, since compatible endpoints do not report context sizes).
 - **anthropic**: Messages API. Settings: `ANTHROPIC_API_KEY`. Places
-  prompt-cache markers on the system segments and the latest message.
+  a prompt-cache marker on each system segment (at most the last three) and
+  on the latest message, so a TASK.md edit leaves the earlier segments cached.
   Exposes the reasoning settings current models accept as options. Model IDs,
   context sizes, caching and reasoning parameters are taken from the current
   Anthropic documentation at implementation time, not from memory.

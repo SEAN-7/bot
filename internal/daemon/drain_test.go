@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -76,5 +77,19 @@ func TestDrainDeadlineInterrupts(t *testing.T) {
 	}
 	if runs := h.runs(h.cfg.Home); len(runs) != 1 || ended(runs[0]) {
 		t.Fatal("run interrupted at the deadline must stay unclean so recovery resumes it")
+	}
+}
+
+func TestDrainingStartsWithTheStopRequest(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &daemon{stop: ctx}
+	if d.draining() {
+		t.Fatal("draining before any stop request")
+	}
+	cancel()
+	// No poll may pass between the request and draining, or an idle agent
+	// could start a new run in the gap.
+	if !d.draining() {
+		t.Fatal("not draining immediately after the stop request")
 	}
 }

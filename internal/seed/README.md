@@ -21,8 +21,11 @@ yours to revise: edit this file as you learn what works.
 - Keep TASK.md current: the goal, progress so far, and the next step. Update it
   at each milestone, so a reset or interruption loses nothing important.
 - When your context fills up, the harness ends the run and you start fresh
-  from TASK.md. To reset early at a natural boundary, write a note to your own
-  inbox and stop.
+  from TASK.md.
+- A message that arrives within about four minutes of a run ending continues
+  that conversation; later ones start fresh. `touch ~/.reset` before stopping
+  makes the next run start fresh regardless. ~/journal records each model
+  call's token usage.
 
 ## Stopping
 

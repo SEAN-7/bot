@@ -32,6 +32,10 @@ type Config struct {
 	RetryMax       time.Duration
 	ErrorAfter     int
 	DrainTimeout   time.Duration // how long a stop waits for active runs
+	// ContinueWindow: a message arriving this soon after a run ended normally
+	// continues that conversation. Shorter than the provider's 5-minute cache,
+	// so a continued conversation always finds it warm.
+	ContinueWindow time.Duration
 	OutputClip     int
 	InboxClip      int
 	Logger         *log.Logger
@@ -49,6 +53,7 @@ func DefaultConfig(self string) Config {
 		RetryMax:       10 * time.Minute,
 		ErrorAfter:     3,
 		DrainTimeout:   15 * time.Minute,
+		ContinueWindow: 4 * time.Minute,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
@@ -72,9 +77,9 @@ type daemon struct {
 	agentUID  int
 
 	mu sync.Mutex
-	// drain is closed when a stop is requested: no new runs start, and active
-	// runs finish before the daemon exits, up to DrainTimeout.
-	drain       chan struct{}
+	// stop is Run's context. Once it is cancelled the daemon drains: no new
+	// runs start, and active runs finish before it exits, up to DrainTimeout.
+	stop        context.Context
 	agents      map[string]*agent
 	delivered   *delivered
 	settings    layout.Settings // last good settings.json
@@ -84,7 +89,7 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, drain: make(chan struct{})}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings("")
 	var err error
 	if d.agentCred, err = osuser.Lookup(cfg.AgentUser); err != nil {
@@ -126,7 +131,6 @@ func Run(ctx context.Context, cfg Config) error {
 // interrupts whatever is still running at the deadline. Interrupted runs stay
 // unclean, so the next daemon resumes them.
 func (d *daemon) shutdown() {
-	close(d.drain)
 	finished := make(chan struct{})
 	go func() { d.wg.Wait(); close(finished) }()
 	select {
@@ -143,14 +147,8 @@ func (d *daemon) shutdown() {
 	<-finished
 }
 
-func (d *daemon) draining() bool {
-	select {
-	case <-d.drain:
-		return true
-	default:
-		return false
-	}
-}
+// draining is true from the moment a stop is requested, with no poll in between.
+func (d *daemon) draining() bool { return d.stop.Err() != nil }
 
 // reconcile starts loops for new agent directories and stops removed ones,
 // returning the admitted agents.

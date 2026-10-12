@@ -2,7 +2,12 @@ package daemon
 
 import (
 	"context"
+	"path/filepath"
+	"reflect"
 	"time"
+
+	"github.com/SEAN-7/bot/internal/plugin"
+	"github.com/SEAN-7/bot/internal/proto"
 
 	"github.com/SEAN-7/bot/internal/journal"
 )
@@ -13,6 +18,39 @@ type agent struct {
 	cancel context.CancelCauseFunc
 
 	failedConfig string // hash of a config.json already reported invalid
+
+	conv *conversation // the last run's conversation, if it ended normally
+}
+
+// conversation is what a follow-up needs to continue a run: the frozen system
+// sections and messages, so the provider's cached prefix stays identical.
+type conversation struct {
+	cfg      plugin.Config
+	system   []proto.Segment
+	messages []proto.Message
+	calls    int // call ids used so far
+	warned   bool
+	ended    time.Time
+	journal  string
+}
+
+// takeConversation returns the previous conversation if this run may
+// continue it: it ended normally within ContinueWindow, the configuration is
+// unchanged, and the agent has not asked for a fresh start with ~/.reset.
+func (a *agent) takeConversation(cfg plugin.Config) *conversation {
+	c := a.conv
+	a.conv = nil
+	reset := filepath.Join(a.dir, ".reset")
+	if _, err := a.d.fs.Stat(reset); err == nil {
+		if err := a.d.fs.Remove(reset); err != nil {
+			a.logf("remove ~/.reset: %v", err)
+		}
+		return nil
+	}
+	if c == nil || time.Since(c.ended) > a.d.cfg.ContinueWindow || !reflect.DeepEqual(c.cfg, cfg) {
+		return nil
+	}
+	return c
 }
 
 func newAgent(d *daemon, dir string) *agent { return &agent{d: d, dir: dir} }
@@ -32,7 +70,7 @@ func (a *agent) loop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-a.d.drain:
+		case <-a.d.stop.Done():
 			return
 		case <-ticker.C:
 		}

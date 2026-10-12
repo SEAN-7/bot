@@ -364,8 +364,12 @@ func buildRequest(req proto.CompleteRequest) (apiRequest, error) {
 			out.System = append(out.System, textBlock{Type: "text", Text: seg.Text})
 		}
 	}
-	if n := len(out.System); n > 0 {
-		out.System[n-1].CacheControl = ephemeral
+	// One breakpoint per system section, so a change to a later section
+	// (TASK.md) leaves earlier ones (system prompt, README) cached. The final
+	// message keeps the last breakpoint, so at most the last three sections
+	// are marked.
+	for i := max(0, len(out.System)-(maxCacheBreakpoints-1)); i < len(out.System); i++ {
+		out.System[i].CacheControl = ephemeral
 	}
 
 	for _, t := range req.Tools {

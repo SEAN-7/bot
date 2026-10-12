@@ -137,11 +137,23 @@ func (a *agent) readSegment(name string) string {
 
 func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int) string {
 	d := a.d
-	j.Record("start", map[string]any{"agent": a.dir, "config": cfg, "context_tokens": contextTokens})
+	conv := a.takeConversation(cfg)
+	start := map[string]any{"agent": a.dir, "config": cfg, "context_tokens": contextTokens}
+	if conv != nil {
+		start["continues"] = conv.journal
+	}
+	j.Record("start", start)
 	if err := d.fs.Symlink(d.cfg.JournalDir(a.dir), filepath.Join(a.dir, "journal")); err != nil {
 		a.logf("journal link: %v", err)
 	}
-	system := []proto.Segment{{Text: SystemPrompt}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
+	var system []proto.Segment
+	var messages []proto.Message
+	calls, warned := 0, false
+	if conv != nil {
+		system, messages, calls, warned = conv.system, conv.messages, conv.calls, conv.warned
+	} else {
+		system = []proto.Segment{{Text: SystemPrompt}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
+	}
 	records, err := a.collectInbox(j)
 	if err != nil {
 		a.logf("inbox: %v", err)
@@ -151,13 +163,14 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	if len(records) == 0 {
 		return "empty" // the files vanished after the wake-up; nothing to say
 	}
-	messages := []proto.Message{{Role: "user", Content: encodeRecords(records)}}
+	messages = append(messages, proto.Message{Role: "user", Content: encodeRecords(records)})
 	runID := strings.TrimSuffix(filepath.Base(j.Path()), ".jsonl")
-	warned, warnNext := false, false
+	warnNext := false
+	fresh := conv == nil
 	for n := 1; ; n++ {
 		resp, err := a.complete(ctx, cfg, system, messages)
 		if plugin.IsContextOverflow(err) {
-			if n == 1 {
+			if n == 1 && fresh {
 				text := fmt.Sprintf(MsgOverflowGuardFmt, err)
 				a.logf("%s", text)
 				a.setError(text)
@@ -171,7 +184,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		if err != nil {
 			return a.stopReason(ctx)
 		}
-		callID := fmt.Sprintf("call-%d", n)
+		callID := fmt.Sprintf("call-%d", calls+n)
 		msg := proto.Message{Role: "assistant", Text: resp.Text, CallID: callID, Opaque: resp.Opaque}
 		if resp.Command != nil && strings.TrimSpace(*resp.Command) != "" {
 			msg.Command = resp.Command
@@ -180,7 +193,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
 		if used := resp.Usage.Total(); contextTokens > 0 && msg.Command != nil {
 			switch {
-			case used*100 >= 95*contextTokens && n == 1:
+			case used*100 >= 95*contextTokens && n == 1 && fresh:
 				// A fresh run is already too big: a reset note would loop forever.
 				text := fmt.Sprintf(MsgGuardFmt, used, contextTokens)
 				a.logf("%s", text)
@@ -201,6 +214,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			a.clearError(errProviderPrefix)
 		}
 		if msg.Command == nil {
+			a.conv = &conversation{cfg: cfg, system: system, messages: messages, calls: calls + n, warned: warned, ended: time.Now(), journal: j.Path()}
 			return "done"
 		}
 		result, runErr := shell.Run(ctx, *msg.Command, shell.Options{

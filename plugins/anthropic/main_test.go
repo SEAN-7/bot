@@ -132,9 +132,10 @@ func TestRequestShape(t *testing.T) {
 		if b["type"] != "text" || b["text"] != want {
 			t.Fatalf("system[%d] = %v", i, b)
 		}
-		_, cached := b["cache_control"]
-		if cached != (i == 2) {
-			t.Fatalf("system[%d] cache_control present=%v", i, cached)
+		// Each system section is its own cache breakpoint, so a change to a
+		// later section (TASK.md) leaves the earlier ones cached.
+		if _, cached := b["cache_control"]; !cached {
+			t.Fatalf("system[%d] has no cache_control", i)
 		}
 	}
 	cc := system[2].(map[string]any)["cache_control"].(map[string]any)
@@ -445,5 +446,26 @@ func TestContextOverflowKind(t *testing.T) {
 	srv := (&fakeAPI{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}`}).serve(t)
 	if resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}}); resp.Error == nil || resp.Error.Kind != "" {
 		t.Fatalf("other 400 marked as overflow: %+v", resp.Error)
+	}
+}
+
+func TestCacheMarkersCappedWithManySystemBlocks(t *testing.T) {
+	api := &fakeAPI{status: 200, body: okBody}
+	srv := api.serve(t)
+	var system []proto.Segment
+	for _, text := range []string{"a", "b", "c", "d", "e"} {
+		system = append(system, proto.Segment{Text: text})
+	}
+	complete(t, newHandler(srv), proto.CompleteRequest{System: system, Messages: []proto.Message{{Role: "user", Content: "go"}}})
+	r := api.requests[0]
+	if n := countCacheControl(r.body); n != maxCacheBreakpoints {
+		t.Fatalf("%d cache breakpoints, want exactly %d", n, maxCacheBreakpoints)
+	}
+	blocksSys := r.body["system"].([]any)
+	if _, ok := blocksSys[0].(map[string]any)["cache_control"]; ok {
+		t.Fatal("earliest system blocks should give way to later ones and the final message")
+	}
+	if _, ok := blocksSys[4].(map[string]any)["cache_control"]; !ok {
+		t.Fatal("last system block lost its breakpoint")
 	}
 }
