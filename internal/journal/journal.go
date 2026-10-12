@@ -66,13 +66,22 @@ func IsRun(name string) bool {
 	return err == nil
 }
 
-// Secure creates dir and sets the journal modes on everything under it:
-// directories 0751 and regular files 0640, with group gid when it is zero or
-// more. It does not follow symlinks and leaves them and other types alone.
-func Secure(dir string, gid int) error {
+// Secure creates an agent's journal directory dir and sets the journal modes
+// on everything under it: directories 0751 and regular files 0640, with group
+// gid when it is zero or more. It does not follow symlinks and leaves them and
+// other types alone. It fixes dir/agents itself but not what is inside: those
+// are the subagents' journal directories, with their own groups.
+func Secure(dir string, gid int) error { return secure(dir, gid, false) }
+
+// SecureTree is Secure including the subagents' journal directories, for
+// handing a whole subtree to one group.
+func SecureTree(dir string, gid int) error { return secure(dir, gid, true) }
+
+func secure(dir string, gid int, children bool) error {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
+	agents := filepath.Join(dir, "agents")
 	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -90,7 +99,12 @@ func Secure(dir string, gid int) error {
 			return err
 		}
 		if gid >= 0 {
-			return os.Lchown(path, -1, gid)
+			if err := os.Lchown(path, -1, gid); err != nil {
+				return err
+			}
+		}
+		if path == agents && d.IsDir() && !children {
+			return filepath.SkipDir
 		}
 		return nil
 	})

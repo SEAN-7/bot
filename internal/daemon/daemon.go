@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -119,15 +120,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	users := cfg.PoolUsers
-	if users == nil {
-		for _, u := range layout.PoolUsers(d.settings.MaxAgents) {
-			if _, err := cfg.LookupUser(u); err == nil {
-				users = append(users, u)
-			}
-		}
-	}
-	if d.pool, err = loadPool(cfg.PoolFile(), users); err != nil {
+	if d.pool, err = loadPool(cfg.PoolFile(), d.poolUsers()); err != nil {
 		return err
 	}
 	if d.main.fs, err = fsio.Start(cfg.Self, mainCred); err != nil {
@@ -157,6 +150,27 @@ func Run(ctx context.Context, cfg Config) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+// poolUsers returns the configured pool users that exist, logging the ones
+// that do not: subagents can only use the users that resolve.
+func (d *daemon) poolUsers() []string {
+	configured := d.cfg.PoolUsers
+	if configured == nil {
+		configured = layout.PoolUsers(d.settings.MaxAgents)
+	}
+	var users, missing []string
+	for _, u := range configured {
+		if _, err := d.cfg.LookupUser(u); err == nil {
+			users = append(users, u)
+		} else {
+			missing = append(missing, u)
+		}
+	}
+	if len(missing) > 0 {
+		d.cfg.Logger.Printf("pool users not found: %s; subagents are limited to %d", strings.Join(missing, ", "), len(users))
+	}
+	return users
 }
 
 // shutdown lets active runs finish so a restart loses no context, then
@@ -244,13 +258,13 @@ func (d *daemon) reconcile() []*agent {
 				continue
 			}
 			seen[ctrl] = true
-			c := known[ctrl]
+			c := known[d.childID(a, ctrl)]
 			if c == nil {
 				if c = d.admit(a, ctrl); c == nil {
 					continue
 				}
 			}
-			present[ctrl] = c
+			present[c.id] = c
 			tree = append(tree, c)
 		}
 	}
@@ -290,6 +304,23 @@ func (d *daemon) reconcile() []*agent {
 		}()
 	}
 	return tree
+}
+
+// childName names the subagent at ctrl, a control directory of parent, by
+// its path under main's agents/: research, research/agents/scraper.
+func childName(parent *agent, ctrl string) string {
+	if parent.parent == nil {
+		return filepath.Base(ctrl)
+	}
+	return parent.name + "/agents/" + filepath.Base(ctrl)
+}
+
+// childID is a subagent's identity: its control directory's path as seen
+// from the main agent. It keys journals, the pool and deliveries, so a
+// grandchild's journals sit inside its parent's journal directory whichever
+// pool user holds the parent. For a direct child it is the control directory.
+func (d *daemon) childID(parent *agent, ctrl string) string {
+	return filepath.Join(d.cfg.Home, "agents", childName(parent, ctrl))
 }
 
 // validControlDir accepts only home/agents/NAME with one clean component.

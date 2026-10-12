@@ -18,10 +18,10 @@ import (
 // from a control directory under its parent's home.
 type agent struct {
 	d      *daemon
-	id     string // main home or control directory: keys journals, pool and deliveries
+	id     string // main home, or the control directory as seen from main: keys journals, pool and deliveries
 	name   string // "main", or the path under main's agents/ (research/agents/scraper)
 	home   string
-	ctrl   string // control directory; "" for main
+	ctrl   string // the real control directory, in the parent's home; "" for main
 	user   string // cfg.AgentUser for main, a pool user for subagents
 	parent *agent
 	fs     *fsio.Client // runs as user: every access to home goes through it

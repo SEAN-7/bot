@@ -1,9 +1,11 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -255,8 +257,47 @@ func TestGrandchildAdmitted(t *testing.T) {
 	if !sys.called("members agent-2 agent-1," + h.mainUser()) {
 		t.Fatal(sys)
 	}
-	if info, err := os.Stat(h.cfg.JournalDir(g)); err != nil || !info.IsDir() {
+	// The grandchild's id is its path as seen from main, so its journals sit
+	// inside its parent's journal directory whichever user holds the parent.
+	id := filepath.Join(h.cfg.Home, "agents", "c", "agents", "g")
+	if info, err := os.Stat(h.cfg.JournalDir(id)); err != nil || !info.IsDir() {
 		t.Fatalf("grandchild journal dir: %v", err)
+	}
+	if _, err := os.Stat(h.cfg.JournalDir(g)); !os.IsNotExist(err) {
+		t.Fatalf("journal keyed by the pool home path: %v", err)
+	}
+	data, _ := os.ReadFile(h.cfg.PoolFile())
+	if !strings.Contains(string(data), `{"user":"agent-2","agent":"`+id+`","state":"active"}`) {
+		t.Fatalf("pool.json %s", data)
+	}
+	h.drop(h.childHome(g), "task.md", "work")
+	if records := h.waitEnds(id, 1); lastEnd(records) != "done" {
+		t.Fatalf("grandchild run %v", records)
+	}
+}
+
+func TestRestartKeepsChildHome(t *testing.T) {
+	h := newHarness(t)
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	work := filepath.Join(home, "work.txt")
+	os.WriteFile(work, []byte("mine"), 0o644)
+	os.WriteFile(filepath.Join(home, "README.md"), []byte("my own readme"), 0o644)
+	h.stop()
+	os.Remove(filepath.Join(ctrl, "home"))
+	h.start()
+	if again := h.childHome(ctrl); again != home {
+		t.Fatalf("restart moved the child from %s to %s", home, again)
+	}
+	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
+		t.Fatalf("work.txt after restart: %q %v", data, err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(home, "README.md")); string(data) != "my own readme" {
+		t.Fatalf("README.md after restart: %q", data)
+	}
+	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
+		t.Fatalf("a second user was prepared: %v", sys)
 	}
 }
 
@@ -280,5 +321,21 @@ func TestValidControlDir(t *testing.T) {
 		if got := validControlDir(home, dir); got != want {
 			t.Errorf("validControlDir(%q) = %v, want %v", dir, got, want)
 		}
+	}
+}
+
+func TestMissingPoolUsersLogged(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		if name == "agent-3" {
+			return nil, errors.New("unknown user")
+		}
+		return nil, nil
+	}
+	h.start()
+	time.Sleep(100 * time.Millisecond)
+	h.stop()
+	if n := strings.Count(h.logs.String(), "pool users not found: agent-3; subagents are limited to 2"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, h.logs)
 	}
 }

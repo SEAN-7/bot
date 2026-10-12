@@ -193,3 +193,47 @@ func TestLatest(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// childRun makes dir/agents/x holding a run file with loose modes, as a
+// subagent's journal directory nested in its parent's.
+func childRun(t *testing.T, dir string) (string, string) {
+	t.Helper()
+	child := filepath.Join(dir, "agents", "x")
+	if err := os.MkdirAll(child, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(child, 0o755)
+	run := filepath.Join(child, "20261011T120000.000000000Z.jsonl")
+	if err := os.WriteFile(run, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(run, 0o644)
+	return child, run
+}
+
+func TestSecureSkipsChildJournals(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	child, run := childRun(t, dir)
+	os.Chmod(filepath.Join(dir, "agents"), 0o755)
+	if err := Secure(dir, os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{filepath.Join(dir, "agents"): 0o751, child: 0o755, run: 0o644} {
+		if info, _ := os.Stat(path); info.Mode().Perm() != want {
+			t.Errorf("%s mode %v, want %v", path, info.Mode().Perm(), want)
+		}
+	}
+}
+
+func TestSecureTreeFixesChildJournals(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "agent")
+	child, run := childRun(t, dir)
+	if err := SecureTree(dir, os.Getgid()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]os.FileMode{child: 0o751, run: 0o640} {
+		if info, _ := os.Stat(path); info.Mode().Perm() != want {
+			t.Errorf("%s mode %v, want %v", path, info.Mode().Perm(), want)
+		}
+	}
+}

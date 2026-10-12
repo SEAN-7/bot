@@ -22,12 +22,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if d.draining() {
 		return nil
 	}
-	name := filepath.Base(ctrl)
-	if parent != d.main {
-		name = parent.name + "/agents/" + name
-	}
-	held := d.pool.userOf(ctrl)
-	user, err := d.pool.assign(ctrl, min(len(d.pool.users), d.settings.MaxAgents-1))
+	name, id := childName(parent, ctrl), d.childID(parent, ctrl)
+	held := d.pool.userOf(id)
+	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents-1))
 	if err != nil {
 		d.admitFailed(ctrl, name, "pool", err)
 		return nil
@@ -38,7 +35,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 		return nil // held: its user is being reclaimed
 	}
-	c := &agent{d: d, id: ctrl, name: name, home: d.cfg.PoolHome(user), ctrl: ctrl, user: user, parent: parent, done: make(chan struct{})}
+	c := &agent{d: d, id: id, name: name, home: d.cfg.PoolHome(user), ctrl: ctrl, user: user, parent: parent, done: make(chan struct{})}
 	// A user new to this agent may hold a previous agent's files; a user it
 	// already held (a daemon restart) keeps them.
 	fresh, cleared := held == "", false
@@ -84,7 +81,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := d.cfg.System.EnableLinger(user); err != nil {
 		return fail("linger", err)
 	}
-	if err := journal.Secure(d.cfg.JournalDir(ctrl), c.gid()); err != nil {
+	if err := journal.Secure(d.cfg.JournalDir(id), c.gid()); err != nil {
 		return fail("journal", err)
 	}
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {

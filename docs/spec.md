@@ -171,8 +171,9 @@ agent user cannot read another user's process environment.
   with the seed `README.md`, `TASK.md` and `inbox/` (through its helper);
   enables lingering; creates its journal directory; and writes the `home`
   symlink into the control directory (through the parent's helper). An
-  agent's identity is its control directory's path: renaming the directory
-  removes the subagent and admits a new one.
+  agent's identity is its control directory's path as seen from the main
+  agent (see Journal): renaming the directory removes the subagent and
+  admits a new one.
 - **max_agents.** When no pool user is free, a new control directory is not
   admitted. The daemon writes the reason to its `ERROR` and the service log,
   and notifies the parent's inbox once.
@@ -325,11 +326,13 @@ agent.
 ## Journal
 
 - One JSONL file per run at `/var/log/agent/<agent path>/<UTC timestamp>.jsonl`,
-  where `<agent path>` is the main agent's home or a subagent's control
-  directory (so the main agent's journals are under
-  `/var/log/agent/home/agent/`, and a child's under
-  `/var/log/agent/home/agent/agents/<name>/`). Only timestamp-named files
-  are run journals.
+  where `<agent path>` is the agent's path as seen from the main agent: the
+  main agent's home, then `/agents/<name>` for each level. The main agent's
+  journals are under `/var/log/agent/home/agent/`, a child's under
+  `/var/log/agent/home/agent/agents/<name>/`, and a grandchild's under
+  `/var/log/agent/home/agent/agents/<name>/agents/<name>/`, inside its
+  parent's journal directory whichever pool user holds the parent. Only
+  timestamp-named files are run journals.
 - Journal directories and files are root-owned. The main agent's are group
   `agent`; a subagent's are its own group, which holds it and its ancestors.
   Directories are 0751 and files 0640, so siblings cannot read each other's
