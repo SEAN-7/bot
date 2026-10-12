@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/SEAN-7/bot/internal/journal"
-	"github.com/SEAN-7/bot/internal/layout"
 )
 
 const resultLines = 20
@@ -101,15 +100,6 @@ func format(line []byte) string {
 	}
 }
 
-// AgentDir resolves NAME ("" for the main agent, or a path under
-// ~/agents such as "research/agents/scraper").
-func AgentDir(l layout.Layout, name string) string {
-	if name == "" {
-		return l.Home
-	}
-	return filepath.Join(l.Home, "agents", filepath.Clean("/" + name)[1:])
-}
-
 func newest(dir string) string {
 	matches, _ := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	sort.Strings(matches)
@@ -122,11 +112,12 @@ func newest(dir string) string {
 }
 
 // Log prints the agent's ERROR, if any, then follows its newest journal,
-// moving on to each new run as it starts.
-func Log(ctx context.Context, l layout.Layout, name string, w io.Writer) error {
-	dir := AgentDir(l, name)
-	if text, ok := readError(filepath.Join(dir, "ERROR")); ok {
-		fmt.Fprintf(w, "ERROR: %s\n", text)
+// moving on to each new run as it starts. An empty errorFile skips the ERROR.
+func Log(ctx context.Context, journalDir, errorFile string, w io.Writer) error {
+	if errorFile != "" {
+		if text, ok := readError(errorFile); ok {
+			fmt.Fprintf(w, "ERROR: %s\n", text)
+		}
 	}
 	var file *os.File
 	var reader *bufio.Reader
@@ -148,7 +139,7 @@ func Log(ctx context.Context, l layout.Layout, name string, w io.Writer) error {
 			partial = nil
 		}
 		// Switch only after reading to EOF, so a finished run prints in full.
-		if next := newest(l.JournalDir(dir)); next != "" && next != current {
+		if next := newest(journalDir); next != "" && next != current {
 			if file != nil {
 				// Lines written after the last read but before the switch.
 				rest, _ := io.ReadAll(reader)

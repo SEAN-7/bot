@@ -83,7 +83,7 @@ func TestLogFollowsNewRuns(t *testing.T) {
 		second.Record("assistant", map[string]any{"text": "second run"})
 		second.End("done")
 	}()
-	if err := Log(ctx, l, "", &out); err != nil && err != context.DeadlineExceeded {
+	if err := Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), &out); err != nil && err != context.DeadlineExceeded {
 		t.Fatal(err)
 	}
 	got := out.String()
@@ -123,7 +123,7 @@ func TestLogDoesNotFollowErrorSymlink(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
-	Log(ctx, l, "", &out)
+	Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), &out)
 	if strings.Contains(out.String(), "TOPSECRET") {
 		t.Fatal("agent log followed a symlinked ERROR")
 	}
@@ -138,7 +138,7 @@ func TestLogDoesNotHangOnErrorFIFO(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	done := make(chan struct{})
-	go func() { Log(ctx, l, "", io.Discard); close(done) }()
+	go func() { Log(ctx, l.JournalDir(l.Home), filepath.Join(l.Home, "ERROR"), io.Discard); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

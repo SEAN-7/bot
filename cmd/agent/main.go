@@ -31,9 +31,10 @@ import (
 const usage = `Usage:
   agent daemon                      run the service (root)
   agent send "text"                 send an owner message to the main agent (root)
+  agent send NAME "text"            (agents) send a message to your subagent NAME
   agent log [NAME]                  follow an agent's journal (NAME under ~/agents)
   agent message "text"|-            (agents) send a message to the owner; - reads stdin
-  agent messages                    show the owner conversation and follow it
+  agent messages [NAME]             show a conversation (yours, or subagent NAME's) and follow it
   agent provider install NAME|URL   install a provider plugin (root; URL needs --sha256)
   agent provider describe           show providers, models and options
   agent version
@@ -65,14 +66,26 @@ func run(args []string) error {
 		}
 		return daemon.Run(ctx, daemon.DefaultConfig(self))
 	case "send":
-		if len(args) != 2 {
-			return errors.New(`usage: agent send "text"`)
+		root := os.Geteuid() == 0
+		switch {
+		case root && len(args) == 2:
+			if err := cli.Send(l, args[1], time.Now()); err != nil {
+				return err
+			}
+			fmt.Println("Sent.")
+			return nil
+		case root && len(args) == 3:
+			return errors.New(`the human sends only to the main agent: agent send "text"`)
+		case !root && len(args) == 2:
+			return errors.New(`agent send needs root; agents use agent send NAME "text"`)
+		case !root && len(args) == 3:
+			if err := cli.SendChild(os.Getenv("HOME"), args[1], args[2], time.Now()); err != nil {
+				return err
+			}
+			fmt.Printf("Queued for %s.\n", args[1])
+			return nil
 		}
-		if err := cli.Send(l, args[1], time.Now()); err != nil {
-			return err
-		}
-		fmt.Println("Sent.")
-		return nil
+		return errors.New(`usage: agent send "text" (root) or agent send NAME "text" (agents)`)
 	case "message":
 		if len(args) != 2 {
 			return errors.New(`usage: agent message "text" (or - to read stdin)`)
@@ -90,18 +103,23 @@ func run(args []string) error {
 		}
 		fmt.Println("Queued for your owner.")
 		return nil
-	case "messages":
-		err := cli.Messages(ctx, l, os.Stdout)
-		if errors.Is(err, context.Canceled) {
-			return nil
+	case "messages", "log":
+		if len(args) > 2 {
+			return fmt.Errorf("usage: agent %s [NAME]", args[0])
 		}
-		return err
-	case "log":
 		name := ""
 		if len(args) > 1 {
 			name = args[1]
 		}
-		err := cli.Log(ctx, l, name, os.Stdout)
+		journalDir, errorFile, conversation, err := cli.Target(l, os.Geteuid() == 0, os.Getenv("HOME"), name)
+		if err != nil {
+			return err
+		}
+		if args[0] == "messages" {
+			err = cli.Messages(ctx, conversation, os.Stdout)
+		} else {
+			err = cli.Log(ctx, journalDir, errorFile, os.Stdout)
+		}
 		if errors.Is(err, context.Canceled) {
 			return nil
 		}
