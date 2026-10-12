@@ -18,15 +18,20 @@ SHA_agent_linux_arm64=cacdfe78caaba50f0bed3a3ab41cad18c10aa478542978f952ebcde692
 # END CHECKSUMS
 
 ROLLBACK=no
+MIGRATED=no
 
 # finish cleans up, and restores the previous binary and service if an
-# upgrade failed after it was stopped.
+# upgrade failed after it was stopped. Once subagents have been migrated,
+# even in part, the previous release must not run: the agent stays stopped
+# on this one until a rerun completes.
 finish() {
 	status=$?
 	if [ "$status" != 0 ] && [ "$ROLLBACK" = yes ] && [ -x /usr/local/bin/agent.prev ]; then
 		mv /usr/local/bin/agent.prev /usr/local/bin/agent
 		systemctl start agent 2>/dev/null || true
 		printf 'install: failed; restored the previous version\n' >&2
+	elif [ "$status" != 0 ] && [ "$MIGRATED" = yes ]; then
+		printf 'install: failed (status %s) after migrating subagents; the agent stays stopped on v%s. Fix the cause and rerun install.sh.\n' "$status" "$VERSION" >&2
 	fi
 	rm -rf "${tmp:-}"
 	exit "$status"
@@ -105,8 +110,18 @@ main() {
 		cp -p /usr/local/bin/agent /usr/local/bin/agent.prev
 		ROLLBACK=yes
 	fi
+	# An earlier run migrated subagents part way: the previous release must
+	# never run on them again, whatever fails now.
+	if [ -e /var/lib/agent/migrating ]; then
+		ROLLBACK=no
+		MIGRATED=yes
+	fi
 	if [ "$upgrade" = yes ]; then
 		say "Stopping the agent; active runs finish first (up to 15 minutes)..."
+	fi
+	# Whenever the unit exists, even inactive or between restarts: a unit
+	# restarting on the new binary would race the migration below.
+	if [ "$upgrade" = yes ] || [ -f /etc/systemd/system/agent.service ]; then
 		systemctl stop agent
 	fi
 	install -m 755 -o root -g root "$tmp/agent" /usr/local/bin/agent
@@ -141,22 +156,56 @@ main() {
 
 	# Releases before 0.3.0 ran every subagent as agent, in a directory under
 	# /home/agent/agents holding its inbox/. Move them to pool users, after a
-	# root-only backup. A failure stops the install and restores the
-	# previous version; the backup stays.
+	# root-only backup. If nothing was moved, a failure restores the previous
+	# version. Once files have moved, the previous version must not run them:
+	# the agent stays stopped on this one and a rerun finishes the migration.
+	# The marker records the first run's backup, of the untouched tree, and
+	# stays until the migration completes.
 	legacy=no
 	for dir in /home/agent/agents/*/inbox; do
-		if [ -d "$dir" ]; then legacy=yes; fi
+		# An admitted control directory has a home link; a stray inbox/ there
+		# is not a legacy subagent.
+		if [ -d "$dir" ] && [ ! -L "${dir%/inbox}/home" ]; then legacy=yes; fi
 	done
 	if [ "$legacy" = yes ]; then
-		mkdir -p /var/backups
-		backup=/var/backups/agent-subagents-$(date -u +%Y%m%dT%H%M%SZ).tgz
-		say "Backing up /home/agent/agents to $backup..."
-		(umask 077; tar -C /home/agent -czf "$backup" agents)
-		chmod 600 "$backup"
-		/usr/local/bin/agent _migrate || die "could not move the subagents to their own users; the backup is $backup"
+		marker=/var/lib/agent/migrating
+		if [ ! -e "$marker" ]; then
+			mkdir -p /var/backups
+			backup=/var/backups/agent-subagents-$(date -u +%Y%m%dT%H%M%SZ).tgz
+			say "Backing up /home/agent/agents to $backup..."
+			(umask 077; tar -C /home/agent -czf "$backup" agents)
+			chmod 600 "$backup"
+			printf '%s\n' "$backup" >"$marker"
+		fi
+		backup=$(cat "$marker")
+		migrate=0
+		/usr/local/bin/agent _migrate || migrate=$?
+		case $migrate in
+		0)
+			rm -f "$marker"
+			# From here a failure keeps this release: the old one cannot run
+			# the migrated subagents.
+			ROLLBACK=no
+			MIGRATED=yes
+			;;
+		1)
+			# Nothing was moved, by this run or an earlier one.
+			[ "$MIGRATED" = yes ] || rm -f "$marker"
+			die "could not move the subagents to their own users; the backup of /home/agent/agents is $backup"
+			;;
+		*)
+			ROLLBACK=no
+			MIGRATED=yes
+			die "the migration stopped part way; the backup of /home/agent/agents from before it is $backup"
+			;;
+		esac
+	elif [ -e /var/lib/agent/migrating ]; then
+		rm -f /var/lib/agent/migrating # no legacy subagent is left
 	fi
 
+	configured=no
 	if [ -f /home/agent/config.json ]; then
+		configured=yes
 		# Upgrade: keep the configuration and refresh installed plugins.
 		for plugin in /etc/agent/plugins/*; do
 			[ -f "$plugin" ] || continue
@@ -220,8 +269,8 @@ UNIT
 	systemctl enable --now agent
 	ROLLBACK=no
 
-	if [ "$upgrade" = yes ]; then
-		say "Upgraded to v$VERSION and restarted."
+	if [ "$configured" = yes ]; then
+		say "Upgraded to v$VERSION and started."
 	else
 		say "Installed v$VERSION. Next:"
 		say "  sudo agent send \"Hello. Introduce yourself and tell me what you can do.\""

@@ -20,7 +20,7 @@ import (
 //
 // A legacy subagent is a real directory agents/NAME holding a real inbox/
 // directory and no home link, found from the main home down, parents before
-// children. Each gets a pool user, recorded under its id (its path as seen
+// children. It and its config.json must belong to the main agent's user. Each gets a pool user, recorded under its id (its path as seen
 // from the main agent, so its journals keep their place); everything but
 // config.json moves into the pool user's empty home by rename; and what the
 // main agent's user owned there passes to the pool user. config.json stays in
@@ -32,9 +32,13 @@ import (
 // one above it) with its inbox/: the next run, which install.sh starts while
 // any top-level inbox/ remains, finds them and finishes. Nothing is
 // overwritten. All paths are opened beneath the homes directory, and every
-// component is checked not to be a symbolic link before a rename.
-func Migrate(cfg Config) error {
-	settings, _ := layout.LoadSettings(cfg.SettingsFile())
+// component is checked not to be a symbolic link before a rename. Once files
+// have changed, by this run or an earlier one, the error is a *PartialError.
+func Migrate(cfg Config) (err error) {
+	settings, serr := layout.LoadSettings(cfg.SettingsFile())
+	if serr != nil {
+		cfg.Logger.Printf("settings.json: %v; using max_agents=%d", serr, settings.MaxAgents)
+	}
 	users := poolUsers(cfg, settings.MaxAgents)
 	p, err := loadPool(cfg.PoolFile(), users)
 	if err != nil {
@@ -50,6 +54,11 @@ func Migrate(cfg Config) error {
 	}
 	defer root.Close()
 	m := &migrator{cfg: cfg, root: root, fsys: root.FS(), pool: p}
+	defer func() {
+		if err != nil && m.partial {
+			err = &PartialError{Err: err}
+		}
+	}()
 	if m.mainUID, _, err = m.ids(cfg.AgentUser); err != nil {
 		return err
 	}
@@ -77,6 +86,14 @@ func Migrate(cfg Config) error {
 	return nil
 }
 
+// PartialError is Migrate's error when the tree is part way migrated: this
+// run moved or chowned files, or an earlier run had. The previous release
+// must not run on such a tree; rerunning Migrate finishes it.
+type PartialError struct{ Err error }
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+func (e *PartialError) Unwrap() error { return e.Err }
+
 // migration is one legacy subagent. Paths are relative to the homes root.
 type migration struct {
 	id     string // the subagent's id: main home + /agents/NAME...
@@ -98,15 +115,24 @@ type migrator struct {
 	mainUID int
 	jobs    []*migration
 	srcs    map[string]bool // every job's src
+	partial bool            // files have changed: see PartialError
 }
 
 // node is an agent whose agents/ directory is searched: the dirs that may
 // hold it now, and home, where it ends up.
 type node struct {
 	id   string
-	dirs []string
+	dirs []searchDir
 	home string
 	job  int
+}
+
+// searchDir is a directory that may hold an agents/ directory. owner is the
+// pool user's uid when it is a pool home, whose user an interrupted run may
+// have given the control directories in it; -1 otherwise.
+type searchDir struct {
+	rel   string
+	owner int
 }
 
 // plan finds the legacy subagents breadth-first, in the places they are now:
@@ -117,12 +143,12 @@ func (m *migrator) plan(main string) error {
 	if err := m.realDirs(main); err != nil {
 		return err
 	}
-	queue := []node{{id: m.cfg.Home, dirs: []string{main}, home: main, job: -1}}
+	queue := []node{{id: m.cfg.Home, dirs: []searchDir{{main, -1}}, home: main, job: -1}}
 	for i := 0; i < len(queue); i++ {
 		n := queue[i]
 		found := map[string]string{}
 		for _, dir := range n.dirs {
-			agents := path.Join(dir, "agents")
+			agents := path.Join(dir.rel, "agents")
 			info, err := m.root.Lstat(agents)
 			if errors.Is(err, fs.ErrNotExist) {
 				continue
@@ -131,6 +157,9 @@ func (m *migrator) plan(main string) error {
 				return err
 			}
 			if info.Mode()&fs.ModeSymlink != 0 {
+				if i > 0 && n.job < 0 {
+					continue // a migrated subagent's own business
+				}
 				return fmt.Errorf("%s is a symbolic link; not migrating", m.abs(agents))
 			}
 			if !info.IsDir() {
@@ -151,24 +180,42 @@ func (m *migrator) plan(main string) error {
 				found[name] = ctrl
 				id := n.id + "/agents/" + name
 				held := m.pool.userOf(id)
+				heldUID := -1
+				if held != "" {
+					if heldUID, _, err = m.ids(held); err != nil {
+						return err
+					}
+				}
 				legacy, err := m.legacy(ctrl)
 				if err != nil {
 					return err
 				}
 				if !legacy {
 					if held != "" {
-						queue = append(queue, node{id: id, dirs: []string{m.rel(held)}, home: m.rel(held), job: -1})
+						home := m.rel(held)
+						queue = append(queue, node{id: id, dirs: []searchDir{{home, heldUID}}, home: home, job: -1})
 					}
 					continue
 				}
 				j := &migration{id: id, name: strings.TrimPrefix(id, m.cfg.Home+"/"), parent: n.job}
+				if err := m.checkOwned(j, ctrl, dir.owner); err != nil {
+					return err
+				}
+				if dir.owner >= 0 {
+					m.partial = true // its parent's files have moved
+				}
+				if held != "" {
+					if err := m.checkStarted(ctrl, m.rel(held)); err != nil {
+						return err
+					}
+				}
 				if n.job < 0 {
 					j.src = path.Join(n.home, "agents", name)
 				}
 				m.jobs = append(m.jobs, j)
-				child := node{id: id, dirs: []string{ctrl}, job: len(m.jobs) - 1}
+				child := node{id: id, dirs: []searchDir{{ctrl, -1}}, job: len(m.jobs) - 1}
 				if held != "" {
-					child.dirs = append(child.dirs, m.rel(held))
+					child.dirs = append(child.dirs, searchDir{m.rel(held), heldUID})
 				}
 				queue = append(queue, child)
 			}
@@ -177,8 +224,61 @@ func (m *migrator) plan(main string) error {
 	return nil
 }
 
+// checkOwned refuses a legacy control directory, or its config.json, that is
+// not a real directory or file of the main agent's user, or of owner, the
+// pool user whose home holds it after an interrupted run. The daemon takes a
+// control directory its parent's user does not own for gone, and would
+// reclaim the subagent's home.
+func (m *migrator) checkOwned(j *migration, ctrl string, owner int) error {
+	for _, p := range []string{ctrl, path.Join(ctrl, "config.json")} {
+		info, err := m.root.Lstat(p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%s: %s is missing; add it or remove %s, then rerun", j.name, m.abs(p), m.abs(path.Join(ctrl, "inbox")))
+		}
+		if err != nil {
+			return err
+		}
+		if p == ctrl && !info.IsDir() {
+			return fmt.Errorf("%s: %s is not a directory; not migrating", j.name, m.abs(p))
+		}
+		if p != ctrl && !info.Mode().IsRegular() {
+			return fmt.Errorf("%s: %s is not a regular file; not migrating", j.name, m.abs(p))
+		}
+		uid := -2
+		if st, ok := info.Sys().(*syscall.Stat_t); ok {
+			uid = int(st.Uid)
+		}
+		if uid != m.mainUID && uid != owner {
+			return fmt.Errorf("%s: %s is owned by uid %d, not the main agent's user; not migrating", j.name, m.abs(p), uid)
+		}
+	}
+	return nil
+}
+
+// checkStarted marks the run partial when an earlier run already changed
+// files of the legacy subagent at ctrl, which holds a user: its pool home
+// has files, or its inbox/ was given to the pool user.
+func (m *migrator) checkStarted(ctrl, home string) error {
+	entries, err := fs.ReadDir(m.fsys, home)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	if len(entries) > 0 {
+		m.partial = true
+	}
+	info, err := m.root.Lstat(path.Join(ctrl, "inbox"))
+	if err != nil {
+		return err
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && int(st.Uid) != m.mainUID {
+		m.partial = true
+	}
+	return nil
+}
+
 // legacy reports whether the real directory ctrl is a legacy subagent: it
-// holds a real inbox/ directory, and no home link from an admission.
+// holds a real inbox/ directory, and no home link from an admission (a
+// home that is not a link is the subagent's own file).
 func (m *migrator) legacy(ctrl string) (bool, error) {
 	info, err := m.root.Lstat(path.Join(ctrl, "inbox"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -190,9 +290,9 @@ func (m *migrator) legacy(ctrl string) (bool, error) {
 	if !info.IsDir() {
 		return false, nil
 	}
-	_, err = m.root.Lstat(path.Join(ctrl, "home"))
+	info, err = m.root.Lstat(path.Join(ctrl, "home"))
 	if err == nil {
-		return false, nil
+		return info.Mode()&fs.ModeSymlink == 0, nil
 	}
 	if !errors.Is(err, fs.ErrNotExist) {
 		return false, err
@@ -319,7 +419,11 @@ func (m *migrator) move(from, to string) error {
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	return m.root.Rename(from, to)
+	if err := m.root.Rename(from, to); err != nil {
+		return err
+	}
+	m.partial = true
+	return nil
 }
 
 // chown walks dir without following links and gives j's user what the main
@@ -355,7 +459,11 @@ func (m *migrator) lchown(p string, j *migration) error {
 	if !ok || int(st.Uid) != m.mainUID {
 		return nil
 	}
-	return m.root.Lchown(p, j.uid, j.gid)
+	if err := m.root.Lchown(p, j.uid, j.gid); err != nil {
+		return err
+	}
+	m.partial = true
+	return nil
 }
 
 // realDirs fails unless every component of rel is a directory, not a link.

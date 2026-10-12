@@ -652,16 +652,23 @@ Earlier releases ran every subagent as `agent`, in a directory under
 `~/agents/` that held its whole state. The upgrade converts each one; the
 code for it lives in `install.sh` and the hidden `agent _migrate` command,
 and can be removed once no installation predates it.
-1. The installer stops the daemon (active runs finish as usual), creates the
-   pool users and, if any `/home/agent/agents/*/inbox` exists, takes a
+1. The installer stops the daemon (active runs finish as usual; the unit is
+   stopped whenever it exists, so a restarting one cannot race the
+   migration), creates the pool users and, if any
+   `/home/agent/agents/*/inbox` exists beside no `home` link, takes a
    root-only backup of `/home/agent/agents/` in `/var/backups/` and runs
-   `agent _migrate`. A failure restores the previous version; the backup
-   stays.
+   `agent _migrate`. If it fails before moving anything (exit status 1),
+   the previous version is restored. Once files have moved (exit status 2,
+   or an earlier run's marker `/var/lib/agent/migrating` remains), the
+   previous version never runs again: the new binary stays, the agent stays
+   stopped, and rerunning `install.sh` finishes the migration. The backup,
+   of the untouched tree, is taken only by the first run and stays.
 2. For each legacy subagent directory (one containing `inbox/`), parents
    before children: assign a pool user; move everything except
    `config.json` into its home with a rename (never following symlinks);
    change the owner of the moved files that `agent` owned to the new user;
    leave `config.json` in the control directory; record the assignment.
+   A legacy directory and its `config.json` must belong to `agent`.
    Every check and assignment comes before the first move, and each
    `inbox/` moves last, deepest first, so a run that fails part way leaves
    the top-level `inbox/` in place and the next run finishes the job.

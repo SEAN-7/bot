@@ -33,8 +33,10 @@ files, journals and credentials. The previous binary is kept as
 service. An upgrade from a release before 0.3.0 first backs up
 `/home/agent/agents` to `/var/backups/agent-subagents-<UTC time>.tgz` (root
 only), then moves each subagent's files to its own user's home, leaving its
-`config.json` in place; if that fails, the upgrade is rolled back and the
-backup kept.
+`config.json` in place. If that fails before moving anything, the upgrade
+is rolled back; once files have moved, the agent stays stopped on the new
+version and rerunning `install.sh` finishes the job. The backup is kept
+either way.
 
 `--sudo` (append `-s -- --sudo` after `sh`) gives the agent passwordless sudo;
 rerunning without it leaves an existing grant alone (remove

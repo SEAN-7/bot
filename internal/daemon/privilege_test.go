@@ -678,3 +678,40 @@ func TestPrivilegeMigrateOwnership(t *testing.T) {
 		t.Fatalf("reclaimed after migration:\n%s", h.logs)
 	}
 }
+
+// TestPrivilegeMigrateRefusesForeignControlDirectory: a legacy directory, or
+// its config.json, that the main agent's user does not own is refused before
+// anything is assigned or moved. Migrated, the daemon would take it for a
+// control directory its parent does not own, that is gone, and reclaim it.
+func TestPrivilegeMigrateRefusesForeignControlDirectory(t *testing.T) {
+	for _, foreign := range []string{"", "config.json"} {
+		t.Run("root-owned "+filepath.Join("recipes", foreign), func(t *testing.T) {
+			h, name := rootHarness(t)
+			mainUID, mainGID := lookupIDs(t, name)
+			legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+			legacyAgent(t, legacy, map[string]string{"TASK.md": "keep me"})
+			if err := filepath.WalkDir(h.cfg.Home, func(path string, _ fs.DirEntry, err error) error {
+				if err == nil {
+					err = os.Lchown(path, mainUID, mainGID)
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Lchown(filepath.Join(legacy, foreign), 0, 0); err != nil {
+				t.Fatal(err)
+			}
+			err := Migrate(h.cfg)
+			var partial *PartialError
+			if err == nil || !strings.Contains(err.Error(), "owned by uid 0") || errors.As(err, &partial) {
+				t.Fatalf("got %v", err)
+			}
+			if got, err := os.ReadFile(filepath.Join(legacy, "TASK.md")); err != nil || string(got) != "keep me" {
+				t.Fatalf("TASK.md %q %v", got, err)
+			}
+			if _, err := os.Stat(h.cfg.PoolFile()); !os.IsNotExist(err) {
+				t.Fatalf("pool written: %s", poolJSON(h))
+			}
+		})
+	}
+}

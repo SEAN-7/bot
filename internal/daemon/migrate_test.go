@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -193,8 +194,12 @@ func TestMigrateRefusesNonEmptyPoolHome(t *testing.T) {
 	home := h.cfg.PoolHome("agent-1")
 	os.MkdirAll(home, 0o755)
 	os.WriteFile(filepath.Join(home, "stranger"), []byte("x"), 0o644)
-	if err := Migrate(h.cfg); err == nil || !strings.Contains(err.Error(), "not empty") {
+	err := Migrate(h.cfg)
+	if err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("got %v", err)
+	}
+	if isPartial(err) {
+		t.Fatalf("reported as part way with nothing moved: %v", err)
 	}
 	if names := dirNames(t, legacy); strings.Join(names, " ") != "TASK.md config.json inbox" {
 		t.Fatalf("legacy directory holds %v", names)
@@ -238,8 +243,13 @@ func TestMigrateRefusesNameInBoth(t *testing.T) {
 	os.MkdirAll(home, 0o755)
 	os.WriteFile(filepath.Join(home, "TASK.md"), []byte("moved"), 0o644)
 	writePool(t, h, `[{"user":"agent-1","agent":"`+legacy+`","state":"active"}]`)
-	if err := Migrate(h.cfg); err == nil || !strings.Contains(err.Error(), "TASK.md") {
+	err := Migrate(h.cfg)
+	if err == nil || !strings.Contains(err.Error(), "TASK.md") {
 		t.Fatalf("got %v", err)
+	}
+	// Nothing moved in this run, but an earlier one moved files.
+	if !isPartial(err) {
+		t.Fatalf("not reported as part way: %v", err)
 	}
 	if readFile(t, filepath.Join(legacy, "TASK.md")) != "legacy" || readFile(t, filepath.Join(home, "TASK.md")) != "moved" {
 		t.Fatal("a file was overwritten")
@@ -320,5 +330,102 @@ func TestMigrateResumesNested(t *testing.T) {
 	}
 	if !strings.Contains(poolJSON(h), "agent-2") || strings.Contains(poolJSON(h), "agent-3") {
 		t.Fatalf("pool: %s", poolJSON(h))
+	}
+}
+
+func isPartial(err error) bool {
+	var partial *PartialError
+	return errors.As(err, &partial)
+}
+
+// TestMigrateFailureAfterMovingIsPartial: once a file has moved, Migrate's
+// error says so, and install.sh keeps the previous release from running.
+func TestMigrateFailureAfterMovingIsPartial(t *testing.T) {
+	skipIfRoot(t)
+	h := newHarness(t)
+	legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+	legacyAgent(t, legacy, map[string]string{"TASK.md": "keep me", "locked/x": "x"})
+	locked := filepath.Join(legacy, "locked")
+	os.Chmod(locked, 0)
+	t.Cleanup(func() {
+		os.Chmod(locked, 0o755)
+		os.Chmod(filepath.Join(h.cfg.PoolHome("agent-1"), "locked"), 0o755)
+	})
+	err := Migrate(h.cfg)
+	if err == nil || !isPartial(err) {
+		t.Fatalf("got %v", err)
+	}
+	if got := readFile(t, filepath.Join(h.cfg.PoolHome("agent-1"), "TASK.md")); got != "keep me" {
+		t.Fatalf("TASK.md %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(legacy, "inbox")); err != nil {
+		t.Fatal("inbox moved:", err)
+	}
+}
+
+// TestMigrateRefusesBrokenControlDirectory: a legacy directory whose
+// config.json is missing or a link is refused before anything is assigned.
+func TestMigrateRefusesBrokenControlDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(config string)
+		want  string
+	}{
+		{"missing", func(config string) { os.Remove(config) }, "is missing"},
+		{"link", func(config string) {
+			os.Remove(config)
+			os.Symlink("/etc/hosts", config)
+		}, "not a regular file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+			legacyAgent(t, legacy, map[string]string{"TASK.md": "keep me"})
+			tc.setup(filepath.Join(legacy, "config.json"))
+			err := Migrate(h.cfg)
+			if err == nil || !strings.Contains(err.Error(), tc.want) || isPartial(err) {
+				t.Fatalf("got %v", err)
+			}
+			if got := readFile(t, filepath.Join(legacy, "TASK.md")); got != "keep me" {
+				t.Fatalf("TASK.md %q", got)
+			}
+			if _, err := os.Stat(h.cfg.PoolFile()); !os.IsNotExist(err) {
+				t.Fatalf("pool written: %s", poolJSON(h))
+			}
+		})
+	}
+}
+
+// TestMigrateHomeThatIsNotALink: only a home link marks an admission; a
+// legacy subagent's own home directory moves with the rest.
+func TestMigrateHomeThatIsNotALink(t *testing.T) {
+	h := newHarness(t)
+	legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+	legacyAgent(t, legacy, map[string]string{"home/x": "mine"})
+	if err := Migrate(h.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(h.cfg.PoolHome("agent-1"), "home", "x")); got != "mine" {
+		t.Fatalf("home/x %q", got)
+	}
+}
+
+// TestMigrateSkipsLinkedAgentsOfMigratedSubagent: a migrated subagent's
+// symlinked agents/ is its own business, not a reason to refuse.
+func TestMigrateSkipsLinkedAgentsOfMigratedSubagent(t *testing.T) {
+	h := newHarness(t)
+	ctrl := makeChild(t, h, "new", true)
+	home := h.cfg.PoolHome("agent-3")
+	os.MkdirAll(home, 0o755)
+	os.Symlink(home, filepath.Join(ctrl, "home"))
+	os.Symlink(h.root, filepath.Join(home, "agents"))
+	writePool(t, h, `[{"user":"agent-3","agent":"`+ctrl+`","state":"active"}]`)
+	legacy := filepath.Join(h.cfg.Home, "agents", "recipes")
+	legacyAgent(t, legacy, map[string]string{"TASK.md": "keep me"})
+	if err := Migrate(h.cfg); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFile(t, filepath.Join(h.cfg.PoolHome("agent-1"), "TASK.md")); got != "keep me" {
+		t.Fatalf("TASK.md %q", got)
 	}
 }
