@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -51,14 +52,32 @@ func loadPool(path string, users []string) (*pool, error) {
 }
 
 func (p *pool) userOf(agentID string) string {
+	e, _ := p.entryOf(agentID)
+	return e.User
+}
+
+// entryOf returns agentID's entry, if it holds a user.
+func (p *pool) entryOf(agentID string) (poolEntry, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, e := range p.byUser {
 		if e.Agent == agentID {
-			return e.User
+			return e, true
 		}
 	}
-	return ""
+	return poolEntry{}, false
+}
+
+// hasDescendants reports whether any subagent below agentID still holds a user.
+func (p *pool) hasDescendants(agentID string) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, e := range p.byUser {
+		if strings.HasPrefix(e.Agent, agentID+"/agents/") {
+			return true
+		}
+	}
+	return false
 }
 
 // assign returns agentID's user, giving it the first free one if it has none.

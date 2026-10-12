@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -59,7 +60,7 @@ type harness struct {
 	cfg    Config
 	script string
 	reqLog string
-	logs   *strings.Builder
+	logs   *syncBuffer
 	cancel context.CancelFunc
 	done   chan error
 }
@@ -91,7 +92,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	}
 	bin, _ := os.ReadFile(replayBin)
 	os.WriteFile(filepath.Join(l.Plugins(), "replay"), bin, 0o755)
-	h := &harness{t: t, root: root, script: filepath.Join(root, "script.jsonl"), reqLog: filepath.Join(root, "requests.jsonl"), logs: &strings.Builder{}}
+	h := &harness{t: t, root: root, script: filepath.Join(root, "script.jsonl"), reqLog: filepath.Join(root, "requests.jsonl"), logs: &syncBuffer{}}
 	h.setScript(steps...)
 	os.WriteFile(filepath.Join(l.Credentials(), "replay.env"), plugin.FormatEnv(map[string]string{"REPLAY_SCRIPT": h.script, "REPLAY_LOG": h.reqLog}), 0o600)
 	os.WriteFile(filepath.Join(l.Home, "README.md"), []byte("readme"), 0o644)
@@ -114,6 +115,24 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg.Logger = log.New(io.MultiWriter(h.logs, testWriter{t}), "", 0)
 	t.Cleanup(h.stop)
 	return h
+}
+
+// syncBuffer collects the daemon's log; tests read it while the daemon writes.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 type testWriter struct{ t *testing.T }

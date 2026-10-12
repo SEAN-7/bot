@@ -190,14 +190,16 @@ agent user cannot read another user's process environment.
   directory's disappearance removes a subagent: while it exists, a missing or
   renamed `config.json` just keeps the subagent from starting runs.
 - **Reclaim.** The daemon marks the user `reclaiming` in `pool.json`, then:
-  disables lingering and stops its user manager; kills every remaining
-  process of the uid until none is left; removes its crontab; removes its
+  disables lingering; removes its crontab; stops its user manager and kills
+  every remaining process of the uid until none is left; removes its
   home's contents and its files in `/tmp`, `/var/tmp` and `/dev/shm`
   (through its helper, after its processes are gone); clears its group's
   members; and moves its journal directory's group to the parent's group,
   so the next holder of the user cannot read them. Only then is the user
   marked free. A reclaim interrupted by a crash is finished on the next
-  start, before the user can be assigned again.
+  start, before the user can be assigned again. A failed reclaim is retried
+  every poll, and a user's reclaim waits until every descendant's user has
+  been reclaimed, since their groups still list it.
 - **Release notes.** On start, if `/var/lib/agent/version` differs from the
   running version, the daemon writes the sections of its embedded release
   notes (`internal/notes/notes.md`) newer than the recorded version, up to the

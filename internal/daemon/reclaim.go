@@ -43,7 +43,9 @@ func depth(a *agent) int {
 // everything it runs, wipes its home and temporary files, empties its group
 // and hands agentID's journals to the parent's group, and only then frees
 // it. A failure leaves the user reclaiming, so it is never assigned, and the
-// whole reclaim is retried at the next poll and on the next start.
+// whole reclaim is retried at the next poll and on the next start. It waits
+// for its descendants' reclaims: their groups still list this user, so its
+// next holder must not get it while their homes may hold files.
 func (d *daemon) reclaim(user, agentID string) error {
 	err := d.reclaimSteps(user, agentID)
 	if err != nil {
@@ -67,9 +69,16 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		// Persisted before anything is destroyed, so a crash at any later
 		// step is finished on the next start instead of handing out the user.
 		{"pool", func() error { return d.pool.mark(user, poolReclaiming) }},
+		{"subagents", func() error {
+			if d.pool.hasDescendants(agentID) {
+				return errors.New("waiting for its subagents' users to be reclaimed")
+			}
+			return nil
+		}},
 		{"linger", func() error { return sys.DisableLinger(user) }},
-		{"stop processes", func() error { return sys.StopProcesses(user) }},
+		// Before the kill loop, so no cron job starts after it.
 		{"crontab", func() error { return sys.RemoveCrontab(user) }},
+		{"stop processes", func() error { return sys.StopProcesses(user) }},
 		{"wipe files", func() error { return d.wipe(user) }},
 		{"group members", func() error { return sys.SetMembers(user, nil) }},
 		{"journal", func() error {
@@ -136,15 +145,19 @@ func (d *daemon) ancestorGid(agentID string) (int, error) {
 
 // controlDirGone reports whether parent's control directory ctrl no longer
 // exists: removal and its reclaim follow only from that, never from a
-// missing or renamed config.json, which an agent may move about.
+// missing or renamed config.json, which an agent may move about. Anything
+// short of certainty keeps the agent: a failing helper or user lookup must
+// not wipe a live subagent.
 func controlDirGone(parent *agent, ctrl string) bool {
 	e, err := parent.fs.Stat(ctrl)
 	if err != nil {
 		return errors.Is(err, fs.ErrNotExist)
 	}
-	// Replaced by a link, a file or someone else's directory: not the
-	// parent's control directory any more.
-	return e.Type != "dir" || e.UID != parent.uid()
+	if e.Type != "dir" {
+		return true // replaced by a link or a file
+	}
+	uid := parent.uid()
+	return uid >= 0 && e.UID != uid // someone else's directory
 }
 
 // sweep reclaims the users left behind: entries still reclaiming after a
@@ -166,7 +179,8 @@ func (d *daemon) sweep() {
 // orphaned reports whether the subagent id, which holds an active pool
 // entry, is not running and its control directory is gone. Its parent must
 // be running to look, through the parent's helper; a parent that holds no
-// user at all is gone, and its control directories with it.
+// user, or whose user is being reclaimed, is gone, and its control
+// directories with it.
 func (d *daemon) orphaned(id string) bool {
 	d.mu.Lock()
 	_, running := d.agents[id]
@@ -176,7 +190,11 @@ func (d *daemon) orphaned(id string) bool {
 		return false
 	}
 	if parent == nil {
-		return parentID(id) != d.cfg.Home && d.pool.userOf(parentID(id)) == ""
+		if pid := parentID(id); pid != d.cfg.Home {
+			e, held := d.pool.entryOf(pid)
+			return !held || e.State == poolReclaiming
+		}
+		return false
 	}
 	return controlDirGone(parent, filepath.Join(parent.home, "agents", filepath.Base(id)))
 }

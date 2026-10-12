@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -42,7 +45,8 @@ func TestRemovalReclaimsUser(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(h.cfg.TmpDirs[0], "mine")); !os.IsNotExist(err) {
 		t.Fatal("tmp file kept")
 	}
-	want := []string{"unlinger agent-1", "stop agent-1", "crontab agent-1", "members agent-1 "}
+	// The crontab goes before the kill loop, so no cron job starts after it.
+	want := []string{"unlinger agent-1", "crontab agent-1", "stop agent-1", "members agent-1 "}
 	if !sys.inOrder(want...) {
 		t.Fatal(sys)
 	}
@@ -118,7 +122,7 @@ func TestRemovedWhileStoppedIsReclaimed(t *testing.T) {
 	sys := h.cfg.System.(*fakeSystem)
 	waitFor(t, "reclaim", func() bool { return sys.called("members agent-2 ") })
 	waitFor(t, "entry gone", func() bool { return poolJSON(h) == "[]" })
-	if !sys.inOrder("unlinger agent-2", "stop agent-2", "crontab agent-2", "members agent-2 ") {
+	if !sys.inOrder("unlinger agent-2", "crontab agent-2", "stop agent-2", "members agent-2 ") {
 		t.Fatal(sys)
 	}
 	if _, err := os.Stat(filepath.Join(home, "work.txt")); !os.IsNotExist(err) {
@@ -141,11 +145,9 @@ func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 	if end := lastEnd(h.waitEnds(c, 1)); end != "removed" {
 		t.Fatal(end)
 	}
-	var dHome string
-	waitFor(t, "d admitted", func() bool {
-		dHome, _ = os.Readlink(filepath.Join(d, "home"))
-		return dHome != "" && dHome != cHome
-	})
+	// d may get c's freed user, but never c's files.
+	waitFor(t, "d admitted", func() bool { return strings.Contains(h.logs.String(), "d: admitted as") })
+	dHome, _ := os.Readlink(filepath.Join(d, "home"))
 	if _, err := os.Stat(filepath.Join(dHome, "README.md")); err != nil {
 		t.Fatal(err)
 	}
@@ -229,4 +231,136 @@ func TestAgentsDirReplacedByFileRemovesChild(t *testing.T) {
 	os.WriteFile(agents, []byte("not a directory"), 0o644)
 	sys := h.cfg.System.(*fakeSystem)
 	waitFor(t, "reclaim", func() bool { return sys.called("members agent-1 ") })
+}
+
+// failingLookup makes the main user's lookups ("" in the harness) fail while
+// failing is set, except for the first one, which Run needs to start.
+func failingLookup(h *harness, failing *atomic.Bool) {
+	h.cfg.ProviderUser = "provider"
+	var started atomic.Bool
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		if name == "" && failing.Load() && started.Swap(true) {
+			return nil, errors.New("lookup: too many open files")
+		}
+		return nil, nil
+	}
+}
+
+func TestLookupFailureKeepsPausedChild(t *testing.T) {
+	h := newHarness(t)
+	var failing atomic.Bool
+	failingLookup(h, &failing)
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	work := filepath.Join(home, "work.txt")
+	os.WriteFile(work, []byte("mine"), 0o644)
+	config, moved := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "x")
+	os.Rename(config, moved)
+	failing.Store(true)
+	time.Sleep(20 * h.cfg.Poll)
+	failing.Store(false)
+	time.Sleep(5 * h.cfg.Poll)
+	sys := h.cfg.System.(*fakeSystem)
+	if sys.called("unlinger agent-1") || sys.called("stop agent-1") {
+		t.Fatalf("reclaimed on a failed lookup: %v", sys)
+	}
+	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
+		t.Fatalf("home touched: %q %v", data, err)
+	}
+	if n := strings.Count(h.logs.String(), "c: admitted as agent-1"); n != 1 {
+		t.Fatalf("admitted %d times", n)
+	}
+}
+
+func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
+	h := newHarness(t)
+	var failing atomic.Bool
+	failingLookup(h, &failing)
+	ctrl := makeChild(t, h, "c", true)
+	h.start()
+	home := h.childHome(ctrl)
+	work := filepath.Join(home, "work.txt")
+	os.WriteFile(work, []byte("mine"), 0o644)
+	h.stop()
+	config, moved := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "x")
+	os.Rename(config, moved) // not admitted on start: only the pool entry remains
+	failing.Store(true)
+	h.start()
+	time.Sleep(20 * h.cfg.Poll)
+	failing.Store(false)
+	time.Sleep(5 * h.cfg.Poll)
+	sys := h.cfg.System.(*fakeSystem)
+	if sys.called("unlinger agent-1") || sys.called("stop agent-1") {
+		t.Fatalf("reclaimed on a failed lookup: %v", sys)
+	}
+	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
+		t.Fatalf("home touched: %q %v", data, err)
+	}
+	if p := poolJSON(h); !strings.Contains(p, `"user":"agent-1","agent":"`+ctrl+`","state":"active"`) {
+		t.Fatal(p)
+	}
+	os.Rename(moved, config)
+	if got := h.childHome(ctrl); got != home {
+		t.Fatal(got)
+	}
+}
+
+func TestParentWaitsForDescendantReclaim(t *testing.T) {
+	h := newHarness(t)
+	c := makeChild(t, h, "c", true)
+	h.start()
+	cHome := h.childHome(c)
+	g := filepath.Join(cHome, "agents", "g")
+	os.MkdirAll(g, 0o755)
+	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	h.childHome(g)
+	os.WriteFile(filepath.Join(cHome, "work.txt"), []byte("mine"), 0o644)
+	sys := h.cfg.System.(*fakeSystem)
+	sys.setFail("stop agent-2", errors.New("processes survived SIGKILL"))
+	os.RemoveAll(c)
+	waitFor(t, "both reclaiming", func() bool {
+		p := poolJSON(h)
+		return strings.Count(p, `"state":"reclaiming"`) == 2
+	})
+	time.Sleep(20 * h.cfg.Poll)
+	if sys.called("unlinger agent-1") || sys.called("members agent-1 ") {
+		t.Fatalf("parent reclaimed before its child: %v", sys)
+	}
+	if _, err := os.Stat(filepath.Join(cHome, "work.txt")); err != nil {
+		t.Fatal("parent's home wiped before its child's reclaim finished")
+	}
+	if p := poolJSON(h); strings.Count(p, `"state":"reclaiming"`) != 2 {
+		t.Fatal(p)
+	}
+	if n := strings.Count(h.logs.String(), "processes survived SIGKILL"); n != 1 {
+		t.Fatalf("reclaim error logged %d times", n)
+	}
+	sys.setFail("stop agent-2", nil)
+	waitFor(t, "pool empty", func() bool { return poolJSON(h) == "[]" })
+	if !sys.inOrder("members agent-2 ", "unlinger agent-1", "members agent-1 ") {
+		t.Fatal(sys)
+	}
+}
+
+// A paused grandchild holds its user without running; removing its parent
+// must reclaim it too rather than leave the parent waiting for it forever.
+func TestRemovalTakesPausedDescendant(t *testing.T) {
+	h := newHarness(t)
+	c := makeChild(t, h, "c", true)
+	h.start()
+	cHome := h.childHome(c)
+	g := filepath.Join(cHome, "agents", "g")
+	os.MkdirAll(g, 0o755)
+	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
+	h.childHome(g)
+	h.stop()
+	os.Remove(filepath.Join(g, "config.json")) // g is not admitted on start
+	h.start()
+	waitFor(t, "c running", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-1") == 2 })
+	os.RemoveAll(c)
+	waitFor(t, "pool empty", func() bool { return poolJSON(h) == "[]" })
+	if sys := h.cfg.System.(*fakeSystem); !sys.inOrder("members agent-2 ", "unlinger agent-1", "members agent-1 ") {
+		t.Fatal(sys)
+	}
 }
