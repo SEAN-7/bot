@@ -1,8 +1,11 @@
 # Project instructions
 
-Read [the spec](docs/spec.md) and [the philosophy](docs/philosophy.md) before
+Read [the spec](bot/docs/spec.md) and [the philosophy](bot/docs/philosophy.md) before
 making design or implementation changes. Keep the harness small: if the agent
 could build something as a script, it does not belong in the harness.
+
+The harness lives in `bot/`, the Go module root; the website lives in
+`website/`. Paths below are relative to `bot/`, and Go commands run there.
 
 ## Workflow
 

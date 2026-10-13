@@ -2,7 +2,7 @@
 # Install or upgrade the agent harness on a Linux VM.
 #
 #   printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-#     curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh |
+#     curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh |
 #     sudo --preserve-env=GITHUB_TOKEN sh
 #
 # The token is used only for downloads, is never written to disk and never

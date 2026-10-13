@@ -4,7 +4,7 @@ A minimal, always-on LLM agent for a Linux VM. The agent has one tool, the
 shell, and builds everything else (memory, schedules, messaging, tools)
 itself as files on the machine. The harness only provides a few guarantees:
 privilege separation, journals, crash recovery and context resets. See
-[the spec](docs/spec.md) for the design.
+[the spec](bot/docs/spec.md) for the design.
 
 ## Install
 
@@ -17,7 +17,7 @@ On the VM, replacing `vX.Y.Z` with the release you want:
 
 ```bash
 export GITHUB_TOKEN=github_pat_...
-printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
+printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
 ```
 
 The installer verifies every download against pinned checksums, asks which
@@ -36,6 +36,10 @@ the service.
 
 An installation older than 0.4.1 must upgrade through the v0.4.1
 `install.sh` first; later installers refuse it and change nothing.
+
+Releases up to 0.5.2 keep `install.sh` at the top of the repository:
+use `https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh` for
+those, including v0.4.1.
 
 To add another provider plugin later, download its release asset
 `plugin-NAME-linux-ARCH` (ARCH `amd64` or `arm64`) for the installed version

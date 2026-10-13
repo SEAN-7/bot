@@ -782,7 +782,7 @@ starting `config.json` comes from the control directory (see The daemon).
 `install.sh` runs as:
 
 ```sh
-printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
+printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
 ```
 
 It takes no options. It pins its own version and the SHA-256 of the `agent`
