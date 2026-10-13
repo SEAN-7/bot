@@ -9,9 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/SEAN-7/bot/internal/cli"
 	"github.com/SEAN-7/bot/internal/layout"
 )
 
@@ -29,7 +27,7 @@ func testEnv(t *testing.T, euid int) (env, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	out := &bytes.Buffer{}
-	return env{l: l, euid: euid, home: home, out: out, wait: 5 * time.Millisecond, poll: time.Millisecond}, out
+	return env{l: l, euid: euid, home: home, in: strings.NewReader(""), out: out}, out
 }
 
 // captureStderr runs f and returns what it wrote to os.Stderr.
@@ -63,15 +61,15 @@ func TestRunDispatch(t *testing.T) {
 		{"send nothing as agent", 1000, []string{"send"}, "usage: agent send NAME", ""},
 		{"message as root", 0, []string{"message", "hi"}, "root has no owner", ""},
 		{"message without text", 1000, []string{"message"}, "usage: agent message", ""},
-		{"new --help", 1000, []string{"new", "--help"}, "", "Usage: agent new NAME"},
-		{"new -h", 0, []string{"new", "-h"}, "", "Usage: agent new NAME"},
-		{"new x --help", 1000, []string{"new", "x", "--help"}, "", "Usage: agent new NAME"},
-		{"new without name", 1000, []string{"new"}, "usage: agent new NAME", ""},
+		{"new without name", 1000, []string{"new"}, "usage: agent new NAME [CONFIG|-]", ""},
+		{"new with a flag", 1000, []string{"new", "--help"}, "usage: agent new NAME [CONFIG|-]", ""},
+		{"new with too many arguments", 1000, []string{"new", "x", "a.json", "b.json"}, "usage: agent new NAME [CONFIG|-]", ""},
+		{"new as root without config", 0, []string{"new", "x"}, "root has no config.json to copy", ""},
 		{"remove without name", 1000, []string{"remove"}, "usage: agent remove NAME", ""},
 		{"messages with two names", 1000, []string{"messages", "a", "b"}, "usage: agent messages [NAME]", ""},
 		{"log with two names", 1000, []string{"log", "a", "b"}, "usage: agent log [NAME]", ""},
 		{"messages as root without name", 0, []string{"messages"}, "root has no owner", ""},
-		{"help", 1000, []string{"help"}, "", "Sharing a directory"},
+		{"help", 1000, []string{"help"}, "", "agent new NAME [CONFIG|-]"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, out := testEnv(t, c.euid)
@@ -89,77 +87,94 @@ func TestRunDispatch(t *testing.T) {
 	}
 }
 
-func TestNewHelpPrintsNewUsage(t *testing.T) {
-	e, out := testEnv(t, 1000)
-	var err error
-	stderr := captureStderr(t, func() { err = run([]string{"new", "--help"}, e) })
-	if err != nil || out.String() != cli.NewUsage || stderr != "" {
-		t.Fatalf("err %v, stdout %q, stderr %q", err, out.String(), stderr)
+// writeConfig writes a config file under dir and returns its path.
+func writeConfig(t *testing.T, dir, text string) string {
+	t.Helper()
+	path := filepath.Join(dir, "child.json")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// agent new takes its config from a file, from stdin for "-", or from the
+// caller's own ~/config.json, and prints the control directory it made.
+func TestNewConfigSources(t *testing.T) {
+	const config = `{"provider":"p","model":"m","options":{"effort":"high"}}`
+	for _, c := range []struct {
+		name string
+		euid int
+		args func(dir string) []string
+		in   string
+	}{
+		{"file as root", 0, func(dir string) []string { return []string{"new", "x", writeConfig(t, dir, config)} }, ""},
+		{"file as agent", 1000, func(dir string) []string { return []string{"new", "x", writeConfig(t, dir, config)} }, ""},
+		{"stdin as root", 0, func(string) []string { return []string{"new", "x", "-"} }, config},
+		{"stdin as agent", 1000, func(string) []string { return []string{"new", "x", "-"} }, config},
+		{"caller's own config", 1000, func(string) []string { return []string{"new", "x"} }, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			e, out := testEnv(t, c.euid)
+			e.in = strings.NewReader(c.in)
+			os.WriteFile(filepath.Join(e.home, "config.json"), []byte(config), 0o644)
+			if err := run(c.args(t.TempDir()), e); err != nil {
+				t.Fatal(err)
+			}
+			base := e.home
+			if c.euid == 0 {
+				base = e.l.RootHome()
+			}
+			ctrl := filepath.Join(base, "agents", "x")
+			data, err := os.ReadFile(filepath.Join(ctrl, "config.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got struct {
+				Provider, Model string
+				Options         map[string]any
+			}
+			json.Unmarshal(data, &got)
+			if got.Provider != "p" || got.Model != "m" || got.Options["effort"] != "high" {
+				t.Fatalf("config %s", data)
+			}
+			if !strings.Contains(out.String(), "Created "+ctrl+"\n") {
+				t.Fatalf("output %q", out.String())
+			}
+		})
 	}
 }
 
-func TestNewFlagErrorsPrintOnce(t *testing.T) {
-	for _, args := range [][]string{{"new", "--bogus", "x"}, {"new", "x", "--bogus"}, {"new", "x", "--model"}} {
+// A usage error or an invalid config creates nothing.
+func TestNewErrorsCreateNothing(t *testing.T) {
+	for _, args := range [][]string{{"new"}, {"new", "--model", "m", "x"}, {"new", "x", "-", "extra"}, {"new", "x", "/nonexistent.json"}} {
 		e, out := testEnv(t, 0)
-		var err error
-		stderr := captureStderr(t, func() { err = run(args, e) })
-		if err == nil || stderr != "" || out.Len() != 0 {
-			t.Errorf("%v: err %v, stderr %q, stdout %q", args, err, stderr, out.String())
+		if err := run(args, e); err == nil || out.Len() != 0 {
+			t.Errorf("%v: err %v, stdout %q", args, err, out.String())
 		}
 		if _, statErr := os.Stat(filepath.Join(e.l.RootHome(), "agents")); statErr == nil {
 			t.Errorf("%v created agents/", args)
 		}
 	}
 	e, _ := testEnv(t, 0)
-	err := run([]string{"new", "--bogus", "x"}, e)
-	if err == nil || err.Error() != "flag provided but not defined: -bogus" {
+	e.in = strings.NewReader(`{"provider":"p","model":"nope"}`)
+	if err := run([]string{"new", "x", "-"}, e); err == nil || !strings.Contains(err.Error(), `unknown model "nope"`) {
 		t.Fatalf("got %v", err)
 	}
-}
-
-// Flags that take a value consume the next argument; the others do not.
-func TestNewFlagPositions(t *testing.T) {
-	for _, args := range [][]string{
-		{"new", "x", "--provider", "p", "--model", "m"},
-		{"new", "--model", "m", "x"},
-		{"new", "--model=m", "x", "--provider=p"},
-		{"new", "x", "--model", "m", "--option", "effort=high"},
-		{"new", "x", "--model", "m", "--option=effort=high"},
-	} {
-		e, _ := testEnv(t, 0)
-		if err := run(args, e); err != nil {
-			t.Errorf("%v: %v", args, err)
-			continue
-		}
-		data, err := os.ReadFile(filepath.Join(e.l.RootHome(), "agents", "x", "config.json"))
-		if err != nil {
-			t.Errorf("%v: %v", args, err)
-			continue
-		}
-		var c struct {
-			Provider, Model string
-			Options         map[string]any
-		}
-		json.Unmarshal(data, &c)
-		if c.Provider != "p" || c.Model != "m" {
-			t.Errorf("%v: config %s", args, data)
-		}
-		if strings.Contains(strings.Join(args, " "), "effort") && c.Options["effort"] != "high" {
-			t.Errorf("%v: config %s", args, data)
-		}
+	if _, statErr := os.Stat(filepath.Join(e.l.RootHome(), "agents")); statErr == nil {
+		t.Error("an invalid config created agents/")
 	}
 }
 
 func TestReorder(t *testing.T) {
 	for _, c := range []struct{ in, want []string }{
-		{[]string{"x", "--provider", "p", "--model", "m"}, []string{"--provider", "p", "--model", "m", "x"}},
-		{[]string{"--model", "m", "x"}, []string{"--model", "m", "x"}},
-		{[]string{"x", "--option=a=b"}, []string{"--option=a=b", "x"}},
+		{[]string{"x", "--sha256", "ab"}, []string{"--sha256", "ab", "x"}},
+		{[]string{"--sha256", "ab", "x"}, []string{"--sha256", "ab", "x"}},
+		{[]string{"x", "--sha256=ab"}, []string{"--sha256=ab", "x"}},
 		{[]string{"x", "--bogus"}, []string{"--bogus", "x"}},
 		{[]string{"--bogus", "x"}, []string{"--bogus", "x"}},
 		{[]string{"x", "--help", "y"}, []string{"--help", "x", "y"}},
 		{[]string{"x", "--", "y"}, []string{"--", "x", "y"}},
-		{[]string{"--model", "m", "x", "--", "--weird", "-h"}, []string{"--model", "m", "--", "x", "--weird", "-h"}},
+		{[]string{"--sha256", "ab", "x", "--", "--weird", "-h"}, []string{"--sha256", "ab", "--", "x", "--weird", "-h"}},
 		{[]string{"x", "-sha256", "ab"}, []string{"-sha256", "ab", "x"}},
 	} {
 		if got := reorder(c.in); !reflect.DeepEqual(got, c.want) {
@@ -178,23 +193,5 @@ func TestProviderInstallHelpAndFlagErrors(t *testing.T) {
 	stderr = captureStderr(t, func() { err = run([]string{"provider", "install", "--bogus", "x"}, e) })
 	if err == nil || stderr != "" {
 		t.Fatalf("err %v, stderr %q", err, stderr)
-	}
-}
-
-// A name after "--" is a positional argument, not a NAME in its place.
-func TestNewDoubleDash(t *testing.T) {
-	e, _ := testEnv(t, 0)
-	err := run([]string{"new", "x", "--model", "m", "--", "--weird"}, e)
-	if err == nil || !strings.Contains(err.Error(), "usage: agent new NAME") {
-		t.Fatalf("got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(e.l.RootHome(), "agents")); err == nil {
-		t.Fatal("a usage error created agents/")
-	}
-	if err := run([]string{"new", "--model", "m", "--", "x"}, e); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(e.l.RootHome(), "agents", "x", "config.json")); err != nil {
-		t.Fatal(err)
 	}
 }

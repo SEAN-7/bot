@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	segmentLimit = 1 << 20 // README.md and TASK.md as read into the system prompt
-	configLimit  = 1 << 20 // config.json
+	segmentLimit = 1 << 20            // README.md and TASK.md as read into the system prompt
+	configLimit  = plugin.ConfigLimit // config.json
 )
 
 type recorder interface {

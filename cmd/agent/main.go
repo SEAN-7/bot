@@ -28,7 +28,7 @@ import (
 )
 
 func main() {
-	e := env{l: layout.Default(), euid: os.Geteuid(), home: os.Getenv("HOME"), out: os.Stdout, wait: 10 * time.Second, poll: 200 * time.Millisecond}
+	e := env{l: layout.Default(), euid: os.Geteuid(), home: os.Getenv("HOME"), in: os.Stdin, out: os.Stdout}
 	if err := run(os.Args[1:], e); err != nil {
 		fmt.Fprintln(os.Stderr, "agent:", err)
 		os.Exit(1)
@@ -37,11 +37,11 @@ func main() {
 
 // env is what run takes from the process, so tests can supply their own.
 type env struct {
-	l          layout.Layout
-	euid       int // 0 for root
-	home       string
-	out        io.Writer
-	wait, poll time.Duration // how long agent new waits for admission, and how often it looks
+	l    layout.Layout
+	euid int // 0 for root
+	home string
+	in   io.Reader
+	out  io.Writer
 }
 
 func (e env) root() bool { return e.euid == 0 }
@@ -122,14 +122,9 @@ func run(args []string, e env) error {
 			return err
 		}
 		if args[0] == "messages" {
-			err = cli.Messages(ctx, conversation, e.out)
-		} else {
-			err = cli.Log(ctx, journalDir, errorFile, e.out)
+			return cli.Messages(conversation, e.out)
 		}
-		if errors.Is(err, context.Canceled) {
-			return nil
-		}
-		return err
+		return cli.Log(journalDir, errorFile, e.out)
 	case "provider":
 		return provider(ctx, e, args[1:])
 	case "version":
@@ -138,7 +133,7 @@ func run(args []string, e env) error {
 	case "_fsio":
 		return fsio.Serve(os.Stdin, os.Stdout)
 	case "help", "-h", "--help":
-		io.WriteString(e.out, cli.Usage+cli.SharingHelp)
+		io.WriteString(e.out, cli.Usage)
 		return nil
 	}
 	return fmt.Errorf("unknown command %q\n%s", args[0], cli.Usage)
@@ -153,32 +148,16 @@ func messageText(text string) (string, error) {
 	return string(data), err
 }
 
-// options collects repeated --option flags.
-type options []string
-
-func (o *options) String() string     { return strings.Join(*o, ",") }
-func (o *options) Set(v string) error { *o = append(*o, v); return nil }
-
+// newAgent creates a subagent from a config file, stdin or the caller's own.
 func newAgent(e env, args []string) error {
-	flags := flag.NewFlagSet("new", flag.ContinueOnError)
-	flags.SetOutput(io.Discard) // the error is returned once, by main
-	var o cli.NewOptions
-	var opts options
-	flags.StringVar(&o.Provider, "provider", "", "provider (default: from your config, or the only one installed)")
-	flags.StringVar(&o.Model, "model", "", "model (default: from your config; root must choose)")
-	flags.Var(&opts, "option", "model option k=v (repeatable)")
-	if err := flags.Parse(reorder(args)); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			_, err = io.WriteString(e.out, cli.NewUsage)
-		}
-		return err
+	if len(args) < 1 || len(args) > 2 || strings.HasPrefix(args[0], "-") {
+		return errors.New("usage: agent new NAME [CONFIG|-]")
 	}
-	if flags.NArg() != 1 {
-		return errors.New("usage: agent new NAME [--provider P] [--model M] [--option k=v]...")
+	source := ""
+	if len(args) == 2 {
+		source = args[1]
 	}
-	o.Options = opts
-	o.Wait, o.Poll = e.wait, e.poll
-	return cli.New(e.l, e.root(), e.home, flags.Arg(0), o, e.out)
+	return cli.New(e.l, e.root(), e.home, args[0], source, e.in, e.out)
 }
 
 func runner(l layout.Layout) (*plugin.Runner, error) {
@@ -229,7 +208,7 @@ func provider(ctx context.Context, e env, args []string) error {
 
 // valueFlags are the flags that take a value, as "--name value" or
 // "--name=value".
-var valueFlags = map[string]bool{"provider": true, "model": true, "option": true, "sha256": true}
+var valueFlags = map[string]bool{"sha256": true}
 
 // reorder moves flags before positional arguments, so flags may follow them.
 // Only the flags in valueFlags take the next argument; any other flag stands

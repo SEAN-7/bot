@@ -2,12 +2,11 @@
 package cli
 
 import (
-	"bufio"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -163,32 +162,18 @@ func idFromJournal(l layout.Layout, home string) (string, error) {
 	return "", fmt.Errorf("%s: ~/journal points to %s, outside %s", home, dir, l.Log)
 }
 
-// Messages prints the conversation in path and follows new messages.
-func Messages(ctx context.Context, path string, w io.Writer) error {
-	var reader *bufio.Reader
-	var partial []byte
-	for {
-		if reader == nil {
-			if f, err := os.Open(path); err == nil {
-				defer f.Close()
-				reader = bufio.NewReader(f)
-			}
-		}
-		for reader != nil {
-			chunk, err := reader.ReadBytes('\n')
-			partial = append(partial, chunk...)
-			if err != nil {
-				break
-			}
-			fmt.Fprintln(w, formatMessage(partial))
-			partial = nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
-		}
+// Messages prints the conversation in path.
+func Messages(path string, w io.Writer) error {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		fmt.Fprintln(w, "No messages yet.")
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return printLines(f, w, formatMessage)
 }
 
 func formatMessage(line []byte) string {

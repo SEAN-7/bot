@@ -43,7 +43,8 @@ func TestFormat(t *testing.T) {
 	}
 }
 
-func TestLogFollowsNewRuns(t *testing.T) {
+// agent log prints the ERROR, then only the newest run, and returns.
+func TestLogPrintsErrorAndNewestRun(t *testing.T) {
 	l := tempLayout(t)
 	ctrl := filepath.Join(l.RootHome(), "agents", "main")
 	os.MkdirAll(ctrl, 0o755)
@@ -52,22 +53,25 @@ func TestLogFollowsNewRuns(t *testing.T) {
 	first, _ := journal.Create(dir, time.Now().Add(-time.Minute), -1)
 	first.Record("assistant", map[string]any{"text": "first run"})
 	first.End("done")
-	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
-	defer cancel()
+	second, _ := journal.Create(dir, time.Now(), -1)
+	second.Record("assistant", map[string]any{"text": "second run"})
+	second.End("done")
 	var out bytes.Buffer
-	go func() {
-		time.Sleep(300 * time.Millisecond)
-		second, _ := journal.Create(dir, time.Now(), -1)
-		second.Record("assistant", map[string]any{"text": "second run"})
-		second.End("done")
-	}()
-	if err := Log(ctx, dir, filepath.Join(ctrl, "ERROR"), &out); err != nil && err != context.DeadlineExceeded {
+	if err := Log(dir, filepath.Join(ctrl, "ERROR"), &out); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	i, j, k := strings.Index(got, "Provider failing"), strings.Index(got, "first run"), strings.Index(got, "second run")
-	if i < 0 || j < 0 || k < 0 || !(i < j && j < k) {
+	i, k := strings.Index(got, "Provider failing"), strings.Index(got, "second run")
+	if i < 0 || k < 0 || i > k || strings.Contains(got, "first run") || !strings.Contains(got, "end (done)") {
 		t.Fatalf("output:\n%s", got)
+	}
+}
+
+func TestLogWithoutJournal(t *testing.T) {
+	l := tempLayout(t)
+	var out bytes.Buffer
+	if err := Log(l.JournalDir("main"), "", &out); err != nil || out.String() != "No journal yet.\n" {
+		t.Fatalf("%q, %v", out.String(), err)
 	}
 }
 
@@ -85,7 +89,15 @@ func TestDescribeReadsCacheAsNonRoot(t *testing.T) {
 	if err := Describe(context.Background(), l, nil, false, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"replay\n", "replay-1 (1000 tokens)", "style: a, b", "budget: integer 1-10"} {
+	// The cache comes back as indented JSON, of the same shape.
+	var got providersCache
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("%v in:\n%s", err, out.String())
+	}
+	if len(got.Providers["replay"].Models) != 1 || got.Providers["replay"].Models[0].ID != "replay-1" {
+		t.Fatalf("describe %+v", got)
+	}
+	for _, want := range []string{"\n  \"providers\": {\n", "\"id\": \"replay-1\","} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
 		}
@@ -99,10 +111,8 @@ func TestLogDoesNotFollowErrorSymlink(t *testing.T) {
 	secret := filepath.Join(t.TempDir(), "secret")
 	os.WriteFile(secret, []byte("TOPSECRET"), 0o600)
 	os.Symlink(secret, filepath.Join(ctrl, "ERROR"))
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	var out bytes.Buffer
-	Log(ctx, l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), &out)
+	Log(l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), &out)
 	if strings.Contains(out.String(), "TOPSECRET") {
 		t.Fatal("agent log followed a symlinked ERROR")
 	}
@@ -115,10 +125,8 @@ func TestLogDoesNotHangOnErrorFIFO(t *testing.T) {
 	if err := syscall.Mkfifo(filepath.Join(ctrl, "ERROR"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	done := make(chan struct{})
-	go func() { Log(ctx, l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), io.Discard); close(done) }()
+	go func() { Log(l.JournalDir("main/agents/c"), filepath.Join(ctrl, "ERROR"), io.Discard); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):

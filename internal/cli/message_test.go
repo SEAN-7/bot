@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,17 +73,12 @@ func TestMessagesShowsConversation(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	os.WriteFile(path, []byte(
 		`{"t":"2026-10-11T09:00:00Z","from":"owner","text":"set up telegram"}`+"\n"+
-			`{"t":"2026-10-11T09:05:00Z","from":"agent","text":"done\u001b[2J, token saved"}`+"\n"), 0o644)
-	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
-	defer cancel()
+			`{"t":"2026-10-11T09:05:00Z","from":"agent","text":"done\u001b[2J, token saved"}`+"\n"+
+			`{"t":"2026-10-11T09:06:00Z","from":"agent","text":"report ready"}`), 0o644)
 	var out bytes.Buffer
-	go func() {
-		time.Sleep(200 * time.Millisecond)
-		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-		f.WriteString(`{"t":"2026-10-11T09:06:00Z","from":"agent","text":"report ready"}` + "\n")
-		f.Close()
-	}()
-	Messages(ctx, path, &out)
+	if err := Messages(path, &out); err != nil {
+		t.Fatal(err)
+	}
 	got := out.String()
 	for _, want := range []string{"owner: set up telegram", "agent: done[2J, token saved", "agent: report ready"} {
 		if !strings.Contains(got, want) {
@@ -101,10 +95,10 @@ func TestMessagesShowsSubagentConversation(t *testing.T) {
 	os.WriteFile(path, []byte(
 		`{"t":"2026-10-11T09:00:00Z","from":"owner","text":"scrape it"}`+"\n"+
 			`{"t":"2026-10-11T09:05:00Z","from":"agent","text":"scraped"}`+"\n"), 0o644)
-	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
-	defer cancel()
 	var out bytes.Buffer
-	Messages(ctx, path, &out)
+	if err := Messages(path, &out); err != nil {
+		t.Fatal(err)
+	}
 	for _, want := range []string{" owner: scrape it", " agent: scraped"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("missing %q in:\n%s", want, out.String())
@@ -120,6 +114,13 @@ func agentWithConfig(t *testing.T, home, name string) {
 	}
 	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMessagesWithoutConversation(t *testing.T) {
+	var out bytes.Buffer
+	if err := Messages(filepath.Join(t.TempDir(), "messages.jsonl"), &out); err != nil || out.String() != "No messages yet.\n" {
+		t.Fatalf("%q, %v", out.String(), err)
 	}
 }
 

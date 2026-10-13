@@ -39,10 +39,6 @@ func installProviders(t *testing.T, l layout.Layout, providers ...string) {
 	}
 }
 
-func fastNew(wait time.Duration) NewOptions {
-	return NewOptions{Wait: wait, Poll: 5 * time.Millisecond}
-}
-
 func readConfig(t *testing.T, path string) plugin.Config {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -56,29 +52,42 @@ func readConfig(t *testing.T, path string) plugin.Config {
 	return c
 }
 
+// writeConfigFile writes a config for agent new to read and returns its path.
+func writeConfigFile(t *testing.T, text string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "child.json")
+	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestNewWritesValidatedConfig(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m2"}`), 0o644)
-	o := fastNew(20 * time.Millisecond)
-	o.Model = "m"
-	o.Options = []string{"effort=low"}
+	cfg := writeConfigFile(t, `{"provider":"p","model":"m","options":{"effort":"low","budget":5}}`)
 	var out bytes.Buffer
-	if err := New(l, false, home, "x", o, &out); err != nil {
+	if err := New(l, false, home, "x", cfg, nil, &out); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "Created x; the daemon has not admitted it yet (agent log x shows why).") {
-		t.Fatalf("output %q", out.String())
-	}
 	ctrl := filepath.Join(home, "agents", "x")
+	// It reports the directory it made and where the daemon's answer will be,
+	// and does not wait for it.
+	for _, want := range []string{"Created " + ctrl + "\n", filepath.Join(ctrl, "home"), filepath.Join(ctrl, "ERROR")} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("output lacks %q:\n%s", want, out.String())
+		}
+	}
 	// Open to the caller's ancestors (its home's group) but not to its
 	// children, whom a sharing grant may let through its home.
 	if info, err := os.Stat(ctrl); err != nil || info.Mode().Perm() != 0o750 {
 		t.Fatalf("control directory %v %v", info, err)
 	}
+	// The given file is used, not the caller's own.
 	c := readConfig(t, filepath.Join(ctrl, "config.json"))
-	if c.Provider != "p" || c.Model != "m" || c.Options["effort"] != "low" {
+	if c.Provider != "p" || c.Model != "m" || c.Options["effort"] != "low" || c.Options["budget"] != float64(5) {
 		t.Fatalf("config %+v", c)
 	}
 	if info, _ := os.Stat(filepath.Join(ctrl, "config.json")); info.Mode().Perm() != 0o640 {
@@ -89,65 +98,45 @@ func TestNewWritesValidatedConfig(t *testing.T) {
 	}
 }
 
-// TestNewInheritedOptions: the caller's options go with its model, so they are
-// dropped when --provider or --model is given and kept otherwise.
-func TestNewInheritedOptions(t *testing.T) {
+func TestNewCopiesCallerConfig(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
 	home := t.TempDir()
 	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m","options":{"effort":"low"}}`), 0o644)
-	o := fastNew(20 * time.Millisecond)
-	o.Model = "m2"
-	if err := New(l, false, home, "cheap", o, &bytes.Buffer{}); err != nil {
+	if err := New(l, false, home, "x", "", nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if c := readConfig(t, filepath.Join(home, "agents", "cheap", "config.json")); c.Model != "m2" || len(c.Options) != 0 {
-		t.Fatalf("config %+v", c)
-	}
-	o.Model, o.Options = "m", []string{"budget=3"}
-	if err := New(l, false, home, "same", o, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	if c := readConfig(t, filepath.Join(home, "agents", "same", "config.json")); c.Options["effort"] != nil || c.Options["budget"] != float64(3) {
-		t.Fatalf("config %+v", c)
-	}
-	if err := New(l, false, home, "plain", fastNew(20*time.Millisecond), &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	if c := readConfig(t, filepath.Join(home, "agents", "plain", "config.json")); c.Options["effort"] != "low" {
+	if c := readConfig(t, filepath.Join(home, "agents", "x", "config.json")); c.Model != "m" || c.Options["effort"] != "low" {
 		t.Fatalf("config %+v", c)
 	}
 }
 
-func TestNewWithoutCallerConfig(t *testing.T) {
+func TestNewReadsStdin(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
-	home := t.TempDir()
-	o := fastNew(20 * time.Millisecond)
-	o.Provider, o.Model = "p", "m"
-	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err != nil {
+	home := newHome(t)
+	if err := New(l, false, home, "x", "-", strings.NewReader(`{"provider":"p","model":"m2"}`), &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
-	if c := readConfig(t, filepath.Join(home, "agents", "x", "config.json")); c.Provider != "p" || c.Model != "m" {
+	if c := readConfig(t, filepath.Join(home, "agents", "x", "config.json")); c.Model != "m2" {
 		t.Fatalf("config %+v", c)
 	}
-	for _, o := range []NewOptions{{Model: "m"}, {Provider: "p"}, {}} {
-		o.Wait, o.Poll = time.Millisecond, time.Millisecond
-		err := New(l, false, home, "y", o, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "pass --provider and --model") {
-			t.Fatalf("%+v: got %v", o, err)
-		}
+	// The same checks apply to what arrives on stdin.
+	err := New(l, false, home, "y", "-", strings.NewReader(`{"provider":"p","model":"nope"}`), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), `unknown model "nope"`) {
+		t.Fatalf("got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "agents", "y")); err == nil {
-		t.Fatal("a rejected agent left a directory")
+		t.Fatal("an invalid config left a control directory")
 	}
 }
 
-func TestNewRootRequiresModel(t *testing.T) {
+// Root has no config.json of its own to copy.
+func TestNewRootNeedsConfig(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
-	err := New(l, true, "", "x", fastNew(time.Millisecond), &bytes.Buffer{})
-	if err == nil || err.Error() != "root must choose a model: agent new NAME --model M" {
+	err := New(l, true, "", "x", "", nil, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "root has no config.json to copy") || !strings.Contains(err.Error(), "agent new NAME CONFIG") {
 		t.Fatalf("got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(l.RootHome(), "agents")); err == nil {
@@ -155,12 +144,11 @@ func TestNewRootRequiresModel(t *testing.T) {
 	}
 }
 
-func TestNewRootDefaultsProviderAndIsPrivate(t *testing.T) {
+func TestNewRootWritesPrivateDirectory(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
-	o := fastNew(20 * time.Millisecond)
-	o.Model = "m"
-	if err := New(l, true, "", "x", o, &bytes.Buffer{}); err != nil {
+	cfg := writeConfigFile(t, `{"provider":"p","model":"m"}`)
+	if err := New(l, true, "", "x", cfg, nil, &bytes.Buffer{}); err != nil {
 		t.Fatal(err)
 	}
 	ctrl := filepath.Join(l.RootHome(), "agents", "x")
@@ -170,124 +158,84 @@ func TestNewRootDefaultsProviderAndIsPrivate(t *testing.T) {
 	if info, err := os.Stat(ctrl); err != nil || info.Mode().Perm() != 0o700 {
 		t.Fatalf("control directory %v %v", info, err)
 	}
-	// With two providers installed, root has to choose.
-	installProviders(t, l, "p", "q")
-	err := New(l, true, "", "y", o, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "--provider") {
+}
+
+func TestNewWithoutCallerConfig(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := t.TempDir()
+	err := New(l, false, home, "x", "", nil, &bytes.Buffer{})
+	if !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "agents", "x")); err == nil {
+		t.Fatal("a rejected agent left a directory")
 	}
 }
 
 func TestNewRejectsInvalidConfig(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
-	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
-	o := fastNew(time.Millisecond)
-	o.Model = "nope"
-	err := New(l, false, home, "x", o, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), `unknown model "nope"`) {
-		t.Fatalf("got %v", err)
+	home := newHome(t)
+	for _, c := range []struct{ config, want string }{
+		{`{"provider":"p","model":"nope"}`, `unknown model "nope"`},
+		{`{"provider":"q","model":"m"}`, `unknown provider "q"`},
+		{`{"provider":"p","model":"m","options":{"nope":1}}`, `unknown option "nope"`},
+		{`{"provider":"p","model":"m","options":{"effort":"medium"}}`, "not allowed"},
+		{`{"provider":"p","model":"m","options":{"budget":"lots"}}`, "out of range"},
+		{`{"provider":"p","model":"m","extra":1}`, "unknown field"},
+		{`{"provider":"p"}`, `"provider" and "model" are required`},
+		{`not json`, "invalid JSON"},
+		{``, "invalid JSON"},
+	} {
+		cfg := writeConfigFile(t, c.config)
+		err := New(l, false, home, "x", cfg, nil, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), c.want) || !strings.Contains(err.Error(), cfg) {
+			t.Errorf("%s: got %v, want %q naming %s", c.config, err, c.want, cfg)
+		}
+		if _, err := os.Stat(filepath.Join(home, "agents", "x")); err == nil {
+			t.Fatalf("%s left a control directory", c.config)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(home, "agents", "x")); err == nil {
-		t.Fatal("an invalid config left a control directory")
+}
+
+// A config over the daemon's limit is refused, from a file or stdin; one
+// exactly at the limit is accepted.
+func TestNewLimitsConfigSize(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := newHome(t)
+	const config = `{"provider":"p","model":"m"}`
+	atLimit := config + strings.Repeat(" ", plugin.ConfigLimit-len(config))
+	if err := New(l, false, home, "ok", "-", strings.NewReader(atLimit), &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
 	}
-	o.Model = "m"
-	o.Options = []string{"budget"}
-	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "k=v") {
-		t.Fatalf("got %v", err)
+	for name, run := range map[string]func() error{
+		"file":  func() error { return New(l, false, home, "big", writeConfigFile(t, atLimit+" "), nil, &bytes.Buffer{}) },
+		"stdin": func() error { return New(l, false, home, "big", "-", strings.NewReader(atLimit+" "), &bytes.Buffer{}) },
+	} {
+		if err := run(); err == nil || !strings.Contains(err.Error(), "over 1024 KiB") {
+			t.Errorf("%s: got %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "agents", "big")); err == nil {
+			t.Fatalf("%s: an oversized config left a control directory", name)
+		}
 	}
 }
 
 func TestNewRejectsExistingName(t *testing.T) {
 	l := tempLayout(t)
 	installProviders(t, l, "p")
-	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
+	home := newHome(t)
 	agentWithConfig(t, home, "x")
-	err := New(l, false, home, "x", fastNew(time.Millisecond), &bytes.Buffer{})
+	err := New(l, false, home, "x", "", nil, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("got %v", err)
 	}
 	for _, name := range []string{"", "..", "a/b"} {
-		if err := New(l, false, home, name, fastNew(time.Millisecond), &bytes.Buffer{}); err == nil {
+		if err := New(l, false, home, name, "", nil, &bytes.Buffer{}); err == nil {
 			t.Errorf("name %q accepted", name)
 		}
-	}
-}
-
-func TestNewReportsError(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
-	go func() {
-		ctrl := filepath.Join(home, "agents", "x")
-		for {
-			if _, err := os.Stat(filepath.Join(ctrl, "config.json")); err == nil {
-				os.WriteFile(filepath.Join(ctrl, "ERROR"), []byte("Agent limit reached (max_agents=2); this agent was not started.\n"), 0o644)
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	err := New(l, false, home, "x", fastNew(5*time.Second), &bytes.Buffer{})
-	want := "x was not started: Agent limit reached (max_agents=2); this agent was not started."
-	if err == nil || err.Error() != want {
-		t.Fatalf("got %v", err)
-	}
-}
-
-func TestNewReportsHome(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
-	target := t.TempDir()
-	go func() {
-		ctrl := filepath.Join(home, "agents", "x")
-		for {
-			if _, err := os.Stat(filepath.Join(ctrl, "config.json")); err == nil {
-				os.Symlink(target, filepath.Join(ctrl, "home"))
-				return
-			}
-			time.Sleep(time.Millisecond)
-		}
-	}()
-	var out bytes.Buffer
-	if err := New(l, false, home, "x", fastNew(5*time.Second), &out); err != nil {
-		t.Fatal(err)
-	}
-	if want := "Created x: home " + target + "\n"; out.String() != want {
-		t.Fatalf("output %q, want %q", out.String(), want)
-	}
-}
-
-func TestNewParsesIntegerOption(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := t.TempDir()
-	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
-	o := fastNew(20 * time.Millisecond)
-	o.Options = []string{"budget=5", "effort=high"}
-	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	data, _ := os.ReadFile(filepath.Join(home, "agents", "x", "config.json"))
-	var raw struct{ Options map[string]any }
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatal(err)
-	}
-	if n, ok := raw.Options["budget"].(float64); !ok || n != 5 || raw.Options["effort"] != "high" {
-		t.Fatalf("options %v in %s", raw.Options, data)
-	}
-	// A non-integer value for an integer option is rejected before anything is written.
-	o.Options = []string{"budget=lots"}
-	if err := New(l, false, home, "y", o, &bytes.Buffer{}); err == nil {
-		t.Fatal("budget=lots accepted")
-	}
-	if _, err := os.Stat(filepath.Join(home, "agents", "y")); err == nil {
-		t.Fatal("a rejected option left a control directory")
 	}
 }
 
@@ -380,7 +328,7 @@ func TestNewRejectsBadNames(t *testing.T) {
 		if cleanName(name) {
 			t.Errorf("cleanName(%q) accepted", name)
 		}
-		if err := New(l, false, home, name, fastNew(time.Millisecond), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
+		if err := New(l, false, home, name, "", nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
 			t.Errorf("New %q: %v", name, err)
 		}
 		if err := Remove(l, false, home, name); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
@@ -406,7 +354,7 @@ func TestNewLeavesNothingOnFailure(t *testing.T) {
 	home := newHome(t)
 	defer func(f func(string, []byte, os.FileMode) error) { writeFile = f }(writeFile)
 	writeFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
-	err := New(l, false, home, "x", fastNew(time.Millisecond), &bytes.Buffer{})
+	err := New(l, false, home, "x", "", nil, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "disk full") {
 		t.Fatalf("got %v", err)
 	}
@@ -417,7 +365,7 @@ func TestNewLeavesNothingOnFailure(t *testing.T) {
 	writeFile = os.WriteFile
 	defer func(f func(string, string) error) { rename = f }(rename)
 	rename = func(string, string) error { return errors.New("no rename") }
-	if err := New(l, false, home, "y", fastNew(time.Millisecond), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "no rename") {
+	if err := New(l, false, home, "y", "", nil, &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "no rename") {
 		t.Fatalf("got %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(home, "agents", "y")); !os.IsNotExist(err) {
@@ -430,11 +378,10 @@ func TestNewModesIgnoreUmask(t *testing.T) {
 		l := tempLayout(t)
 		installProviders(t, l, "p")
 		home := newHome(t)
-		o := fastNew(5 * time.Millisecond)
-		o.Model = "m"
+		cfg := writeConfigFile(t, `{"provider":"p","model":"m"}`)
 		old := syscall.Umask(umask)
-		err := New(l, false, home, "x", o, &bytes.Buffer{})
-		rootErr := New(l, true, "", "r", o, &bytes.Buffer{})
+		err := New(l, false, home, "x", cfg, nil, &bytes.Buffer{})
+		rootErr := New(l, true, "", "r", cfg, nil, &bytes.Buffer{})
 		syscall.Umask(old)
 		if err != nil || rootErr != nil {
 			t.Fatal(err, rootErr)
@@ -452,61 +399,5 @@ func TestNewModesIgnoreUmask(t *testing.T) {
 				t.Errorf("umask %04o: %s is %v, config.json %v; want %v and %v", umask, c.ctrl, di.Mode().Perm(), fi.Mode().Perm(), c.dir, c.file)
 			}
 		}
-	}
-}
-
-func TestNewRejectsRepeatedOption(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := newHome(t)
-	o := fastNew(time.Millisecond)
-	o.Options = []string{"effort=low", "effort=high"}
-	err := New(l, false, home, "x", o, &bytes.Buffer{})
-	if err == nil || err.Error() != "option effort given twice" {
-		t.Fatalf("got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(home, "agents", "x")); err == nil {
-		t.Fatal("a rejected option left a control directory")
-	}
-}
-
-func TestNewOptionValueTypes(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := newHome(t)
-	o := fastNew(5 * time.Millisecond)
-	o.Options = []string{"level=2", "fast=true", "effort=low", "budget=7"}
-	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	c := readConfig(t, filepath.Join(home, "agents", "x", "config.json"))
-	if c.Options["level"] != float64(2) || c.Options["fast"] != true || c.Options["effort"] != "low" || c.Options["budget"] != float64(7) {
-		t.Fatalf("options %#v", c.Options)
-	}
-	// A value outside the allowed list stays a string and Validate rejects it.
-	for _, bad := range []string{"level=3", "level=two", "fast=yes", "effort=medium"} {
-		o.Options = []string{bad}
-		err := New(l, false, home, "y", o, &bytes.Buffer{})
-		if err == nil || !strings.Contains(err.Error(), "not allowed") {
-			t.Errorf("%s: got %v", bad, err)
-		}
-	}
-}
-
-func TestNewAdviceMatchesError(t *testing.T) {
-	l := tempLayout(t)
-	installProviders(t, l, "p")
-	home := t.TempDir()
-	cfg := filepath.Join(home, "config.json")
-	if err := os.WriteFile(cfg, []byte(`{"provider":"p","model":"m"}`), 0o000); err != nil {
-		t.Fatal(err)
-	}
-	if f, err := os.Open(cfg); err == nil {
-		f.Close()
-		t.Skip("running as a user that can read mode 000 files")
-	}
-	err := New(l, false, home, "x", fastNew(time.Millisecond), &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "pass --provider") {
-		t.Fatalf("got %v", err)
 	}
 }

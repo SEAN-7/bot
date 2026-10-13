@@ -129,7 +129,7 @@ agent's home is setgid to its group and commands run with umask 022, so by
 default its ancestors can read what it writes, and nobody else can traverse
 its home. An agent can tighten its own files' modes; its journals stay
 readable by its ancestors regardless. What an agent grants to let a child
-through its home (x on `~`, see `agent help`) opens what others can read
+through its home (x on `~`, see Sharing) opens what others can read
 there, so the harness keeps its own parts of the home group-only: the
 directories `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
 `.messages/agents/` and `.outputs/` (0750, see Admission), the inbox
@@ -190,12 +190,10 @@ Commands run with `/bin/bash -c` when bash exists, otherwise `/bin/sh -c`.
 **Sharing** between agents is explicit. A file's owner can grant another
 agent user access with `setfacl` (no root needed); the harness does nothing
 more. Granting `x` on a directory lets that user reach every entry inside
-it that others can read, so `agent help` advises a dedicated share
-directory (and `chmod o-rwx` for private ones on the way), with a default
-ACL so that later files are shared too. Users are reused, so a parent
-deletes what a child created in its directories and removes its grants
-(`setfacl -R -x u:USER,d:u:USER DIR`, and `setfacl -x u:USER` on the
-directories it traversed) before removing the child.
+it that others can read, so the seed README advises a dedicated share
+directory. Users are reused, so a parent deletes what a child created in
+its directories and removes its grants (`setfacl -R -x u:USER,d:u:USER DIR`)
+before removing the child; the seed README says so too.
 
 **Plugins** run as the dedicated system user `agent-provider`, with no login
 and no home directory. The daemon reads `/etc/agent/credentials/NAME.env` and
@@ -333,8 +331,8 @@ agent user cannot read another user's process environment.
 - The harness creates its directories closed only to others. If an agent
   sets a default ACL on `~` naming a child's user (`setfacl -d -m
   u:USER:...`), the harness's directories created there later inherit that
-  entry, so the child can list and read them. `agent help` says to set
-  default ACLs on the share directory only, never on `~`.
+  entry, so the child can list and read them. The seed README says never to
+  set a default ACL on `~`.
 - Admission only creates the harness's directories and leaves existing ones
   as they are, so one the agent opened to others itself stays open.
 - Reclaim leaves the links in `/home`. On an installation upgraded from 0.3,
@@ -509,7 +507,7 @@ Nothing reaches the human except from a top-level agent.
   can read it. Records: `{"t", "from": "owner" | "agent", "text"}`. Only
   the daemon writes the logs, so their labels are trustworthy, and no agent
   can edit or delete anything in them.
-- `agent messages [NAME]` prints a conversation and follows new records,
+- `agent messages [NAME]` prints a conversation once,
   with control characters removed (see CLI).
 
 ## Journal
@@ -700,30 +698,22 @@ without `/` or control characters.
 Root runs every command with `sudo`.
 
 - `agent daemon`: run the service (root only).
-- `agent new NAME [--provider P] [--model M] [--option k=v]...`: creates a
-  child. It builds the starting config, validates it against
-  `providers.json`, creates the control directory and writes `config.json`
-  with an atomic dot-name rename, then waits up to 10 seconds for admission
-  and prints the new home, or fails with the control directory's `ERROR`.
-  The modes are set explicitly, whatever the umask: root's directory 0700,
-  an agent's 0750, `config.json` 0640. If anything fails once the directory
-  exists, the directory is removed again. If the daemon has not admitted
-  the child after 10 seconds, it prints that and exits 0; the directory
-  stays and `agent log NAME` shows why. An agent's default is a copy of its
-  own `~/config.json`; root must pass `--model`. `--provider` or `--model`
-  starts from no options, so only `--option` applies then; `--provider` is
-  needed when more than one provider is installed and the caller's config
-  does not name one (the advice to pass `--provider` and `--model` is given
-  only when the caller has no `config.json`; other read errors are shown as
-  they are). Each `--option KEY=VALUE` may be given once. An option whose
-  describe entry has `type: "integer"` takes an integer; one with a list of
-  allowed values takes the text of one of them and is stored with that
-  value's JSON type (so numbers and booleans work); any other text is
-  refused by validation. Flags may follow NAME; only `--provider`,
-  `--model` and `--option` take the next argument. A flag error is printed
-  once, and `agent new --help` prints the usage of `agent new` and exits 0.
-  It fails if NAME exists. It adds no daemon interface: it writes the same
-  control directory an agent could create by hand.
+- `agent new NAME [CONFIG|-]`: creates a child. `CONFIG` is the path of a
+  `config.json` file, `-` reads it from stdin, and without it the caller's
+  own `~/config.json` is copied (root has none, so root must pass `CONFIG`;
+  the error says so). A config is read up to 1 MiB, the daemon's limit, and
+  validated once against `providers.json`, before anything is created.
+  It then creates the control directory and writes `config.json` with an
+  atomic dot-name rename. The modes are set explicitly, whatever the umask:
+  root's directory 0700, an agent's 0750, `config.json` 0640. If writing
+  fails once the directory exists, the directory is removed again. It fails
+  if NAME exists. It does not wait for admission: it prints the control
+  directory it created and a line saying that the daemon admits the child
+  shortly, its home appearing at `agents/NAME/home` and the reason it was not
+  started in `agents/NAME/ERROR`, and exits 0. The caller looks there, or at
+  `agent log NAME`. A NAME that starts with `-` is a usage error. It adds no
+  daemon interface: it writes the same control directory an agent could
+  create by hand.
 - `agent remove NAME`: removes the direct child's control directory, first
   renaming it out of `agents/` so the daemon cannot restore its `home` link
   meanwhile. Removal and reclaim follow (see The daemon).
@@ -731,26 +721,26 @@ Root runs every command with `sudo`.
   Messages); `-` reads stdin.
 - `agent message "text"|-`: for agents. Queues a message to the agent's
   owner. Root has none, so it refuses to run as root.
-- `agent messages [NAME]`: shows a conversation and follows new records.
-  Without `NAME`, the caller's conversation with its owner; with `NAME`, that
+- `agent messages [NAME]`: prints a conversation once and exits. Without
+  `NAME`, the caller's conversation with its owner; with `NAME`, that
   descendant's conversation with its parent. Root must pass `NAME`. Records
   are shown with control characters removed.
-- `agent log [NAME]`: follows an agent's newest journal, switching to new
-  runs as they start: the caller's own without `NAME`, a descendant's with
-  it. With `NAME` the agent's current `ERROR` is shown first. Root must pass
-  `NAME`. Works as root or as the agent or any of its ancestors.
+- `agent log [NAME]`: prints an agent's newest journal once and exits: the
+  caller's own without `NAME`, a descendant's with it. With `NAME` the
+  agent's current `ERROR` is shown first. Root must pass `NAME`. Works as
+  root or as the agent or any of its ancestors.
 - `agent provider install NAME|URL`: requires root. `NAME` downloads that
   plugin from this repository's matching release with `GITHUB_TOKEN` and
   verifies it against the index compiled into the binary. `URL` requires
   `--sha256`. Installs to `/etc/agent/plugins/`, prompts for the plugin's
   settings into `/etc/agent/credentials/NAME.env`, and refreshes
   `providers.json`.
-- `agent provider describe`: prints models and options. As root it runs the
-  plugins; as any other user (including agents) it reads `providers.json`.
+- `agent provider describe`: prints the `describe` responses of the
+  installed providers as indented JSON, the shape of `providers.json`. As
+  root it runs the plugins and refreshes the cache; as any other user
+  (including agents) it reads `providers.json`.
 - `agent version`.
-- `agent help`: the usage, and how to share a directory with a child
-  through `setfacl` and clean up its grants and files before
-  `agent remove`.
+- `agent help`: the usage.
 
 `OWNER.md` has no command: root edits `/etc/agent/agents/NAME/OWNER.md`, an
 agent edits `~/agents/NAME/OWNER.md`.
@@ -771,8 +761,13 @@ agent edits `~/agents/NAME/OWNER.md`.
   - `agent message` reaches the owner, permanently, in
     `~/journal/messages.jsonl`; `agent send NAME` reaches a child;
   - the subagent facts an agent cannot discover: create a child with
-    `agent new NAME` and remove it with `agent remove NAME`, and
-    `agent help` lists the commands and how to share files with a child;
+    `agent new NAME [CONFIG|-]` (it returns at once; the child's `home` or
+    `ERROR` appears in its control directory) and remove it with
+    `agent remove NAME`, and `agent help` lists the commands; share files
+    through a dedicated directory with `setfacl`, never a default ACL on
+    `~` (the harness's directories created there later would inherit it);
+    users are reused, so before `agent remove` delete what the child
+    created in the parent's directories and remove its grants;
     each child is its own user with its own home and config, which the
     parent can read but not write; `~/agents/NAME/OWNER.md` holds standing
     instructions the child cannot change and does not see the parent's;
@@ -820,9 +815,10 @@ release binary. It:
    warns: the agent is running). There is no harness heartbeat: agents
    schedule their own wake-ups.
 7. On a fresh install, creates the main agent with
-   `agent new main --provider P --model M`. If that fails, it says how to
-   retry: `sudo agent remove main` first when `/etc/agent/agents/main`
-   exists, then `sudo agent new main --provider P --model M`.
+   `printf '{"provider":"P","model":"M"}\n' | agent new main -`. If that
+   fails, it says how to retry: `sudo agent remove main` first when
+   `/etc/agent/agents/main` exists, then the same command with `sudo`. The
+   model is accepted when `agent provider describe` lists its `"id"`.
 
 No agent gets sudo; there is no option for it.
 
@@ -871,14 +867,17 @@ Using the replay plugin:
   reported as too large; a `config.json` written into an admitted agent's
   control directory is ignored and left in place, also when the agent is
   admitted again, the home's config being the one used
-- CLI: `agent new` rejects an invalid config before creating anything,
-  reports the control directory's `ERROR`, defaults to the caller's config,
-  requires `--model` from root, refuses an existing NAME, a name that starts
-  with `.` or holds a control character, and a repeated `--option`, and
-  removes the control directory it made when writing `config.json` fails;
-  `agent remove` deletes the control directory; root must pass NAME to
-  `messages` and `log`, and cannot run `agent message`; control directories
-  and spools are 0750
+- CLI: `agent new` takes its config from a file, from stdin for `-`, or from
+  the caller's `~/config.json`; root must pass one; it refuses an invalid
+  config, one over 1 MiB, an existing NAME, a name that starts with `.` or
+  `-` or holds a control character, before creating anything; it prints the
+  control directory without waiting; and it removes the control directory it
+  made when writing `config.json` fails, with modes independent of the
+  umask; `agent remove` deletes the control directory; `agent log` and
+  `agent messages` print once and exit, `log` the `ERROR` first and only the
+  newest run; `agent provider describe` prints the cache as JSON; root must
+  pass NAME to `messages` and `log`, and cannot run `agent message`; control
+  directories and spools are 0750
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
   crontabs and homes, keeps their journals readable by the former parent

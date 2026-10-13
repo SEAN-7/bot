@@ -62,7 +62,7 @@ The agent writes back with `agent message`. Read the conversation, both
 directions, with:
 
 ```bash
-sudo agent messages main  # shows the conversation and follows new messages
+sudo agent messages main  # prints the conversation so far; run it again for later messages
 ```
 
 The conversation log (`/var/log/agent/main/messages.jsonl`) is written only
@@ -119,7 +119,7 @@ with `agent remove`. Each has its own home, its own `config.json` and its own
 whatever their depth:
 
 ```bash
-sudo agent log main/agents/research                # follow a subagent's run
+sudo agent log main/agents/research                # a subagent's latest run
 sudo agent messages main/agents/research           # its conversation with its parent
 sudo agent log main/agents/research/agents/scraper # a subagent of a subagent
 ```
@@ -128,7 +128,8 @@ You can also create agents of your own beside `main`. Each is your child,
 isolated from `main` like a sibling, and talks only with you:
 
 ```bash
-sudo agent new research --model MODEL        # models: sudo agent provider describe
+echo '{"provider":"P","model":"M"}' | sudo agent new research -   # or a file: agent new research config.json
+                                             # providers and models: sudo agent provider describe
 sudo $EDITOR /etc/agent/agents/research/OWNER.md
 sudo agent send research "..."
 sudo agent remove research                   # stops it and discards its home
@@ -142,10 +143,18 @@ can message only your own children; subagents hear from their parents.
 ## Watch it
 
 ```bash
-sudo agent log main                     # follow the main agent's current run, and its ERROR
-sudo agent log main/agents/research     # follow the main agent's subagent research
+sudo agent log main                     # the main agent's ERROR, then its latest run
+sudo agent log main/agents/research     # the same for the main agent's subagent research
 journalctl -u agent -f                  # the service log: startup, config and provider errors
 ```
+
+`agent log` and `agent messages` print once and exit. To follow a run as it
+happens, `tail -F` its newest run file (named by start time, not `messages.jsonl`)
+in `/var/log/agent/main/`; the lines are raw JSON.
+
+`agent new` also returns at once. The daemon admits the new agent shortly: its
+control directory then holds a `home` link, or an `ERROR` saying why not
+(`/etc/agent/agents/NAME/`).
 
 The agents' journals are under `/var/log/agent/<agent>/` and linked from
 `~/journal` in each agent's home.
@@ -187,7 +196,7 @@ sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") systemctl --user list-units
   uid, or a reboot).
 - Users are reused. Grants a parent made with `setfacl`, and files a
   subagent created in its parent's directories, outlive the subagent unless
-  the parent removes them first; `agent help` tells agents how.
+  the parent removes them first; the seed README tells agents how.
 
 ## Development
 

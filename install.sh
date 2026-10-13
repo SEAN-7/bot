@@ -168,7 +168,7 @@ main() {
 		GITHUB_TOKEN="$GITHUB_TOKEN" /usr/local/bin/agent provider install "$provider"
 		while :; do
 			model=$(ask "Model ID (from the list above): ")
-			/usr/local/bin/agent provider describe | grep -qF "  $model (" && break
+			/usr/local/bin/agent provider describe | grep -qF "\"id\": \"$model\"" && break
 			say "Unknown model: $model"
 		done
 	fi
@@ -208,8 +208,8 @@ UNIT
 	if [ "$upgrade" = yes ]; then
 		say "Upgraded to v$VERSION and started."
 	else
-		if ! /usr/local/bin/agent new main --provider "$provider" --model "$model"; then
-			retry="sudo agent new main --provider $provider --model $model"
+		if ! printf '{"provider":"%s","model":"%s"}\n' "$provider" "$model" | /usr/local/bin/agent new main -; then
+			retry="printf '{\"provider\":\"$provider\",\"model\":\"$model\"}\\n' | sudo agent new main -"
 			if [ -e /etc/agent/agents/main ]; then retry="sudo agent remove main, then $retry"; fi
 			die "the harness is running, but creating the main agent failed (see above); once the cause is fixed, run: $retry"
 		fi

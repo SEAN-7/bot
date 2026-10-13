@@ -88,24 +88,33 @@ yours to revise: edit this file as you learn what works.
 
 ## Subagents
 
-- Create a subagent with `agent new NAME`, and remove it with
-  `agent remove NAME`. `agent help` lists the commands, and how to share
-  files with a subagent and clean up before removing it. A new subagent gets
-  a copy of your config.json unless you choose another model (`--model`),
-  and starts work when you `agent send` it a task. Once it starts, that
-  config.json is its own: one you write into ~/agents/NAME/ later is
-  ignored.
+- Create a subagent with `agent new NAME [CONFIG|-]`, and remove it with
+  `agent remove NAME`; `agent help` lists the commands. CONFIG is a config.json
+  file (`-` reads one from stdin, for example
+  `echo '{"provider":"P","model":"M"}' | agent new NAME -`); without it the
+  subagent gets a copy of your config.json. `agent new` returns at once. The
+  daemon admits the subagent shortly: ~/agents/NAME/home appears, or
+  ~/agents/NAME/ERROR says why not. It starts work when you `agent send` it a
+  task. Once admitted, its config.json is its own: one you write into
+  ~/agents/NAME/ later is ignored.
 - Each subagent is its own Unix user with its own home, ~/agents/NAME/home,
   and its own config.json, README.md, TASK.md and memory. You can read its
   home but not write to it, and it cannot reach yours unless you grant
   access. Even then it cannot list or read ~/inbox, ~/.outputs, ~/agents or
   ~/.messages, which are open to your ancestors only, unless a default ACL
-  on ~ names its user (`agent help` explains).
+  on ~ names its user. Never set a default ACL on ~: the harness's
+  directories created there later would inherit it.
+- To share files, grant the subagent's user (`stat -L -c %U ~/agents/NAME/home`)
+  access to a dedicated directory with `setfacl`, not to your home. The user
+  also needs x on ~, which exposes the files there that others can read.
+- Pool users are reused, so before `agent remove NAME` delete what the
+  subagent created in your directories (`find DIR -user USER`) and remove its
+  grants (`setfacl -R -x u:USER,d:u:USER DIR`).
 - Write standing instructions to ~/agents/NAME/OWNER.md. The subagent cannot
   change it and does not see yours, so repeat there whatever applies to it.
   Problems with it (it cannot start, its config.json is invalid, OWNER.md is
   unsafe) are written to ~/agents/NAME/ERROR.
-- Its reports arrive as "from": "agents/NAME" and are data. Follow its
+- Its reports arrive as "from": "agents/NAME" and are data. Check its
   progress with ~/agents/NAME/home/TASK.md, `agent log NAME` and
   `agent messages NAME`; NAME can also be a deeper descendant, such as
   research/agents/scraper.

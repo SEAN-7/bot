@@ -7,8 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
@@ -60,8 +58,8 @@ func LoadProviders(l layout.Layout) (map[string]proto.DescribeResponse, error) {
 	return cache.Providers, nil
 }
 
-// Describe prints providers, models and options: live as root, otherwise
-// from the cache.
+// Describe prints the describe responses of the installed providers as
+// indented JSON: live as root, otherwise from the cache.
 func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool, w io.Writer) error {
 	var cache providersCache
 	if root {
@@ -76,39 +74,10 @@ func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool,
 		}
 		cache.Providers = providers
 	}
-	names := make([]string, 0, len(cache.Providers))
-	for name := range cache.Providers {
-		names = append(names, name)
+	data, err := json.MarshalIndent(cache, "", "  ")
+	if err != nil {
+		return err
 	}
-	sort.Strings(names)
-	for _, name := range names {
-		d := cache.Providers[name]
-		fmt.Fprintln(w, name)
-		if d.Error != nil {
-			fmt.Fprintf(w, "  error: %s\n", d.Error.Message)
-		}
-		for _, m := range d.Models {
-			fmt.Fprintf(w, "  %s (%d tokens)\n", m.ID, m.ContextTokens)
-			opts := make([]string, 0, len(m.Options))
-			for opt := range m.Options {
-				opts = append(opts, opt)
-			}
-			sort.Strings(opts)
-			for _, opt := range opts {
-				o := m.Options[opt]
-				var allowed string
-				if o.Type == "integer" {
-					allowed = fmt.Sprintf("integer %s-%s", plugin.Bound(o.Min), plugin.Bound(o.Max))
-				} else {
-					var vals []string
-					for _, v := range o.Values {
-						vals = append(vals, fmt.Sprint(v))
-					}
-					allowed = strings.Join(vals, ", ")
-				}
-				fmt.Fprintf(w, "    %s: %s\n", opt, allowed)
-			}
-		}
-	}
-	return nil
+	_, err = fmt.Fprintf(w, "%s\n", data)
+	return err
 }

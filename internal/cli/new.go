@@ -8,13 +8,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
-	"github.com/SEAN-7/bot/internal/proto"
 )
 
 // Base is the directory whose agents/ holds the caller's children: root's
@@ -36,18 +33,13 @@ var (
 	rename    = os.Rename
 )
 
-// NewOptions are the flags of agent new, and how long to wait for admission.
-type NewOptions struct {
-	Provider, Model string
-	Options         []string // "key=value"
-	Wait, Poll      time.Duration
-}
-
-// New creates the control directory of a child called name, from the
-// caller's own config.json (an agent) or the flags alone (root), and reports
-// what the daemon makes of it. It writes the same directory an agent could
-// create by hand: the daemon's poll does the rest.
-func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Writer) error {
+// New creates the control directory of a child called name from the config
+// in source: a file path, "-" for stdin, or "" for the caller's own
+// ~/config.json (root has none). The config is checked against the installed
+// providers before anything is created. It writes the same directory an
+// agent could create by hand: the daemon's poll does the rest, so New
+// reports where the directory is and returns without waiting.
+func New(l layout.Layout, root bool, home, name, source string, stdin io.Reader, w io.Writer) error {
 	base, err := Base(l, root, home)
 	if err != nil {
 		return err
@@ -59,25 +51,19 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 	if _, err := os.Lstat(ctrl); err == nil {
 		return fmt.Errorf("%s already exists", ctrl)
 	}
-	var config plugin.Config
-	if root {
-		if o.Model == "" {
-			return errors.New("root must choose a model: agent new NAME --model M")
+	if source == "" {
+		if root {
+			return errors.New("root has no config.json to copy: agent new NAME CONFIG (a file, or - for stdin)")
 		}
-	} else {
-		data, err := os.ReadFile(filepath.Join(home, "config.json"))
-		switch {
-		case os.IsNotExist(err) && o.Provider != "" && o.Model != "":
-			// The flags say everything a starting config would.
-		case os.IsNotExist(err):
-			return fmt.Errorf("no starting config to copy (%v); pass --provider and --model", err)
-		case err != nil:
-			return err
-		default:
-			if config, err = plugin.ParseConfig(data); err != nil {
-				return fmt.Errorf("%s: %w", filepath.Join(home, "config.json"), err)
-			}
-		}
+		source = filepath.Join(home, "config.json")
+	}
+	data, err := readConfigSource(source, stdin)
+	if err != nil {
+		return err
+	}
+	config, err := plugin.ParseConfig(data)
+	if err != nil {
+		return fmt.Errorf("%s: %w", source, err)
 	}
 	providers, err := LoadProviders(l)
 	if err != nil {
@@ -88,47 +74,10 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		installed = append(installed, p)
 	}
 	sort.Strings(installed)
-	// Options belong to a model, so choosing another provider or model starts
-	// from none; only --option applies then.
-	if o.Provider != "" || o.Model != "" {
-		config.Options = nil
+	if err := plugin.Validate(config, installed, providers[config.Provider]); err != nil {
+		return fmt.Errorf("%s: %w", source, err)
 	}
-	if o.Provider != "" {
-		config.Provider = o.Provider
-	}
-	if o.Model != "" {
-		config.Model = o.Model
-	}
-	if config.Provider == "" {
-		if len(installed) != 1 {
-			return fmt.Errorf("choose a provider: agent new NAME --provider P (installed: %s)", strings.Join(installed, ", "))
-		}
-		config.Provider = installed[0]
-	}
-	describe := providers[config.Provider]
-	given := map[string]bool{}
-	for _, option := range o.Options {
-		key, value, ok := strings.Cut(option, "=")
-		if !ok || key == "" {
-			return fmt.Errorf("option %q is not key=value (--option k=v)", option)
-		}
-		if given[key] {
-			return fmt.Errorf("option %s given twice", key)
-		}
-		given[key] = true
-		parsed, err := parseOption(describe, config.Model, key, value)
-		if err != nil {
-			return err
-		}
-		if config.Options == nil {
-			config.Options = map[string]any{}
-		}
-		config.Options[key] = parsed
-	}
-	if err := plugin.Validate(config, installed, describe); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(config, "", "  ")
+	data, err = json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -153,7 +102,32 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		os.RemoveAll(ctrl)
 		return err
 	}
-	return awaitAdmission(ctrl, name, o, w)
+	fmt.Fprintf(w, "Created %s\n", ctrl)
+	fmt.Fprintf(w, "The daemon admits it shortly: its home appears at %s, and a reason it was not started in %s.\n",
+		filepath.Join(ctrl, "home"), filepath.Join(ctrl, "ERROR"))
+	return nil
+}
+
+// readConfigSource reads a config of at most plugin.ConfigLimit bytes, the
+// daemon's limit, from path or, for "-", from stdin.
+func readConfigSource(source string, stdin io.Reader) ([]byte, error) {
+	r := stdin
+	if source != "-" {
+		f, err := os.Open(source)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		r = f
+	}
+	data, err := io.ReadAll(io.LimitReader(r, plugin.ConfigLimit+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > plugin.ConfigLimit {
+		return nil, fmt.Errorf("%s is over %d KiB", source, plugin.ConfigLimit>>10)
+	}
+	return data, nil
 }
 
 // writeConfig sets the modes of the new control directory and writes its
@@ -171,53 +145,6 @@ func writeConfig(ctrl string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return rename(temp, filepath.Join(ctrl, "config.json"))
-}
-
-// parseOption turns the text of --option key=value into the JSON value the
-// model's describe entry calls for: an integer for an integer option, the
-// allowed value that prints as the text for an enumeration (which may be a
-// number or a boolean), and the text itself otherwise, for validation to
-// refuse.
-func parseOption(describe proto.DescribeResponse, model, key, value string) (any, error) {
-	for _, m := range describe.Models {
-		if m.ID != model {
-			continue
-		}
-		opt := m.Options[key]
-		if opt.Type == "integer" {
-			n, err := strconv.Atoi(value)
-			if err != nil {
-				return nil, fmt.Errorf("option %q: %q is not an integer", key, value)
-			}
-			return float64(n), nil
-		}
-		for _, allowed := range opt.Values {
-			if fmt.Sprint(allowed) == value {
-				return allowed, nil
-			}
-		}
-	}
-	return value, nil
-}
-
-// awaitAdmission polls the control directory for the home link the daemon
-// makes at admission, or the ERROR it writes instead.
-func awaitAdmission(ctrl, name string, o NewOptions, w io.Writer) error {
-	deadline := time.Now().Add(o.Wait)
-	for {
-		if target, err := os.Readlink(filepath.Join(ctrl, "home")); err == nil {
-			fmt.Fprintf(w, "Created %s: home %s\n", name, target)
-			return nil
-		}
-		if data, err := os.ReadFile(filepath.Join(ctrl, "ERROR")); err == nil && len(strings.TrimSpace(string(data))) > 0 {
-			return fmt.Errorf("%s was not started: %s", name, strings.TrimSpace(sanitize(string(data))))
-		}
-		if !time.Now().Before(deadline) {
-			fmt.Fprintf(w, "Created %s; the daemon has not admitted it yet (agent log %s shows why).\n", name, name)
-			return nil
-		}
-		time.Sleep(o.Poll)
-	}
 }
 
 // Remove deletes the control directory of the direct child name, which stops

@@ -2,7 +2,7 @@ package cli
 
 import (
 	"bufio"
-	"context"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -111,57 +111,41 @@ func newest(dir string) string {
 	return ""
 }
 
-// Log prints the agent's ERROR, if any, then follows its newest journal,
-// moving on to each new run as it starts. An empty errorFile skips the ERROR.
-func Log(ctx context.Context, journalDir, errorFile string, w io.Writer) error {
+// Log prints the agent's ERROR, if any, then its newest journal. An empty
+// errorFile skips the ERROR.
+func Log(journalDir, errorFile string, w io.Writer) error {
 	if errorFile != "" {
 		if text, ok := readError(errorFile); ok {
 			fmt.Fprintf(w, "ERROR: %s\n", text)
 		}
 	}
-	var file *os.File
-	var reader *bufio.Reader
-	var current string
-	var partial []byte
-	defer func() {
-		if file != nil {
-			file.Close()
-		}
-	}()
+	path := newest(journalDir)
+	if path == "" {
+		fmt.Fprintln(w, "No journal yet.")
+		return nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	fmt.Fprintf(w, "== %s\n", path)
+	return printLines(f, w, Format)
+}
+
+// printLines writes each non-empty line of r as format renders it.
+func printLines(r io.Reader, w io.Writer, format func([]byte) string) error {
+	reader := bufio.NewReader(r)
 	for {
-		for reader != nil {
-			chunk, err := reader.ReadBytes('\n')
-			partial = append(partial, chunk...)
-			if err != nil {
-				break // wait for the rest of the line
-			}
-			fmt.Fprintln(w, Format(partial))
-			partial = nil
+		line, err := reader.ReadBytes('\n')
+		if len(bytes.TrimSpace(line)) > 0 {
+			fmt.Fprintln(w, format(line))
 		}
-		// Switch only after reading to EOF, so a finished run prints in full.
-		if next := newest(journalDir); next != "" && next != current {
-			if file != nil {
-				// Lines written after the last read but before the switch.
-				rest, _ := io.ReadAll(reader)
-				for _, line := range strings.Split(string(append(partial, rest...)), "\n") {
-					if strings.TrimSpace(line) != "" {
-						fmt.Fprintln(w, Format([]byte(line)))
-					}
-				}
-				file.Close()
-			}
-			f, err := os.Open(next)
-			if err != nil {
-				return err
-			}
-			file, reader, current, partial = f, bufio.NewReader(f), next, nil
-			fmt.Fprintf(w, "== %s\n", next)
-			continue
+		if err == io.EOF {
+			return nil
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(500 * time.Millisecond):
+		if err != nil {
+			return err
 		}
 	}
 }
