@@ -114,3 +114,13 @@ func ContextTokens(d proto.DescribeResponse, model string) int {
 	}
 	return 0
 }
+
+// AcceptsImages reports whether the model takes images, false if unknown.
+func AcceptsImages(d proto.DescribeResponse, model string) bool {
+	for _, m := range d.Models {
+		if m.ID == model {
+			return m.Images
+		}
+	}
+	return false
+}

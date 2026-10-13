@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -102,5 +103,28 @@ func TestServeDispatches(t *testing.T) {
 	json.Unmarshal(out.Bytes(), &d)
 	if d.Protocol != 1 || d.Models[0].ContextTokens != 10 {
 		t.Fatalf("got %s", out.String())
+	}
+}
+
+func TestImagesOmittedWhenEmpty(t *testing.T) {
+	m, _ := json.Marshal(Message{Role: "user", Content: "hi"})
+	if string(m) != `{"role":"user","content":"hi"}` {
+		t.Fatalf("message: %s", m)
+	}
+	d, _ := json.Marshal(Model{ID: "m", ContextTokens: 1})
+	if strings.Contains(string(d), "images") {
+		t.Fatalf("model: %s", d)
+	}
+}
+
+func TestImageDataIsBase64(t *testing.T) {
+	in := Image{File: "inbox/processed/a.png", MediaType: "image/png", Data: []byte{1, 2, 3}}
+	data, _ := json.Marshal(in)
+	if !strings.Contains(string(data), `"data":"AQID"`) {
+		t.Fatalf("%s", data)
+	}
+	var out Image
+	if json.Unmarshal(data, &out); !reflect.DeepEqual(in, out) {
+		t.Fatalf("round trip %+v", out)
 	}
 }

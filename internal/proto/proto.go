@@ -22,12 +22,21 @@ type Tool struct {
 	InputSchema json.RawMessage `json:"input_schema"`
 }
 
+// Image is a picture attached to a user message. Data is base64 in JSON.
+type Image struct {
+	File      string `json:"file"`
+	MediaType string `json:"media_type"`
+	Data      []byte `json:"data"`
+}
+
 // Message is one conversation entry. Roles are "user" (Content), "assistant"
-// (Text, Command, Wait, CallID, Opaque) and "tool" (CallID, Content). Opaque
-// is set by the plugin and returned to it unchanged.
+// (Text, Command, Wait, CallID, Opaque) and "tool" (CallID, Content). Images
+// is set on user messages only. Opaque is set by the plugin and returned to it
+// unchanged.
 type Message struct {
 	Role    string          `json:"role"`
 	Content string          `json:"content,omitempty"`
+	Images  []Image         `json:"images,omitempty"`
 	Text    string          `json:"text,omitempty"`
 	Command *string         `json:"command,omitempty"`
 	Wait    json.RawMessage `json:"wait,omitempty"`
@@ -99,6 +108,7 @@ type Option struct {
 type Model struct {
 	ID            string            `json:"id"`
 	ContextTokens int               `json:"context_tokens"`
+	Images        bool              `json:"images,omitempty"`
 	Options       map[string]Option `json:"options,omitempty"`
 }
 

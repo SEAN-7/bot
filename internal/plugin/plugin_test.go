@@ -145,3 +145,16 @@ func TestEnvRoundTrip(t *testing.T) {
 		t.Fatal("accepted line without =")
 	}
 }
+
+func TestAcceptsImages(t *testing.T) {
+	d := proto.DescribeResponse{Models: []proto.Model{{ID: "a", Images: true}, {ID: "b"}}}
+	if !AcceptsImages(d, "a") {
+		t.Error("a: want true")
+	}
+	if AcceptsImages(d, "b") {
+		t.Error("b: want false")
+	}
+	if AcceptsImages(d, "missing") {
+		t.Error("missing: want false")
+	}
+}
