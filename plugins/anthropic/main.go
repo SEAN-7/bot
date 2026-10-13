@@ -101,6 +101,9 @@ var (
 	disableable = []string{"adaptive", "disabled"}
 )
 
+// imageTypes is what the API accepts as image input, for every model.
+var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
+
 var models = []modelSpec{
 	{id: "claude-opus-5-5", contextTokens: 1000000, maxOutput: 128000, defaultMax: 64000, efforts: allEfforts, defaultEffort: "medium"},
 	{id: "claude-fable-5-1", contextTokens: 1000000, maxOutput: 128000, defaultMax: 64000, efforts: allEfforts, defaultEffort: "high"},
@@ -162,7 +165,7 @@ func (handler) Describe() proto.DescribeResponse {
 				Values:      anyList(m.thinking),
 			}
 		}
-		resp.Models = append(resp.Models, proto.Model{ID: m.id, ContextTokens: m.contextTokens, Images: true, Options: opts})
+		resp.Models = append(resp.Models, proto.Model{ID: m.id, ContextTokens: m.contextTokens, ImageTypes: imageTypes, Options: opts})
 	}
 	return resp
 }

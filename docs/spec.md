@@ -69,6 +69,12 @@ be a script the agent writes, it stays out of the harness.
   write to its owner; the daemon records both directions in a root-owned log
   the agent can read but not change (see Messages). The human's conversation
   is pull, not push: alerts remain something the agent builds.
+- **The harness presents files; it does not convert them.** An inbox file
+  reaches the model as text or as an image only in a form the model accepts
+  natively and only when there is exactly one way to present it. Anything
+  else, a PDF for example, arrives as a note with its path, and the agent
+  converts it with its own tools. Which image types a model accepts is
+  provider knowledge, declared by its plugin.
 - **Standing owner instructions.** Each agent's `OWNER.md` is written by its
   owner, loaded first on every run, and cannot be changed by the agent (see
   OWNER.md). The harness guarantees that it is present, unaltered and
@@ -378,8 +384,8 @@ a dot.
 5. Collect inbox files in name order, skipping dot-files and directories.
    Write them to the journal, then move them to `inbox/processed/` (adding a
    numeric suffix if a name is already taken). Each file is classified
-   first: JPEG, PNG and GIF images are shown to the model (below); other
-   binary data is replaced by a one-line note.
+   first: images the model accepts and the daemon can check are shown to
+   the model (below); other binary data is replaced by a one-line note.
 
 **Context.**
 - System segments, most stable first: the system prompt (verbatim, below)
@@ -392,10 +398,11 @@ a dot.
   SHA-256 match a record in `delivered.jsonl` with that sender. The content
   is a JSON string, so text inside a file can never create its own `from`
   field. Contents over 64 KiB are clipped, with the file's path included.
-- **Images.** A file that `http.DetectContentType` calls `image/jpeg`,
-  `image/png` or `image/gif` is shown to the model, as an image on the user
-  message beside the records, when the model's `describe` entry sets `images`.
-  Its record's `content` describes it (`[image/jpeg 1280x960, 169027 bytes,
+- **Images.** A file that `http.DetectContentType` calls an `image/*` type
+  is shown to the model, as an image on the user message beside the records,
+  when the type is in the model's `describe` `image_types` and the daemon can
+  check it: `image/jpeg`, `image/png` and `image/gif`, which the standard
+  library decodes. Its record's `content` describes it (`[image/jpeg 1280x960, 169027 bytes,
   shown below]`). Limits: 5 MiB by the file's full size, and 2000 px on each
   side, because the API rejects larger images in a request with more than
   20 images instead of downscaling them; the harness resizes nothing. The
@@ -407,8 +414,9 @@ a dot.
   counting a continued conversation's earlier images; an image that would
   exceed that is not shown, and the images after it that fit still are. An
   image that is not shown, whether over a limit or the budget, undecodable,
-  of another `image/*` type or for a model without `images`, gets a note as
-  its `content` naming the file's full path. Other data that is not valid
+  of a type the model does not accept or the daemon cannot check, or for a
+  model that accepts no images, gets a note as its `content` naming the
+  file's full path. Other data that is not valid
   UTF-8 (ignoring a rune cut by the read limit) gets a "binary file not
   shown" note with its size and detected type, or "not valid UTF-8 text"
   when that type is text. Everything else is text. Exact wording is in
@@ -653,8 +661,11 @@ service log. Every request and response carries `"protocol": 1`.
 - Response:
   - `settings`: list of `{name, description, secret}`, the environment
     variables the plugin needs. The installer prompts for these.
-  - `models`: list of `{id, context_tokens, images, options}`. `images`
-    (boolean, omitted when false) says the model accepts images. `options`
+  - `models`: list of `{id, context_tokens, image_types, options}`.
+    `image_types` (omitted when empty) lists the image media types the model
+    accepts; the daemon shows only those it can also check. 0.5.0 plugins
+    sent a boolean `images` instead, which is ignored, so their models get
+    notes until the plugin is updated. `options`
     maps each option name to `{description, values}` (allowed values) or
     `{description, type: "integer", min, max}`.
 
@@ -665,7 +676,7 @@ service log. Every request and response carries `"protocol": 1`.
   JSON Schema), and `messages`:
   - `{role: "user", content, images}`; `images` (omitted when empty) lists
     `{file, media_type, data}`, `data` being the raw bytes (base64 in JSON),
-    and is sent only to models that set `images`
+    and holds only types the model lists in `image_types`
   - `{role: "assistant", text, command, wait, call_id, opaque}`
   - `{role: "tool", call_id, content}`
 - Response: `{text, command, wait, usage: {input_tokens, output_tokens,
@@ -684,7 +695,8 @@ service log. Every request and response carries `"protocol": 1`.
 - A plugin returns at most one command per response and disables parallel
   tool calls at the provider.
 
-The daemon interprets nothing but `context_tokens`, `images` and `usage`.
+The daemon interprets nothing but `context_tokens`, `image_types` and
+`usage`.
 
 ## Plugins
 
@@ -697,7 +709,9 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 - **anthropic**: Messages API. Settings: `ANTHROPIC_API_KEY`. Places
   a prompt-cache marker on each system segment (at most the last three) and
   on the latest message, so a TASK.md edit leaves the earlier segments cached.
-  Every model declares `images`: a user message's images follow its text,
+  Every model declares the API's image types (JPEG, PNG, GIF and WebP; the
+  daemon cannot check WebP, so it arrives as a note): a user message's images
+  follow its text,
   each as a text block naming its file and an image block. HTTP 413 is
   reported as `context_overflow`.
   Exposes the reasoning settings current models accept as options. Model IDs,

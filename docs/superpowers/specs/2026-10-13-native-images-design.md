@@ -187,3 +187,29 @@ their next wake.
 
 Release 0.5.0, deploy it to the VM with the release's `install.sh`, and check
 the service with `systemctl is-active agent` and `journalctl -u agent`.
+
+## Revision for 0.5.1: declared image types
+
+Which image formats a model accepts is provider knowledge, so it moves out of
+the harness. `proto.Model.Images bool` becomes `ImageTypes []string`
+(`image_types` in `describe`, omitted when empty), and
+`plugin.AcceptsImages` becomes `plugin.ImageTypes`. The daemon shows an image
+only if its detected type is both declared by the model and one it can check
+(`imageExt`: JPEG, PNG and GIF, which the standard library decodes). The
+Anthropic plugin declares the API's set, JPEG, PNG, GIF and WebP; WebP still
+arrives as a note because the daemon cannot decode it. `classify` checks the
+type before any limit: a model that accepts none of the checkable types gets
+"the model does not accept images"; any other undeclared or uncheckable
+type gets a note listing the types that would be shown.
+
+The field gets a new name rather than a new type because a plugin whose
+update fails keeps its installed version. A 0.5.0 plugin's `"images": true`
+is an unknown field to the new daemon and is ignored, so its models get notes
+instead of a `describe` that fails to decode.
+
+The rule behind this, now in the spec's decisions: the harness presents a
+file only in a form the model accepts natively and only when there is
+exactly one way to present it. Everything else, PDFs included, is a note with
+the path for the agent to convert (for a PDF: extract the text, render the
+pages it needs to PNG and copy them into `~/inbox/`). So the daemon never
+chooses between reading and viewing a file.

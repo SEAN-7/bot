@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -513,8 +514,8 @@ func TestDescribeDeclaresImages(t *testing.T) {
 		t.Fatal("no models")
 	}
 	for _, m := range d.Models {
-		if !m.Images {
-			t.Errorf("model %s does not declare images", m.ID)
+		if !reflect.DeepEqual(m.ImageTypes, []string{"image/jpeg", "image/png", "image/gif", "image/webp"}) {
+			t.Errorf("model %s declares image types %v", m.ID, m.ImageTypes)
 		}
 	}
 }

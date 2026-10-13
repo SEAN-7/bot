@@ -137,7 +137,7 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal: %v", err)
 		return
 	}
-	if reason := a.steps(ctx, j, cfg, plugin.ContextTokens(describe, cfg.Model), plugin.AcceptsImages(describe, cfg.Model), owner); reason != "" {
+	if reason := a.steps(ctx, j, cfg, plugin.ContextTokens(describe, cfg.Model), plugin.ImageTypes(describe, cfg.Model), owner); reason != "" {
 		j.End(reason)
 	} else {
 		j.Close() // daemon shutdown: left unclean so recovery resumes the agent
@@ -162,7 +162,7 @@ func (a *agent) readSegment(name string) string {
 	return strings.ToValidUTF8(string(data), "�")
 }
 
-func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int, images bool, owner string) string {
+func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int, imageTypes []string, owner string) string {
 	d := a.d
 	conv := a.takeConversation(cfg, owner)
 	start := map[string]any{"agent": a.id, "config": cfg, "context_tokens": contextTokens}
@@ -181,7 +181,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	} else {
 		system = []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
 	}
-	records, shown, err := a.collectInbox(j, images, d.cfg.ImageBudget-imageBytes(messages))
+	records, shown, err := a.collectInbox(j, imageTypes, d.cfg.ImageBudget-imageBytes(messages))
 	if err != nil {
 		a.logf("inbox: %v", err)
 		j.Record("note", map[string]any{"text": "inbox: " + err.Error()})
@@ -255,7 +255,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		var more []inboxRecord
 		var moreImages []proto.Image
 		if !d.draining() { // during a stop, new messages wait for the next daemon
-			if more, moreImages, err = a.collectInbox(j, images, d.cfg.ImageBudget-imageBytes(messages)); err != nil {
+			if more, moreImages, err = a.collectInbox(j, imageTypes, d.cfg.ImageBudget-imageBytes(messages)); err != nil {
 				a.logf("inbox: %v", err)
 			}
 		}

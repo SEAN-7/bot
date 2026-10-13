@@ -112,7 +112,7 @@ func TestImagesOmittedWhenEmpty(t *testing.T) {
 		t.Fatalf("message: %s", m)
 	}
 	d, _ := json.Marshal(Model{ID: "m", ContextTokens: 1})
-	if strings.Contains(string(d), "images") {
+	if strings.Contains(string(d), "image_types") {
 		t.Fatalf("model: %s", d)
 	}
 }
@@ -126,5 +126,16 @@ func TestImageDataIsBase64(t *testing.T) {
 	var out Image
 	if json.Unmarshal(data, &out); !reflect.DeepEqual(in, out) {
 		t.Fatalf("round trip %+v", out)
+	}
+}
+
+// A 0.5.0 plugin declares "images": true; it still decodes, as a text-only model.
+func TestBooleanImagesIgnored(t *testing.T) {
+	var m Model
+	if err := json.Unmarshal([]byte(`{"id":"m","context_tokens":1,"images":true}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.ImageTypes != nil {
+		t.Fatalf("image types %v", m.ImageTypes)
 	}
 }

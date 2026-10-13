@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -146,15 +147,15 @@ func TestEnvRoundTrip(t *testing.T) {
 	}
 }
 
-func TestAcceptsImages(t *testing.T) {
-	d := proto.DescribeResponse{Models: []proto.Model{{ID: "a", Images: true}, {ID: "b"}}}
-	if !AcceptsImages(d, "a") {
-		t.Error("a: want true")
+func TestImageTypes(t *testing.T) {
+	d := proto.DescribeResponse{Models: []proto.Model{{ID: "a", ImageTypes: []string{"image/png"}}, {ID: "b"}}}
+	if got := ImageTypes(d, "a"); !reflect.DeepEqual(got, []string{"image/png"}) {
+		t.Errorf("a: got %v", got)
 	}
-	if AcceptsImages(d, "b") {
-		t.Error("b: want false")
+	if got := ImageTypes(d, "b"); got != nil {
+		t.Errorf("b: got %v", got)
 	}
-	if AcceptsImages(d, "missing") {
-		t.Error("missing: want false")
+	if got := ImageTypes(d, "missing"); got != nil {
+		t.Errorf("missing: got %v", got)
 	}
 }

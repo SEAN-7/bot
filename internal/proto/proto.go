@@ -105,10 +105,12 @@ type Option struct {
 	Max         *int   `json:"max,omitempty"`
 }
 
+// Model is one model a plugin offers. ImageTypes lists the image media types
+// it accepts; none means it takes text only.
 type Model struct {
 	ID            string            `json:"id"`
 	ContextTokens int               `json:"context_tokens"`
-	Images        bool              `json:"images,omitempty"`
+	ImageTypes    []string          `json:"image_types,omitempty"`
 	Options       map[string]Option `json:"options,omitempty"`
 }
 

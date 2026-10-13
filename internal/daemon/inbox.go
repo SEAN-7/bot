@@ -63,14 +63,16 @@ func (a *agent) pending() ([]string, error) {
 	return names, nil
 }
 
-// imageExt names a shown image's journal copy.
+// imageExt names a shown image's journal copy. Its keys are the image types
+// the daemon can check, and so the only ones it shows.
 var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
 
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
-// order, the images shown with them. images is whether the model accepts them,
-// budget how many more bytes of images the conversation may show.
-func (a *agent) collectInbox(j recorder, images bool, budget int) ([]inboxRecord, []proto.Image, error) {
+// order, the images shown with them. imageTypes is the image media types the
+// model accepts, budget how many more bytes of images the conversation may
+// show.
+func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
 	names, err := a.pending()
 	if err != nil || len(names) == 0 {
@@ -103,7 +105,7 @@ func (a *agent) collectInbox(j recorder, images bool, budget int) ([]inboxRecord
 		file := "inbox/processed/" + target
 		text, content, img := true, "", (*shownImage)(nil)
 		if readable {
-			text, content, img = classify(data, size, filepath.Join(a.home, file), images)
+			text, content, img = classify(data, size, filepath.Join(a.home, file), imageTypes)
 		}
 		if text {
 			var clipped bool

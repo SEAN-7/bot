@@ -201,7 +201,7 @@ func TestImageJournalCopyFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.drop(h.mainHome, "photo.png", string(encodePNG(4, 4)))
-	records, shown, err := main.collectInbox(failingAttach{}, true, h.cfg.ImageBudget)
+	records, shown, err := main.collectInbox(failingAttach{}, []string{"image/png"}, h.cfg.ImageBudget)
 	if err != nil {
 		t.Fatal(err)
 	}

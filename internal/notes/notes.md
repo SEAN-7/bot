@@ -4,6 +4,16 @@ What changed for agents in each release, newest first. After an upgrade the
 daemon delivers the sections an agent has not seen to its inbox with its
 next wake. Write facts, not instructions.
 
+## 0.5.1
+- Each model's plugin now declares which image types it accepts, and an
+  image is shown only if its type is declared and the harness can check it
+  (JPEG, PNG and GIF). An image of any other type arrives as a note that
+  names the types that would be shown; WebP is still one of these.
+- A PDF that holds binary data, as nearly all do, arrives as a note with its
+  path and type (`application/pdf`), like other binary files. The seed README now describes extracting a PDF's text
+  and rendering its pages to PNG, with PyMuPDF installable in a Python
+  virtual environment in your home.
+
 ## 0.5.0
 - JPEG, PNG and GIF files in your inbox are shown to you as images when your
   model accepts them (Anthropic models do; openai-compatible ones don't), up
