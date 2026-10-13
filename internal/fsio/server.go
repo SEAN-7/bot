@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -41,7 +42,7 @@ type request struct {
 	Data  []byte   `json:"data,omitempty"`
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
-	Mode  uint32   `json:"mode,omitempty"` // mkdir's permission bits
+	Mode  uint32   `json:"mode,omitempty"` // mkdir's and write's permission bits
 }
 
 type response struct {
@@ -121,7 +122,13 @@ func handle(req request) (response, error) {
 		data, err := io.ReadAll(io.LimitReader(f, req.Limit))
 		return response{Data: data, Size: info.Size()}, err
 	case "write":
-		return response{}, write(req.Path, req.Data)
+		mode := os.FileMode(req.Mode).Perm()
+		if mode == 0 {
+			mode = 0o644 // a request without one
+		}
+		return response{}, write(req.Path, req.Data, mode)
+	case "private":
+		return response{}, private(req.Paths)
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
 	case "mkdir":
@@ -189,9 +196,9 @@ func random() string {
 
 // write replaces path atomically. Renaming over a symlink replaces the link
 // itself, never its target.
-func write(path string, data []byte) error {
+func write(path string, data []byte, mode os.FileMode) error {
 	temp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"."+random()+".tmp")
-	f, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
@@ -209,6 +216,45 @@ func write(path string, data []byte) error {
 		os.Remove(temp)
 	}
 	return err
+}
+
+// private makes each of paths a real directory without permissions for
+// others (see Client.Private). The chmod follows a link swapped in after the
+// Lstat, but only with this user's rights, which reach nothing it does not
+// own.
+func private(paths []string) error {
+	var skipped []string
+	below := func(path string) bool {
+		for _, s := range skipped {
+			if strings.HasPrefix(path, s+"/") {
+				return true
+			}
+		}
+		return false
+	}
+	for _, path := range paths {
+		if below(path) {
+			continue
+		}
+		// mkdir never follows a link in the last component.
+		if err := os.Mkdir(path, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
+			return err
+		}
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() || owner(info) != os.Getuid() {
+			skipped = append(skipped, path)
+			continue
+		}
+		if mode := info.Mode(); mode&0o007 != 0 {
+			if err := os.Chmod(path, mode&^0o007); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // scan returns the control directories <home>/agents/<name>, sorted: every

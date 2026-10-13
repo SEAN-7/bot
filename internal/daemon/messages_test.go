@@ -99,6 +99,59 @@ func TestDownMessageToMissingChildDropped(t *testing.T) {
 	}
 }
 
+// The messages and notes the harness writes into an inbox are 0640: the
+// home's group, the agent's ancestors, reads them, and nobody else.
+func TestInboxFilesClosedToOthers(t *testing.T) {
+	h := newHarness(t, done(), done())
+	h.start()
+	h.sendOwner("hi")
+	h.waitEnds(h.mainID, 1)
+	h.spoolDown(h.mainHome, "ghost", "anyone there?")
+	h.waitEnds(h.mainID, 2)
+	entries, _ := os.ReadDir(filepath.Join(h.mainHome, "inbox", "processed"))
+	if len(entries) != 2 {
+		t.Fatalf("processed %v", entries)
+	}
+	for _, e := range entries {
+		if info, _ := e.Info(); info.Mode().Perm() != 0o640 {
+			t.Errorf("%s: %v", e.Name(), info.Mode())
+		}
+	}
+}
+
+// A message for a child whose control directory can never be admitted (it
+// holds only a home link naming a free user whose home is not its own) is
+// dropped with a note, like one for a child that does not exist. Deciding
+// so starts no helper at every poll.
+func TestDownMessageToUnadmissibleChildDropped(t *testing.T) {
+	h := newHarness(t, done())
+	checks := countLookups(h, "agent-3")
+	h.start()
+	start := checks.Load()
+	ctrl := makeChild(t, h, "x", false)
+	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
+	spooled := h.spoolDown(h.mainHome, "x", "anyone there?")
+	waitFor(t, "spool file dropped", func() bool { _, err := os.Stat(spooled); return os.IsNotExist(err) })
+	want := fmt.Sprintf(MsgUndeliveredFmt, "x") + "\n"
+	waitFor(t, "undelivered note", func() bool { return countNotes(h.mainHome, "-undelivered.md") == 1 })
+	if notes := noteTexts(h.mainHome, "-undelivered.md"); len(notes) != 1 || notes[0] != want {
+		t.Fatalf("notes %q", notes)
+	}
+	stableAt(t, h, checks, start+1)
+}
+
+// Root has no inbox: a message from root to no child is dropped and the
+// service log says so.
+func TestRootUndeliveredLoggedOnly(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	spooled := h.spoolDown(h.cfg.RootHome(), "ghost", "anyone there?")
+	waitFor(t, "spool file dropped", func() bool { _, err := os.Stat(spooled); return os.IsNotExist(err) })
+	waitFor(t, "log", func() bool { return strings.Contains(h.logs.String(), fmt.Sprintf(MsgUndeliveredFmt, "ghost")) })
+	time.Sleep(100 * time.Millisecond)
+	noRootInbox(t, h)
+}
+
 func TestNestedDownSpoolIgnored(t *testing.T) {
 	h := newHarness(t)
 	h.start()

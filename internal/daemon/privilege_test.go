@@ -502,6 +502,108 @@ func TestPrivilegeControlDirsPrivate(t *testing.T) {
 	exitCodes(t, h.toolOutput("lrc="), true, "lrc", "orc")
 }
 
+// TestPrivilegeHarnessDirsPrivate: a child that its parent lets through its
+// home (x on ~) cannot list or read the parent's inbox, collected messages,
+// saved outputs or spools, nor a sibling's control directory, also where an
+// earlier release left those directories open to others: they are closed
+// when the parent is admitted again. The grandparent, in the parent's
+// group, reads them all.
+func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
+	h, _ := rootHarness(t)
+	h.start()
+	ctrlA := rootChild(t, h, "a")
+	homeA := h.childHome(ctrlA)
+	uidA, gidA := lookupIDs(t, ownerName(t, homeA))
+	agentsA := filepath.Join(homeA, "agents")
+	ctrlG, ctrlS := filepath.Join(agentsA, "g"), filepath.Join(agentsA, "s")
+	for path, text := range map[string]string{
+		filepath.Join(ctrlG, "config.json"):                  testConfig,
+		filepath.Join(ctrlS, "OWNER.md"):                     "sibling's orders\n",
+		filepath.Join(homeA, "inbox", "processed", "old.md"): "the owner's words\n",
+		filepath.Join(homeA, ".outputs", "out.txt"):          "saved output\n",
+		filepath.Join(homeA, "shared.txt"):                   "for everyone\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range []string{filepath.Dir(path), path} {
+			if err := os.Lchown(p, uidA, gidA); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	homeG := h.childHome(ctrlG)
+	// As an earlier release left them: open to others.
+	h.stop()
+	dirs := []string{"inbox", "inbox/processed", ".outputs", ".messages", ".messages/agents", "agents"}
+	for _, dir := range dirs {
+		if err := os.Chmod(filepath.Join(homeA, dir), fs.ModeSetgid|0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Chmod(ctrlG, 0o755)
+	h.start()
+	waitFor(t, "g admitted again", func() bool { return strings.Count(h.logs.String(), childID("a/agents/g")+": admitted as") == 2 })
+	for _, dir := range dirs {
+		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
+	}
+	if info, _ := os.Stat(ctrlG); info.Mode().Perm() != 0o750 {
+		t.Fatalf("g's control directory %v", info.Mode())
+	}
+	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
+		t.Fatal(err)
+	}
+	reads := func(home, key string) string {
+		var b strings.Builder
+		fmt.Fprintf(&b, "cat %s/shared.txt; echo %sok=$?", home, key)
+		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/.outputs", "cat %s/.outputs/out.txt", "ls %s/.messages", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
+			fmt.Fprintf(&b, "; "+c+"; echo %s%d=$?", home, key, i+1)
+		}
+		return b.String()
+	}
+	h.setScript(
+		matchStep("task-for-g", reads(homeA, "g"), 100),
+		matchStep("task-for-main", reads("agents/a/home", "m"), 100))
+	h.drop(homeG, "task.md", "task-for-g")
+	h.waitEnds(childID("a/agents/g"), 1)
+	out := h.toolOutput("g1=")
+	exitCodes(t, out, true, "gok")
+	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8")
+	h.drop(h.mainHome, "go.md", "task-for-main")
+	h.waitEnds(h.mainID, 1)
+	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8")
+}
+
+// TestPrivilegeHomeLinkOfOtherUserKept: reclaim removes only the daemon's
+// own links in /home to the home it reclaims, never another user's.
+func TestPrivilegeHomeLinkOfOtherUserKept(t *testing.T) {
+	h, _ := rootHarness(t)
+	d := &daemon{cfg: h.cfg}
+	user := h.cfg.PoolUsers[1]
+	uid, gid := lookupIDs(t, h.cfg.PoolUsers[2])
+	own, theirs := filepath.Join(h.cfg.Homes, "own"), filepath.Join(h.cfg.Homes, "theirs")
+	for _, link := range []string{own, theirs} {
+		if err := os.Symlink(user, link); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Lchown(theirs, uid, gid); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.removeHomeLinks(user); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(own); !os.IsNotExist(err) {
+		t.Fatalf("the daemon's link kept: %v", err)
+	}
+	if target, err := os.Readlink(theirs); err != nil || target != user {
+		t.Fatalf("another user's link: %q %v", target, err)
+	}
+}
+
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops
 // what its user left running, removes its crontab, lingering, home and
 // temporary files, and empties its group.
@@ -604,11 +706,8 @@ func TestPrivilegeSpoolFileNotOwnedIgnored(t *testing.T) {
 	ctrl := rootChild(t, h, "c")
 	home := h.childHome(ctrl)
 	uid, gid := lookupIDs(t, ownerName(t, home))
-	spool := filepath.Join(home, ".messages")
-	if err := os.Mkdir(spool, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	os.Lchown(spool, uid, gid)
+	spool := filepath.Join(home, ".messages") // seeded at admission
+	statIs(t, spool, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
 	planted := h.queue(spool, "planted")
 	// The child's own message in the same spool is delivered.
 	temp := filepath.Join(spool, ".g")

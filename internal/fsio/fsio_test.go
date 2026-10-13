@@ -37,7 +37,7 @@ func start(t *testing.T) *Client {
 func TestWriteIsAtomicAndReadBack(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	path := filepath.Join(dir, "a.txt")
-	if err := c.Write(path, []byte("hello")); err != nil {
+	if err := c.Write(path, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	data, size, err := c.Read(path, 100)
@@ -61,7 +61,7 @@ func TestWriteReplacesSymlinkNotTarget(t *testing.T) {
 	os.WriteFile(target, []byte("ORIGINAL"), 0o644)
 	link := filepath.Join(dir, "ERROR")
 	os.Symlink(target, link)
-	if err := c.Write(link, []byte("new")); err != nil {
+	if err := c.Write(link, []byte("new"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if data, _ := os.ReadFile(target); string(data) != "ORIGINAL" {
@@ -69,6 +69,78 @@ func TestWriteReplacesSymlinkNotTarget(t *testing.T) {
 	}
 	if info, _ := os.Lstat(link); info.Mode()&fs.ModeSymlink != 0 {
 		t.Fatal("link still a symlink")
+	}
+}
+
+// Write gives the file the mode asked for (less the umask), also when it
+// replaces one with another mode.
+func TestWriteMode(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := filepath.Join(dir, "note.md")
+	os.WriteFile(path, []byte("old"), 0o644)
+	os.Chmod(path, 0o644)
+	if err := c.Write(path, []byte("new"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode().Perm() != 0o640 {
+		t.Fatalf("mode %v", info.Mode())
+	}
+}
+
+// Private makes each path a real directory closed to others: a missing one
+// is created 0750, an existing one loses only its permissions for others.
+// It never follows a link, leaves anything that is not a directory alone,
+// and skips what lies below one it left alone.
+func TestPrivate(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := func(p string) string { return filepath.Join(dir, p) }
+	os.Mkdir(path("open"), 0o755)
+	os.Mkdir(path("group"), 0o775)
+	os.Mkdir(path("closed"), 0o700)
+	for _, p := range []string{"open", "group", "closed"} {
+		os.Chmod(path(p), map[string]os.FileMode{"open": 0o755, "group": 0o775, "closed": 0o700}[p])
+	}
+	outside := t.TempDir()
+	os.Chmod(outside, 0o755)
+	os.Symlink(outside, path("linked"))
+	os.WriteFile(path("file"), []byte("x"), 0o644)
+	err := c.Private(path("new"), path("new/sub"), path("open"), path("group"), path("closed"),
+		path("linked"), path("linked/sub"), path("file"), path("file/sub"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]os.FileMode{"new": 0o750, "new/sub": 0o750, "open": 0o750, "group": 0o770, "closed": 0o700} {
+		if info, err := os.Lstat(path(p)); err != nil || !info.IsDir() || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", p, info.Mode(), err, want)
+		}
+	}
+	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
+		t.Errorf("followed a link: %v", info.Mode())
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "sub")); !os.IsNotExist(err) {
+		t.Errorf("created below a link: %v", err)
+	}
+	if info, _ := os.Lstat(path("file")); !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
+		t.Errorf("file changed: %v", info.Mode())
+	}
+}
+
+// Private keeps a setgid bit: a home's subdirectories stay in its group.
+func TestPrivateKeepsSetgid(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := filepath.Join(dir, "inbox")
+	os.Mkdir(path, 0o755)
+	if err := os.Chmod(path, 0o755|fs.ModeSetgid); err != nil {
+		t.Skip(err)
+	}
+	if info, _ := os.Stat(path); info.Mode()&fs.ModeSetgid == 0 {
+		t.Skip("cannot set setgid here")
+	}
+	if err := c.Private(path); err != nil {
+		t.Fatal(err)
+	}
+	if info, _ := os.Stat(path); info.Mode()&(fs.ModeSetgid|fs.ModePerm) != fs.ModeSetgid|0o750 {
+		t.Fatalf("mode %v", info.Mode())
 	}
 }
 
@@ -194,7 +266,7 @@ func TestConcurrentRequests(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			path := filepath.Join(dir, fmt.Sprint(i))
-			if err := c.Write(path, []byte(fmt.Sprint(i))); err != nil {
+			if err := c.Write(path, []byte(fmt.Sprint(i)), 0o644); err != nil {
 				errs <- err
 				return
 			}
@@ -218,7 +290,7 @@ func TestRestartsAfterHelperDies(t *testing.T) {
 	path := filepath.Join(dir, "x")
 	var err error
 	for i := 0; i < 2; i++ { // the first call may fail on the dead helper
-		if err = c.Write(path, []byte("ok")); err == nil {
+		if err = c.Write(path, []byte("ok"), 0o644); err == nil {
 			break
 		}
 	}
@@ -259,7 +331,7 @@ func TestHelperCallTimeout(t *testing.T) {
 	if time.Since(begin) > 3*time.Second {
 		t.Fatalf("call blocked for %s", time.Since(begin))
 	}
-	if err := c.Write(filepath.Join(dir, "y"), []byte("ok")); err != nil {
+	if err := c.Write(filepath.Join(dir, "y"), []byte("ok"), 0o644); err != nil {
 		t.Fatalf("helper not restarted: %v", err)
 	}
 }
@@ -286,10 +358,17 @@ func TestScanFindsControlDirs(t *testing.T) {
 	linked := filepath.Join(home, "agents", "linked")
 	os.MkdirAll(linked, 0o755)
 	os.Symlink(filepath.Join(t.TempDir(), "home"), filepath.Join(linked, "home"))
+	// A home that is a real directory or a regular file is no link, but
+	// the control directory is still found.
+	homeDir := filepath.Join(home, "agents", "homedir")
+	os.MkdirAll(filepath.Join(homeDir, "home"), 0o755)
+	homeFile := filepath.Join(home, "agents", "homefile")
+	os.MkdirAll(homeFile, 0o755)
+	os.WriteFile(filepath.Join(homeFile, "home"), []byte("x"), 0o644)
 	os.WriteFile(filepath.Join(home, "agents", "file"), []byte("x"), 0o644)
 	os.MkdirAll(filepath.Join(home, "agents", "a", "home", "agents", "deep"), 0o755) // not scanned: one level
 	got, err := c.Scan(home)
-	want := []string{a, b, empty, linked}
+	want := []string{a, b, empty, homeDir, homeFile, linked}
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v %v", got, err)
 	}
@@ -312,6 +391,29 @@ func TestScanSkipsSymlinks(t *testing.T) {
 	z := controlDir(t, home, "z")
 	got, err := c.Scan(home)
 	if err != nil || !reflect.DeepEqual(got, []string{z}) {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+// A directory in agents/ that another user owns is not a control directory
+// of this helper's user. Only root can make one, so the test needs root.
+func TestScanSkipsOtherUsersDirs(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give a directory to another user")
+	}
+	c, home := start(t), t.TempDir()
+	mine, theirs := controlDir(t, home, "mine"), controlDir(t, home, "theirs")
+	if err := os.Lchown(theirs, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Scan(home); err != nil || !reflect.DeepEqual(got, []string{mine}) {
+		t.Fatalf("got %v %v", got, err)
+	}
+	// agents/ itself owned by another user: nothing is found.
+	if err := os.Lchown(filepath.Join(home, "agents"), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := c.Scan(home); err != nil || len(got) != 0 {
 		t.Fatalf("got %v %v", got, err)
 	}
 }

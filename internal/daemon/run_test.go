@@ -72,7 +72,7 @@ func TestOutputClipping(t *testing.T) {
 	saved := tool[strings.Index(tool, "[full output: ")+len("[full output: "):]
 	saved = saved[:strings.Index(saved, "]")]
 	info, err := os.Stat(saved)
-	if err != nil || info.Size() != 40000 || !strings.HasPrefix(saved, filepath.Join(h.mainHome, ".outputs")) {
+	if err != nil || info.Size() != 40000 || info.Mode().Perm() != 0o640 || !strings.HasPrefix(saved, filepath.Join(h.mainHome, ".outputs")) {
 		t.Fatalf("saved %s: %v %v", saved, info, err)
 	}
 }

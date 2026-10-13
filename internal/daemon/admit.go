@@ -14,7 +14,13 @@ import (
 	"github.com/SEAN-7/bot/internal/seed"
 )
 
-const errLimitPrefix = "Agent limit reached"
+// heldBackPrefixes begin the ERRORs that say why an agent was not admitted
+// (see notStarted), which admission clears, including those an earlier
+// daemon wrote.
+var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix + MsgConfigTooLarge}
+
+// errConfigTooLarge: a starting config.json over configLimit.
+var errConfigTooLarge = errors.New(MsgConfigTooLarge)
 
 // admit gives the agent at ctrl a pool user and a home, and starts its
 // loop. It returns nil when ctrl is not an agent (yet), or the agent cannot
@@ -35,14 +41,23 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if usable == nil {
 		return nil // it may still be being written
 	}
-	user, err := d.pool.assign(id, min(len(d.pool.users), d.settings.MaxAgents), usable)
+	if !keep {
+		// A new agent's config.json is adopted: one too large to adopt
+		// takes no user.
+		if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Size > configLimit {
+			d.configTooLarge(parent, ctrl, id)
+			return nil
+		}
+	}
+	limit := min(len(d.pool.users), d.settings.MaxAgents)
+	user, err := d.pool.assign(id, limit, usable)
 	if err != nil {
 		d.admitFailed(ctrl, id, "pool", err)
 		return nil
 	}
 	if user == "" {
 		if held == "" {
-			d.holdBack(parent, ctrl, id)
+			d.holdBack(parent, ctrl, id, limit)
 		}
 		return nil // held: its user is being reclaimed
 	}
@@ -106,6 +121,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return fail("seed home", err)
 	}
 	if err := c.adoptConfig(); err != nil {
+		if errors.Is(err, errConfigTooLarge) {
+			d.configTooLarge(parent, ctrl, id)
+		}
 		return fail("config", err)
 	}
 	if err := d.cfg.System.EnableLinger(user); err != nil {
@@ -114,11 +132,16 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := d.secureJournal(id, c.gid()); err != nil {
 		return fail("journal", err)
 	}
+	// Closed to others like the parent's other directories: one an earlier
+	// release created is closed now. Root's are 0700 and stay so.
+	if err := parent.fs.Private(ctrl); err != nil {
+		return fail("control directory", err)
+	}
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
 		return fail("home link", err)
 	}
 	delete(d.admitErrs, ctrl)
-	d.clearLimited(parent, ctrl)
+	d.clearHeldBack(parent, ctrl)
 	d.mu.Lock()
 	d.start(c)
 	d.mu.Unlock()
@@ -285,25 +308,28 @@ func (d *daemon) repairHomeLink(c *agent) {
 	}
 }
 
+// harnessDirs are the directories the harness keeps in a home, parents
+// first.
+var harnessDirs = []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents", ".outputs"}
+
 // seed creates the harness's directories and the seed files the home lacks,
-// through the agent's own helper.
+// through the agent's own helper. The directories are open to the home's
+// group, the agent's ancestors, and closed to others, also when an earlier
+// release left them open: a child the agent lets through its home never
+// reads its inbox, outputs, spools or its siblings' control directories.
 func (a *agent) seed() error {
-	// agents/ is open to the home's group, the agent's ancestors, and closed
-	// to others: a child it lets through its home never reads its siblings'
-	// control directories.
-	for _, dir := range []struct {
-		name string
-		mode os.FileMode
-	}{{"inbox/processed", 0o755}, {"agents", 0o750}} {
-		if err := a.fs.Mkdir(filepath.Join(a.home, dir.name), dir.mode); err != nil {
-			return err
-		}
+	dirs := make([]string, len(harnessDirs))
+	for i, dir := range harnessDirs {
+		dirs[i] = filepath.Join(a.home, dir)
+	}
+	if err := a.fs.Private(dirs...); err != nil {
+		return err
 	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}, {"TASK.md", seed.TASK}} {
 		path := filepath.Join(a.home, file.name)
 		_, err := a.fs.Stat(path)
 		if errors.Is(err, fs.ErrNotExist) {
-			err = a.fs.Write(path, []byte(file.text))
+			err = a.fs.Write(path, []byte(file.text), 0o644)
 		}
 		if err != nil {
 			return err
@@ -347,10 +373,10 @@ func (c *agent) adoptConfig() error {
 	}
 	data, size, err := c.parent.fs.Read(from, configLimit)
 	if err == nil && size > int64(len(data)) {
-		err = fmt.Errorf("%s is larger than %d bytes", from, configLimit)
+		err = errConfigTooLarge
 	}
 	if err == nil {
-		err = c.fs.Write(to, data)
+		err = c.fs.Write(to, data, 0o644)
 	}
 	if err != nil {
 		return err
@@ -370,33 +396,60 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 	}
 }
 
-// holdBack reports an agent that max_agents keeps from starting: an ERROR
-// in its control directory and one note to its parent, once. Root has no
-// inbox: for its children the service log is the report.
-func (d *daemon) holdBack(parent *agent, ctrl, name string) {
-	if d.limited[ctrl] {
+// holdBack reports an agent no pool user is given to: limit entries
+// already exist (max_agents, or the pool users there are), or every free
+// user's home holds another agent's evidence.
+func (d *daemon) holdBack(parent *agent, ctrl, name string, limit int) {
+	if len(d.pool.entries()) >= limit {
+		n := d.settings.MaxAgents
+		d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
 		return
 	}
-	d.limited[ctrl] = true
-	limit := d.settings.MaxAgents
-	d.cfg.Logger.Printf("%s: not started: agent limit reached (max_agents=%d)", name, limit)
-	if err := parent.fs.Write(filepath.Join(ctrl, "ERROR"), []byte(fmt.Sprintf(MsgLimitFmt, limit)+"\n")); err != nil {
+	d.notStarted(parent, ctrl, name, MsgNoFreeUser, fmt.Sprintf(MsgNoFreeUserParentFmt, name))
+}
+
+// configTooLarge reports a starting config.json over configLimit.
+func (d *daemon) configTooLarge(parent *agent, ctrl, name string) {
+	text := MsgConfigPrefix + MsgConfigTooLarge
+	d.notStarted(parent, ctrl, name, text, fmt.Sprintf(MsgSubagentFmt, name, text))
+}
+
+// notStarted reports an agent that is not admitted for a reason its parent
+// can act on: text in the ERROR of its control directory and the service
+// log, and note in its parent's inbox, once while the reason stays the
+// same. Root has no inbox: for its children the service log is the report.
+func (d *daemon) notStarted(parent *agent, ctrl, name, text, note string) {
+	if d.heldBack[ctrl] == text {
+		return
+	}
+	d.heldBack[ctrl] = text
+	d.cfg.Logger.Printf("%s: not started: %s", name, text)
+	if err := parent.fs.Write(filepath.Join(ctrl, "ERROR"), []byte(text+"\n"), 0o644); err != nil {
 		d.cfg.Logger.Printf("%s: write ERROR: %v", name, err)
 	}
 	if parent == d.root {
 		return
 	}
-	if err := d.writeNote(parent, "subagent-error", fmt.Sprintf(MsgLimitParentFmt, name, limit)); err != nil {
+	if err := d.writeNote(parent, "subagent-error", note); err != nil {
 		d.cfg.Logger.Printf("%s: notify parent: %v", name, err)
 	}
 }
 
-// clearLimited removes a limit ERROR from an admitted agent's control
-// directory, including one left by an earlier daemon.
-func (d *daemon) clearLimited(parent *agent, ctrl string) {
-	delete(d.limited, ctrl)
+// clearHeldBack removes from an admitted agent's control directory the
+// ERROR that said why it was not admitted, including one an earlier daemon
+// wrote. (An oversized ~/config.json's ERROR, which reads the same, is
+// written again by the next run that finds it.)
+func (d *daemon) clearHeldBack(parent *agent, ctrl string) {
+	delete(d.heldBack, ctrl)
 	path := filepath.Join(ctrl, "ERROR")
-	if data, _, err := parent.fs.Read(path, 4096); err == nil && strings.HasPrefix(string(data), errLimitPrefix) {
-		parent.fs.Remove(path)
+	data, _, err := parent.fs.Read(path, 4096)
+	if err != nil {
+		return
+	}
+	for _, prefix := range heldBackPrefixes {
+		if strings.HasPrefix(string(data), prefix) {
+			parent.fs.Remove(path)
+			return
+		}
 	}
 }

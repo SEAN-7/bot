@@ -485,3 +485,44 @@ func TestReclaimRemovesHomeLinks(t *testing.T) {
 		t.Fatalf("the home itself: %v", err)
 	}
 }
+
+// A /home link is removed when its target, made absolute against /home and
+// cleaned, is the reclaimed home: however it is spelled, and never a link to
+// another home whose name only begins the same.
+func TestRemoveHomeLinksMatchesCleanTarget(t *testing.T) {
+	h := newHarness(t)
+	d := &daemon{cfg: h.cfg}
+	home := h.cfg.PoolHome("agent-1")
+	os.MkdirAll(home, 0o755)
+	links := map[string]struct {
+		target  string
+		removed bool
+	}{
+		"exact":     {home, true},
+		"relative":  {"agent-1", true},
+		"dot":       {"./agent-1/", true},
+		"up":        {"../" + filepath.Base(h.cfg.Homes) + "/agent-1", true},
+		"slash":     {home + "/", true},
+		"double":    {"/" + strings.ReplaceAll(home, "/", "//"), true},
+		"prefix":    {h.cfg.PoolHome("agent-16"), false},
+		"relprefix": {"agent-16", false},
+		"inside":    {filepath.Join(home, "inbox"), false},
+	}
+	for name, l := range links {
+		if err := os.Symlink(l.target, filepath.Join(h.cfg.Homes, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := d.removeHomeLinks("agent-1"); err != nil {
+		t.Fatal(err)
+	}
+	for name, l := range links {
+		_, err := os.Lstat(filepath.Join(h.cfg.Homes, name))
+		if gone := os.IsNotExist(err); gone != l.removed {
+			t.Errorf("%s -> %s: removed %v, want %v", name, l.target, gone, l.removed)
+		}
+	}
+	if info, err := os.Lstat(home); err != nil || !info.IsDir() {
+		t.Fatalf("the home itself: %v", err)
+	}
+}

@@ -128,9 +128,11 @@ func (d *daemon) wipe(user string) error {
 
 // removeHomeLinks removes the links in /home that lead to user's home, such
 // as the one an upgrade leaves at an old agent's path, so that path never
-// leads into the home of the user's next holder. Only symlinks owned by the
-// daemon are removed, and none is followed; /home is root-owned, so nobody
-// else can have made one. A link that is already gone is fine.
+// leads into the home of the user's next holder. A link leads there when its
+// target, made absolute against /home and cleaned, is the home, however it
+// is spelled. Only symlinks owned by the daemon are removed, and none is
+// followed; /home is root-owned, so nobody else can have made one. A link
+// that is already gone is fine.
 func (d *daemon) removeHomeLinks(user string) error {
 	entries, err := os.ReadDir(d.cfg.Homes)
 	if err != nil {
@@ -159,7 +161,10 @@ func (d *daemon) removeHomeLinks(user string) error {
 			}
 			return err
 		}
-		if target != home {
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(d.cfg.Homes, target)
+		}
+		if filepath.Clean(target) != filepath.Clean(home) {
 			continue
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {

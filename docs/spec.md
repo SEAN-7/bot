@@ -125,11 +125,14 @@ default its ancestors can read what it writes, and nobody else can traverse
 its home. An agent can tighten its own files' modes; its journals stay
 readable by its ancestors regardless. What an agent grants to let a child
 through its home (x on `~`, see `agent help`) opens what others can read
-there, so the harness keeps its own parts of the home group-only:
-`agents/` (seeded 0750), the control directories `agent new` creates
-(0750, `config.json` 0640) and the spools `agent message` and `agent send`
-write (`.messages/` directories 0750, files 0640). A child never needs its
-control directory, and cannot read its siblings' `OWNER.md`, `ERROR` or
+there, so the harness keeps its own parts of the home group-only: the
+directories `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
+`.messages/agents/` and `.outputs/` (0750, see Admission), the inbox
+notes, delivered messages and saved outputs it writes (0640), the control
+directories `agent new` creates (0750, `config.json` 0640) and the spools
+`agent message` and `agent send` write (`.messages/` directories 0750,
+files 0640). A child never needs its control directory, and cannot read
+its parent's inbox or saved outputs, its siblings' `OWNER.md`, `ERROR` or
 starting `config.json`, or messages in flight.
 Processes started before a membership change (an ancestor's user manager,
 for example) see the new group only after they restart; commands the
@@ -157,8 +160,12 @@ retried.
 Helper operations: `scan` (the real directories in `agents/` that the
 helper's user owns), `list` (directory entries with type, size and owner),
 `read` (path, byte limit; regular files only), `write` (atomic:
-dot-prefixed temporary file then rename), `rename`, `mkdir`, `remove`
-(recursive, never following symlinks), `unlink` (one entry, never a
+dot-prefixed temporary file then rename, with the mode given), `private`
+(make each path a real directory closed to others: create a missing one
+0750, remove the permissions for others from an existing one the user
+owns, keeping the rest of its mode; never following a link, and leaving
+alone what is not a directory and anything below it), `rename`, `mkdir`,
+`remove` (recursive, never following symlinks), `unlink` (one entry, never a
 directory's contents), `symlink` (create or replace), `clear` (empty a
 directory, never following symlinks), `purge_owned` (the user's files in
 the shared temporary directories), `stat` (size, mtime, type, mode, owner
@@ -244,22 +251,35 @@ agent user cannot read another user's process environment.
   one recovered by its home's evidence), records the running version; for
   a user new to this agent whose home does not hold this agent's evidence,
   clears what a previous holder left in the home; sets the members of the user's group to the agent's ancestors other
-  than root; seeds the home with the seed `README.md`, `TASK.md`, `inbox/`
-  and `agents/` (0750) where missing; moves the starting `config.json` from the
-  control directory into the home (written through the agent's helper,
-  removed through the parent's; a home that already has one keeps it, and
-  the parent's is renamed `config.json.ignored`);
-  enables lingering; creates its journal directory; and writes the `home`
+  than root; makes the harness's directories `inbox/`, `inbox/processed/`,
+  `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` real
+  directories closed to others (`private`: missing ones are created 0750,
+  and existing ones, such as an earlier release's 0755 ones, lose their
+  permissions for others; a link or a file of that name is left alone) and
+  writes the seed `README.md` and `TASK.md` where missing; moves the
+  starting `config.json` from the control directory into the home (written
+  through the agent's helper, removed through the parent's; a home that
+  already has one keeps it, and the parent's is renamed
+  `config.json.ignored`); enables lingering; creates its journal directory;
+  closes its control directory to others the same way, through the
+  parent's helper (root's are 0700 and stay so); and writes the `home`
   symlink into the control directory. Every step goes through the helpers,
-  and a failed step is retried at the next poll. An agent's identity also
+  and a failed step is retried at the next poll. A new agent whose
+  starting `config.json` is larger than 1 MiB is not given a user: the
+  daemon writes "config.json: larger than 1 MiB" to its `ERROR` and the
+  service log, and notifies the parent's inbox once (root's children: the
+  service log only). An agent's identity also
   includes its control directory's device and inode, recorded at admission:
   renaming the directory removes the agent and admits a new one, and so does
   removing it and creating it again, even between two polls. Each poll
   restores an agent's `home` link if its parent removed it.
-- **max_agents.** When no pool user is free, a new control directory is not
-  admitted. The daemon writes the reason to its `ERROR` and the service log,
-  and notifies the parent's inbox once (root's children: the service log
-  only).
+- **max_agents.** When no pool user can be given to a new control
+  directory, it is not admitted. The daemon writes the reason to its `ERROR`
+  and the service log, and notifies the parent's inbox once per reason
+  (root's children: the service log only): the agent limit, when
+  `max_agents` users (or every pool user there is) are assigned, or no
+  free agent user, when every free user's home holds another agent's
+  evidence (see Discovery). Admission removes that `ERROR`.
 - One goroutine loop per agent, one run at a time per agent.
 - **Graceful stop.** On SIGTERM the daemon starts no new runs and delivers no
   new inbox files; active runs finish, up to 15 minutes, before it exits.
@@ -278,8 +298,10 @@ agent user cannot read another user's process environment.
   every remaining process of the uid until none is left; removes its
   home's contents and its files in `/tmp`, `/var/tmp` and `/dev/shm`
   (through its helper, after its processes are gone); removes every
-  root-owned symlink directly in `/home` that points at its home (such as
-  `/home/agent`), so no old path leads into the next holder's home; clears
+  root-owned symlink directly in `/home` whose target, made absolute
+  against `/home` when relative and cleaned, is its home (such as
+  `/home/agent`), never following one, so no old path leads into the next
+  holder's home; clears
   its group's members; and moves its journal directory's group to the
   nearest remaining ancestor's group (root's for a top-level agent), so the
   next holder of the user cannot read them. Only then is the user marked
@@ -347,8 +369,8 @@ sh tool).
   wait or `systemd-run --user`. Combined stdout and stderr plus the exit
   status are returned.
   Output over 16 KiB is clipped to its first and last 8 KiB, and the full text
-  is saved to `~/.outputs/<run>-<step>.txt` (through the helper) with the path
-  included in the result.
+  is saved to `~/.outputs/<run>-<step>.txt` (through the helper, 0640) with
+  the path included in the result.
 - A reply with no command ends the run (`reason: "done"`).
 
 **The sh tool** (verbatim; it is part of every agent's cached prefix, so it
@@ -425,10 +447,13 @@ Nothing reaches the human except from a top-level agent.
     `agents/NAME`, and appended to the agent's conversation log.
   - Down, from root or an agent: delivered to the child's inbox as
     `<UTC timestamp>-owner.md`, recorded with sender `owner`, and appended
-    to the child's conversation log. A message for a child not yet admitted
-    waits while its control directory may still be admitted (it holds a
-    user, a `home` link or a `config.json`); otherwise it is dropped, with a
-    note in the sender's inbox (for root, the service log).
+    to the child's conversation log. A message for a child that is not
+    running waits while its control directory may still be admitted, as
+    Discovery decides: it holds a user, a `home` link to a free user's home
+    that holds its evidence, or a regular `config.json`. Otherwise it is
+    dropped, with a note in the sender's inbox (for root, the service log);
+    deciding so uses the evidence Discovery remembers, so it starts no
+    helper at every poll.
 
   The delivery is recorded first, so the recipient can never collect an
   unrecorded file; then the inbox file is written through the recipient's
@@ -540,7 +565,8 @@ revise; OWNER.md is the one thing in context the agent cannot change.
 At the start of each run, the daemon runs the plugin's `describe` and checks
 that `config.json` names an installed provider, one of its models, and only
 options that model accepts, with allowed values. On any failure, including
-a missing or unreadable `~/config.json`, the agent does not start. The
+a missing or unreadable `~/config.json` or one larger than 1 MiB ("larger
+than 1 MiB"), the agent does not start. The
 daemon writes the reason to the agent's `ERROR` and the service log,
 notifies the parent's inbox once per distinct `config.json` content (root's
 children: the service log only), and retries when `config.json` changes. On
@@ -769,12 +795,18 @@ Using the replay plugin:
 - isolation: an agent cannot write its parent's or a sibling's home, its
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither; a child let through its parent's
-  home cannot read the parent's `agents/`, while its grandparent can
+  home cannot list or read the parent's `agents/`, inbox, collected
+  messages, saved outputs or spools, also where an earlier release left
+  them open to others, while its grandparent can; the harness's
+  directories are 0750 after admission and its inbox files and outputs
+  0640
 - config: admission moves `config.json` into the home; an agent's edit makes
   its next run fresh with the new model; an invalid config writes `ERROR` in
-  the control directory, which the agent cannot remove; a `config.json`
-  written into an admitted agent's control directory is ignored, and
-  renamed `config.json.ignored` when the agent is admitted again
+  the control directory, which the agent cannot remove, and tells the
+  parent about `config.json`; a starting or own `config.json` over 1 MiB is
+  reported as too large; a `config.json` written into an admitted agent's
+  control directory is ignored, and renamed `config.json.ignored` when the
+  agent is admitted again, the home's config being the one used
 - CLI: `agent new` rejects an invalid config before creating anything,
   reports the control directory's `ERROR`, defaults to the caller's config,
   requires `--model` from root and refuses an existing NAME; `agent remove`
@@ -782,14 +814,22 @@ Using the replay plugin:
   and cannot run `agent message`; control directories and spools are 0750
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
-  crontabs, homes and the `/home` links to them, keeps their journals
+  crontabs, homes and the `/home` links to them (however the target is
+  spelled; not a link to another home, nor another user's), keeps their journals
   readable by the former parent only, and frees the users; an interrupted
   reclaim finishes on restart; a reused user cannot read its previous
   holder's journals
 - max_agents: with the pool exhausted, a new control directory is not
-  admitted and the parent is told once
+  admitted and the parent is told once; when the free users' homes hold
+  other agents' evidence, the `ERROR` and the note say so instead; root's
+  children are reported in the service log, and no inbox is created for
+  root
 - messages: an agent cannot write its conversation log, and journals and
-  logs left readable by an earlier release are tightened on start
+  logs left readable by an earlier release are tightened on start; a
+  message for a child that can never be admitted (a `home` link to a home
+  without its evidence, and nothing else) is dropped with a note, without
+  starting a helper at every poll, and one from root to no child is
+  logged
 - release notes: an idle agent is not woken; a woken agent receives unseen
   sections once; a new agent and a development build receive none; a
   recovered agent receives the next release's

@@ -104,7 +104,7 @@ type daemon struct {
 	delivered   *delivered
 	settings    layout.Settings // last good settings.json
 	settingsErr string
-	limited     map[string]bool   // control directories held back by max_agents, already reported
+	heldBack    map[string]string // control directories not admitted, with the reason already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
 	// spoolIgnored holds the spool entries already logged as not an agent's
@@ -133,7 +133,7 @@ type daemon struct {
 
 func Run(ctx context.Context, cfg Config) error {
 	syscall.Umask(0o022)
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, heldBack: map[string]string{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username
@@ -406,9 +406,9 @@ func (d *daemon) reconcile() {
 	// Forget what was reported for directories that are gone, so they are
 	// reported again if they come back.
 	vanished := func(ctrl string) bool { return !seen[ctrl] && !unscanned[filepath.Dir(filepath.Dir(ctrl))] }
-	for ctrl := range d.limited {
+	for ctrl := range d.heldBack {
 		if vanished(ctrl) {
-			delete(d.limited, ctrl)
+			delete(d.heldBack, ctrl)
 		}
 	}
 	for ctrl := range d.admitErrs {

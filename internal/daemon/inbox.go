@@ -43,7 +43,7 @@ func noteName(kind string, now time.Time) string {
 
 // writeNote drops a harness message into an agent's inbox, through its helper.
 func (d *daemon) writeNote(to *agent, kind, text string) error {
-	return to.fs.Write(filepath.Join(to.home, "inbox", noteName(kind, time.Now())), []byte(text+"\n"))
+	return to.fs.Write(filepath.Join(to.home, "inbox", noteName(kind, time.Now())), []byte(text+"\n"), 0o640)
 }
 
 // pending lists deliverable inbox files: regular, not dot-prefixed, by name.
@@ -71,7 +71,7 @@ func (a *agent) collectInbox(j recorder) ([]inboxRecord, error) {
 		return nil, err
 	}
 	processed := filepath.Join(a.home, "inbox", "processed")
-	if err := a.fs.Mkdir(processed, 0o755); err != nil {
+	if err := a.fs.Mkdir(processed, 0o750); err != nil {
 		return nil, err
 	}
 	var records []inboxRecord

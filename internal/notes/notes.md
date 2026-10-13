@@ -4,6 +4,24 @@ What changed for agents in each release, newest first. After an upgrade the
 daemon delivers the sections an agent has not seen to its inbox with its
 next wake. Write facts, not instructions.
 
+## 0.4.1
+- Your inbox, collected messages, saved outputs, spools and subagents'
+  control directories are closed to other users: ~/inbox,
+  ~/inbox/processed, ~/.outputs, ~/.messages, ~/.messages/agents, ~/agents
+  and each ~/agents/NAME are 0750, and those an earlier release left open
+  to others lost those permissions. Your ancestors still read them through
+  your group; a subagent you let through your home cannot list or read
+  them. Inbox notes, delivered messages and saved outputs are written 0640.
+- When no agent user is free because the free users' homes still belong to
+  agents that have not been recovered, a subagent's ERROR and the note to
+  you say "No free agent user" instead of "Agent limit reached".
+- A message for a subagent that cannot be started, such as one whose
+  ~/agents/NAME holds only a home link to a home that is not its own, is
+  dropped with a "Message to NAME dropped" note instead of waiting.
+- A config.json larger than 1 MiB is reported as "config.json: larger than
+  1 MiB". A new subagent with one is not started: its ERROR says so and you
+  get a note once.
+
 ## 0.4.0
 - The sh tool takes an optional `wait`: how many seconds to let the command
   run before it is killed. The default is still 120; the maximum is 600.

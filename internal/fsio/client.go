@@ -123,8 +123,9 @@ func (c *Client) Read(path string, limit int64) ([]byte, int64, error) {
 	return resp.Data, resp.Size, err
 }
 
-func (c *Client) Write(path string, data []byte) error {
-	_, err := c.call(request{Op: "write", Path: path, Data: data})
+// Write replaces path atomically with a file of mode (less the umask).
+func (c *Client) Write(path string, data []byte, mode os.FileMode) error {
+	_, err := c.call(request{Op: "write", Path: path, Data: data, Mode: uint32(mode.Perm())})
 	return err
 }
 
@@ -136,6 +137,16 @@ func (c *Client) Rename(from, to string) error {
 // Mkdir creates path and its missing parents with mode (less the umask).
 func (c *Client) Mkdir(path string, mode os.FileMode) error {
 	_, err := c.call(request{Op: "mkdir", Path: path, Mode: uint32(mode.Perm())})
+	return err
+}
+
+// Private makes each of paths, in order, a real directory closed to others:
+// a missing one is created 0750 (less the umask), and an existing one the
+// helper's user owns loses its permissions for others, keeping the rest of
+// its mode. It never follows a link: a path that is not a real directory, or
+// lies below one, is left alone.
+func (c *Client) Private(paths ...string) error {
+	_, err := c.call(request{Op: "private", Paths: paths})
 	return err
 }
 

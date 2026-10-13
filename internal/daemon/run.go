@@ -44,7 +44,10 @@ type errConfig struct{ error }
 func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
 	var describe proto.DescribeResponse
-	data, _, err := a.fs.Read(filepath.Join(a.home, "config.json"), configLimit)
+	data, size, err := a.fs.Read(filepath.Join(a.home, "config.json"), configLimit)
+	if err == nil && size > int64(len(data)) {
+		err = errConfigTooLarge // not the JSON error of the part read
+	}
 	sum := sha256.Sum256(data)
 	hash := hex.EncodeToString(sum[:])
 	if err != nil {
@@ -324,7 +327,7 @@ const (
 // owner sees it.
 func (a *agent) setError(text string) {
 	parent, path := a.errorFile()
-	if err := parent.Write(path, []byte(text+"\n")); err != nil {
+	if err := parent.Write(path, []byte(text+"\n"), 0o644); err != nil {
 		a.logf("write ERROR: %v", err)
 	}
 }
@@ -413,8 +416,8 @@ func (a *agent) toolContent(runID string, n int, r shell.Result, err error, wait
 	}
 	dir := filepath.Join(a.home, ".outputs")
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", runID, n))
-	if err := a.fs.Mkdir(dir, 0o755); err == nil {
-		err = a.fs.Write(path, []byte(r.Output))
+	if err := a.fs.Mkdir(dir, 0o750); err == nil {
+		err = a.fs.Write(path, []byte(r.Output), 0o640)
 	}
 	if err != nil {
 		a.logf("save output: %v", err)
