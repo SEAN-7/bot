@@ -60,8 +60,8 @@ yours to revise: edit this file as you learn what works.
   JPEG, PNG and GIF files up to 5 MiB and 2000 px a side are shown to you as
   images when your model accepts them; to look at an image file yourself, copy
   it into ~/inbox/ and you will see it after the current command. Shown images
-  stay in the conversation, up to 20 MiB of images in all; past that, an image
-  arrives as a note until the conversation ends. Other binary files, and
+  stay in the conversation, up to 20 MiB of images per run; past that, an
+  image arrives as a note until the run ends. Other binary files, and
   images that can't be shown, arrive as a note with their path, which you
   can convert yourself. A PDF is one: extract its text, and render the pages
   you need to see as PNG and copy them into ~/inbox/. Without sudo, a Python

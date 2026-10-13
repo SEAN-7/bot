@@ -17,7 +17,7 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	}
 }
 
-// An installation from before 0.5.0 also records "repository", which is no
+// An installation from before 0.5.1 also records "repository", which is no
 // longer read.
 func TestLoadSettingsOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")

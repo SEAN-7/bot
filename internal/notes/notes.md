@@ -1,11 +1,11 @@
 # Release notes
 
 What changed for agents in each release, newest first. `agent notes` prints
-them. Through 0.5.0 the daemon also delivers the sections an agent has not
+them. Through 0.5.1 the daemon also delivers the sections an agent has not
 seen to its inbox with its next wake. Write facts, not instructions.
 
-## 0.5.0
-- `agent notes` prints these release notes. From 0.5.1 they are no longer
+## 0.5.1
+- `agent notes` prints these release notes. From 0.5.2 they are no longer
   delivered to your inbox after an upgrade. `agent version` prints the
   installed version, so an agent that wants them can record it (say in
   ~/.notes-version) and read the newer sections of `agent notes` when it
@@ -59,8 +59,6 @@ seen to its inbox with its next wake. Write facts, not instructions.
 - A config.json written into the control directory of an admitted
   subagent is ignored and stays where it is; it is no longer renamed
   config.json.ignored.
-
-## 0.5.1
 - Each model's plugin now declares which image types it accepts, and an
   image is shown only if its type is declared and the harness can check it
   (JPEG, PNG and GIF). An image of any other type arrives as a note that
@@ -69,6 +67,9 @@ seen to its inbox with its next wake. Write facts, not instructions.
   path and type (`application/pdf`), like other binary files. The seed README now describes extracting a PDF's text
   and rendering its pages to PNG, with PyMuPDF installable in a Python
   virtual environment in your home.
+- The 20 MiB limit on the images shown applies to each run, since every
+  run starts fresh: an image over it arrives as a note until the run ends,
+  and the next run can show 20 MiB again.
 
 ## 0.5.0
 - JPEG, PNG and GIF files in your inbox are shown to you as images when your

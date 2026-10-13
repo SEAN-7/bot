@@ -109,22 +109,6 @@ func TestImagesNeedCapableModel(t *testing.T) {
 	}
 }
 
-func TestContinuationKeepsImages(t *testing.T) {
-	h := newHarness(t, done(), done())
-	h.start()
-	h.drop(h.mainHome, "photo.png", string(encodePNG(4, 4)))
-	h.waitEnds(h.mainID, 1)
-	h.drop(h.mainHome, "more.md", "more")
-	h.waitEnds(h.mainID, 2)
-	msgs := h.requests()[1].Messages
-	if len(msgs) != 3 || !strings.Contains(msgs[2].Content, "more") {
-		t.Fatalf("second run did not continue the conversation: %+v", msgs)
-	}
-	if imgs := msgs[0].Images; len(imgs) != 1 || imgs[0].File != "inbox/processed/photo.png" {
-		t.Fatalf("first message lost its image: %+v", msgs[0])
-	}
-}
-
 func TestTextRunSendsNoImagesField(t *testing.T) {
 	h := newHarness(t, step("true", 100), done())
 	h.start()
@@ -167,21 +151,27 @@ func TestImageBudgetWithinCollection(t *testing.T) {
 	}
 }
 
-func TestImageBudgetCarriesOver(t *testing.T) {
-	h := newHarness(t, done(), done())
+// Images shown earlier in a run count against its budget; the next run
+// starts with the whole budget.
+func TestImageBudgetPerRun(t *testing.T) {
+	h := newHarness(t, step("sleep 0.5", 100), done(), done())
 	a, b := encodePNG(4, 4), encodePNG(5, 5)
 	h.cfg.ImageBudget = len(a) + len(b) - 1 // b fits alone, not after a
 	h.start()
 	h.drop(h.mainHome, "a.png", string(a))
-	h.waitEnds(h.mainID, 1)
+	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
 	h.drop(h.mainHome, "b.png", string(b))
-	h.waitEnds(h.mainID, 2)
+	h.waitEnds(h.mainID, 1)
 	msgs := h.requests()[1].Messages
-	if len(msgs) != 3 || len(msgs[0].Images) != 1 {
-		t.Fatalf("second run did not continue the conversation: %+v", msgs)
+	last := msgs[len(msgs)-1]
+	if len(msgs[0].Images) != 1 || len(last.Images) != 0 || !strings.Contains(last.Content, "would exceed 20 MiB") {
+		t.Fatalf("first run: %d then %d images, content %q", len(msgs[0].Images), len(last.Images), last.Content)
 	}
-	if len(msgs[2].Images) != 0 || !strings.Contains(msgs[2].Content, "would exceed 20 MiB") {
-		t.Fatalf("%d images, content %q", len(msgs[2].Images), msgs[2].Content)
+	h.drop(h.mainHome, "c.png", string(b))
+	h.waitEnds(h.mainID, 2)
+	msgs = h.requests()[2].Messages
+	if len(msgs) != 1 || len(msgs[0].Images) != 1 {
+		t.Fatalf("second run: %+v", msgs)
 	}
 }
 

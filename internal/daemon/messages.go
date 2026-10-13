@@ -30,6 +30,6 @@ const (
 	MsgImageTypeFmt        = "[image not shown: %s is not supported, only %s; convert it and copy the result into ~/inbox/. File: %s]"
 	MsgImageNoModelFmt     = "[image not shown: the model does not accept images. File: %s]"
 	MsgImageJournalFmt     = "[image not shown: its journal copy could not be saved: %v. File: %s]"
-	MsgImageBudgetFmt      = "[image not shown: images in this conversation would exceed 20 MiB; resize it, or copy it into ~/inbox/ again after this conversation ends. File: %s]"
+	MsgImageBudgetFmt      = "[image not shown: images in this run would exceed 20 MiB; resize it, or copy it into ~/inbox/ again after this run ends. File: %s]"
 	MsgBinaryFmt           = "[binary file not shown: %s, %d bytes. File: %s]"
 )

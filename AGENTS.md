@@ -14,7 +14,7 @@ could build something as a script, it does not belong in the harness.
   clean and the branch matches its remote before reporting completion.
 - Record agent-facing changes in `internal/notes/notes.md` under the release's
   version (facts, not instructions). The file is embedded and `agent notes`
-  prints it; until 0.5.1 the daemon also delivers the unseen sections to each
+  prints it; until 0.5.2 the daemon also delivers the unseen sections to each
   agent's inbox after an upgrade. Mirror anything an agent should know in the
   seed README.
 - Releases: run `scripts/release.sh X.Y.Z`, commit the updated

@@ -14,7 +14,7 @@ import (
 
 // heldBackPrefixes begin the ERRORs that say why an agent was not admitted
 // (see notStarted), which admission clears, including those an earlier
-// daemon wrote (only 0.4.1 wrote "No free agent user").
+// daemon wrote (only 0.4.1 and 0.5.0 wrote "No free agent user").
 var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix + MsgConfigTooLarge}
 
 // errConfigTooLarge: a starting config.json over configLimit.

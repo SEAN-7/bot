@@ -313,7 +313,7 @@ agent user cannot read another user's process environment.
   notes of later releases; development builds deliver nothing.
   `/var/lib/agent/version` only records the installed version, for
   `install.sh`. The agent can read the same notes with `agent notes`;
-  delivery is to end in 0.5.1, after which an agent records `agent version`
+  delivery is to end in 0.5.2, after which an agent records `agent version`
   and checks `agent notes` when it changes.
 - **Message spools.** See Messages.
 
@@ -381,14 +381,13 @@ a dot.
   dimensions are read from the header before decoding, so a small file
   declaring a huge size cannot make the daemon allocate it; the whole image
   is then decoded, so a damaged file cannot cause an API error that would be
-  retried forever. Shown images stay in the conversation and are resent on
-  every call, so a conversation shows at most 20 MiB of images in all,
-  counting a continued conversation's earlier images; an image that would
-  exceed that is not shown, and the images after it that fit still are. An
-  image that is not shown, whether over a limit or the budget, undecodable,
-  of a type the model does not accept or the daemon cannot check, or for a
-  model that accepts no images, gets a note as its `content` naming the
-  file's full path. Other data that is not valid
+  retried forever. Shown images stay in the run's conversation and are
+  resent on every call, so a run shows at most 20 MiB of images in all; an
+  image that would exceed that is not shown, and the images after it that
+  fit still are. An image that is not shown, whether over a limit or the
+  budget, undecodable, of a type the model does not accept or the daemon
+  cannot check, or for a model that accepts no images, gets a note as its
+  `content` naming the file's full path. Other data that is not valid
   UTF-8 (ignoring a rune cut by the read limit) gets a "binary file not
   shown" note with its size and detected type, or "not valid UTF-8 text"
   when that type is text. Everything else is text. Exact wording is in
@@ -774,7 +773,7 @@ agent edits `~/agents/NAME/OWNER.md`.
     work;
   - `agent version` against a version the agent recorded (say in
     `~/.notes-version`) tells it when `agent notes` has newer sections to
-    read, since release notes are to stop being delivered in 0.5.1.
+    read, since release notes are to stop being delivered in 0.5.2.
 - `TASK.md`: "No task yet."
 
 The daemon writes both at admission where the home lacks them. The
@@ -931,5 +930,5 @@ agent.
 0.4.0 migrated each 0.3 installation, whose main agent ran as the user
 `agent` at `/home/agent`, to the tree: it renamed that user to a pool user
 (`agent-16` by default) and left `/home/agent` as a link to its home.
-0.5.0 requires 0.4.1: an older installation upgrades through the v0.4.1
+0.5.1 requires 0.4.1: an older installation upgrades through the v0.4.1
 `install.sh` first.

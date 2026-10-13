@@ -70,8 +70,7 @@ var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
 // order, the images shown with them. imageTypes is the image media types the
-// model accepts, budget how many more bytes of images the conversation may
-// show.
+// model accepts, budget how many more bytes of images the run may show.
 func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
 	names, err := a.pending()

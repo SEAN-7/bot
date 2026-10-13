@@ -47,7 +47,7 @@ type Config struct {
 	ReleaseNotes   string        // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
 	InboxClip      int
-	ImageBudget    int // bytes of image data one conversation may show
+	ImageBudget    int // bytes of image data one run may show
 	Logger         *log.Logger
 }
 
