@@ -25,4 +25,12 @@ const (
 	MsgNoFreeUserParentFmt = "Subagent %s was not started: no free agent user (their homes belong to agents that have not been recovered)."
 	MsgConfigTooLarge      = "larger than 1 MiB" // after MsgConfigPrefix
 	MsgUndeliveredFmt      = "Message to %s dropped: there is no subagent by that name."
+	MsgImageShownFmt       = "[%s %dx%d, %d bytes, shown below]"
+	MsgImageTooLargeFmt    = "[image not shown: %d bytes is over the 5 MiB limit; resize it and copy the result into ~/inbox/. File: %s]"
+	MsgImageTooWideFmt     = "[image not shown: %dx%d is over 2000 px a side; resize it and copy the result into ~/inbox/. File: %s]"
+	MsgImageUndecodableFmt = "[image not shown: could not decode it: %v. File: %s]"
+	MsgImageTypeFmt        = "[image not shown: %s is not supported, only JPEG, PNG and GIF; convert it and copy the result into ~/inbox/. File: %s]"
+	MsgImageNoModelFmt     = "[image not shown: the model does not accept images. File: %s]"
+	MsgImageJournalFmt     = "[image not shown: its journal copy could not be saved: %v. File: %s]"
+	MsgBinaryFmt           = "[binary file not shown: %s, %d bytes. File: %s]"
 )
