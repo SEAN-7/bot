@@ -84,6 +84,16 @@ The request limit is 32 MB. If accumulated images exceed it, the API answers
 existing handling applies: a reset note mid-run, or the first-call guard on a
 fresh run's first call.
 
+To keep a conversation well under that limit, the daemon also caps the images
+it shows: at most 20 MiB of raw image data per conversation
+(`Config.ImageBudget`), counted over every image in its messages, so a
+continued conversation counts its earlier runs' images. While collecting, an
+image that would push the total over the budget gets a note
+(`MsgImageBudgetFmt`) instead, and is neither attached nor copied to the
+journal; later images that still fit are shown. A new conversation, after its
+end or a context reset, starts with the whole budget. (A ruling from the
+final review; this design first relied on the 413 alone.)
+
 ## Plugin protocol
 
 `proto.Message` gains `images`, used on user messages only:

@@ -397,18 +397,23 @@ a dot.
   message beside the records, when the model's `describe` entry sets `images`.
   Its record's `content` describes it (`[image/jpeg 1280x960, 169027 bytes,
   shown below]`). Limits: 5 MiB by the file's full size, and 2000 px on each
-  side (checked from the declared dimensions before decoding, because the
-  API rejects larger images in a request with more than 20 images instead
-  of downscaling them); the harness resizes nothing. The whole image is
-  decoded, so a damaged file cannot cause an API error that would be retried
-  forever. An image that is not shown, whether over a limit, undecodable, of
-  another `image/*` type or for a model without `images`, gets a note as its
-  `content` naming the file's full path. Other data that is not valid UTF-8
-  (ignoring a rune cut by the read limit) gets a "binary file not shown"
-  note with its detected type and size. Everything else is text. Exact
-  wording is in `internal/daemon/messages.go`. Shown images stay in the
-  conversation and are resent on every call; a request over the API's 32 MB
-  limit is answered 413, reported as `context_overflow`.
+  side, because the API rejects larger images in a request with more than
+  20 images instead of downscaling them; the harness resizes nothing. The
+  dimensions are read from the header before decoding, so a small file
+  declaring a huge size cannot make the daemon allocate it; the whole image
+  is then decoded, so a damaged file cannot cause an API error that would be
+  retried forever. Shown images stay in the conversation and are resent on
+  every call, so a conversation shows at most 20 MiB of images in all,
+  counting a continued conversation's earlier images; an image that would
+  exceed that is not shown, and the images after it that fit still are. An
+  image that is not shown, whether over a limit or the budget, undecodable,
+  of another `image/*` type or for a model without `images`, gets a note as
+  its `content` naming the file's full path. Other data that is not valid
+  UTF-8 (ignoring a rune cut by the read limit) gets a "binary file not
+  shown" note with its size and detected type, or "not valid UTF-8 text"
+  when that type is text. Everything else is text. Exact wording is in
+  `internal/daemon/messages.go`. A request still over the API's 32 MB limit
+  is answered 413, reported as `context_overflow`.
 - After each step, new inbox files (collected the same way, images included)
   are appended as a user message after the command result.
 
@@ -649,8 +654,8 @@ service log. Every request and response carries `"protocol": 1`.
   - `settings`: list of `{name, description, secret}`, the environment
     variables the plugin needs. The installer prompts for these.
   - `models`: list of `{id, context_tokens, images, options}`. `images`
-    (boolean, omitted when false) says the model accepts images. `options` maps each
-    option name to `{description, values}` (allowed values) or
+    (boolean, omitted when false) says the model accepts images. `options`
+    maps each option name to `{description, values}` (allowed values) or
     `{description, type: "integer", min, max}`.
 
 **complete**

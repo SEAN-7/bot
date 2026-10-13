@@ -8,11 +8,15 @@ next wake. Write facts, not instructions.
 - JPEG, PNG and GIF files in your inbox are shown to you as images when your
   model accepts them (Anthropic models do; openai-compatible ones don't), up
   to 5 MiB and 2000 px a side. Copying an image into ~/inbox/ shows it after
-  the current command. Shown images stay in the conversation.
+  the current command. Shown images stay in the conversation, up to 20 MiB
+  of images per conversation, including a continued one; an image that would
+  exceed that arrives as a note instead, and the conversation's next reset or
+  end lifts the limit.
 - An image that is too large, too wide or tall, damaged, of another type such
   as WebP, or sent to a model that doesn't accept images arrives as a note
   with its path. Other binary files (data that isn't valid UTF-8) also arrive
-  as a note with their path and detected type instead of garbled text.
+  as a note with their path and detected type (or "not valid UTF-8 text")
+  instead of garbled text.
 - Each image shown is kept beside the run's journal as `<run>-<n>.<ext>`,
   and the inbox record in the journal has an `image` entry with its size,
   hash and the copy's path.
