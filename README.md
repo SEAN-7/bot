@@ -37,6 +37,22 @@ the service.
 An installation older than 0.4.1 must upgrade through the v0.4.1
 `install.sh` first; later installers refuse it and change nothing.
 
+To add another provider plugin later, download its release asset
+`plugin-NAME-linux-ARCH` (ARCH `amd64` or `arm64`) for the installed version
+through the GitHub API, with `GITHUB_TOKEN` set as above and passed on curl's
+stdin as the installer does, then install it. `agent provider install`
+installs it only if it matches the checksums compiled into `agent`, and
+prompts for its settings:
+
+```bash
+name=openai-compatible asset=plugin-openai-compatible-linux-amd64 repo=https://api.github.com/repos/SEAN-7/bot
+api() { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - "$@"; }
+id=$(api "$repo/releases/tags/v$(agent version)" | tr -d '\n' |
+  grep -o '"url": *"[^"]*/releases/assets/[0-9]*"[^{}]*"name": *"'"$asset"'"' | grep -o 'assets/[0-9]*' | cut -d/ -f2)
+api -H "Accept: application/octet-stream" -o "/tmp/$asset" "$repo/releases/assets/$id"
+sudo agent provider install "$name" "/tmp/$asset"
+```
+
 ## Set a spend limit first
 
 The agent works for as long as it decides is necessary, and its subagents too.
@@ -110,8 +126,7 @@ Every agent runs as its own pool user, `agent-1` to `agent-<max_agents>`
 `/etc/agent/settings.json`. An agent that does not fit is not started, and
 its parent is told. `/var/lib/agent/pool.json` records which user each
 agent holds: if it is lost while `/var/log/agent` holds journals, the daemon
-does not start. Restore it from a backup, or move the journals somewhere only
-root can read to start again with no agents.
+does not start (see [If pool.json is lost](#if-pooljson-is-lost)).
 
 The main agent creates subagents itself with `agent new` and removes them
 with `agent remove`. Each has its own home, its own `config.json` and its own
@@ -173,6 +188,34 @@ service is stopped; list the main agent's with
 u=$(sudo stat -L -c %U /etc/agent/agents/main/home)
 sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") systemctl --user list-units
 ```
+
+## If pool.json is lost
+
+`/var/lib/agent/pool.json` is the only record of which pool user each agent
+holds. If it is missing while `/var/log/agent` holds journals, the daemon
+does not start: every agent would look new and its user free, so a live
+agent's home could be cleared or given to another agent. There are two ways
+to start again:
+
+- Restore the latest backup of `pool.json`, one taken after the last time an
+  agent was admitted or removed. An older one can map a user to an agent
+  that has since been removed; the daemon then reclaims that user and wipes
+  the home of the agent that now holds it.
+- Start with no agents, by moving the journals somewhere only root can read.
+  The daemon does not stop what the pool users were running, and a user it
+  gives to a new agent would share it, so first stop every pool user's
+  processes, crontab and lingering:
+
+  ```bash
+  for u in $(getent passwd | cut -d: -f1 | grep -x 'agent-[0-9]*'); do
+    sudo loginctl disable-linger "$u"; sudo crontab -r -u "$u"; sudo pkill -KILL -u "$u"
+  done
+  sudo mkdir -m 700 /root/agent-journals && sudo mv /var/log/agent/* /root/agent-journals/
+  ```
+
+  The old control directories stay and are not started.
+
+Then start the service again with `sudo systemctl restart agent`.
 
 ## What is protected, and what isn't
 

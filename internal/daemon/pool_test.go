@@ -180,7 +180,7 @@ func TestDaemonRefusesLostPool(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			err := Run(ctx, h.cfg)
-			if err == nil || !strings.Contains(err.Error(), h.cfg.PoolFile()+" is missing") || !strings.Contains(err.Error(), "restore") {
+			if err == nil || !strings.Contains(err.Error(), h.cfg.PoolFile()+" is missing") || !strings.Contains(err.Error(), `"If pool.json is lost" in the harness README`) {
 				t.Fatalf("Run: %v", err)
 			}
 			if _, err := os.Lstat(h.cfg.PoolFile()); !os.IsNotExist(err) {

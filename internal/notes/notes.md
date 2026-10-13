@@ -11,29 +11,28 @@ seen to its inbox with its next wake. Write facts, not instructions.
   ~/.notes-version) and read the newer sections of `agent notes` when it
   changes.
 - `agent new NAME [CONFIG|-]` replaces `--provider`, `--model` and
-  `--option`. CONFIG is a config.json file, `-` reads one from stdin, and
-  without it the child gets a copy of your ~/config.json. It is checked
-  against `agent provider describe` before anything is created. `agent new`
-  no longer waits for admission: it prints the control directory and
-  returns. The child's home appears at ~/agents/NAME/home, and the reason
-  it was not started in ~/agents/NAME/ERROR. A NAME that starts with "-"
-  is a usage error.
+  `--option`, which are now usage errors. CONFIG is a config.json file, `-`
+  reads one from stdin, and without it the child gets a copy of your
+  ~/config.json. It is checked against `agent provider describe` before
+  anything is created. `agent new` no longer waits for admission: it
+  prints the control directory and returns. The child's home appears at
+  ~/agents/NAME/home, and the reason it was not started in
+  ~/agents/NAME/ERROR.
 - `agent log` and `agent messages` print once and exit; `agent log` shows
-  the ERROR first, then only the newest run. To follow, use `tail -F` on
-  the journal file or on messages.jsonl in the journal directory
-  (~/journal for your own).
+  the ERROR first, then only the newest run. `tail -F` on the journal file
+  or on messages.jsonl in the journal directory (~/journal for your own)
+  follows them.
 - `agent help` lists the commands and no longer has the recipe for sharing
   files with a child; an existing README does not have it either. A
   child's user (`stat -L -c %U ~/agents/NAME/home`) can be granted access
   with `setfacl`; that needs x on ~, which reaches the files in ~ that
   others can read, so a dedicated directory holds what is shared. A default
   ACL on ~ naming the child is inherited by the directories the harness
-  creates there later. Pool users are reused: the next agent to hold a
-  child's user finds what it created in your directories and its ACL
-  entries. Before `agent remove NAME`, delete what the child created
-  (`find DIR -user USER`) and remove its grants:
-  `setfacl -R -x u:USER,d:u:USER DIR` on the shared directory and
-  `setfacl -x u:USER` on ~ and the directories it traversed.
+  creates there later. Pool users are reused: removing NAME leaves what the
+  child created in your directories (`find DIR -user USER` lists it) and
+  its grants, including on ~ and the directories it traversed, to the next
+  holder of its user; `setfacl -R -x u:USER,d:u:USER DIR` on the shared
+  directory and `setfacl -x u:USER ~` remove them.
 - `agent provider describe` prints the providers, models and options as
   indented JSON, the shape of providers.json, not a list.
 - Every run starts fresh. A message that arrives soon after a run ends
@@ -41,18 +40,18 @@ seen to its inbox with its next wake. Write facts, not instructions.
   the journal start at call-1 in each run, and the journal's start record
   has no "continues".
 - Clipped command output (over 16 KiB, shown as its first and last 8 KiB)
-  is no longer saved to ~/.outputs. The result ends with "[output clipped;
-  redirect long output to a file to read all of it]" and the journal
-  records exactly what you were given, with no "full_output". The harness
-  no longer creates or closes ~/.outputs; one that exists is an ordinary
-  directory of yours.
+  is no longer saved: the harness no longer creates or closes ~/.outputs,
+  and one that exists is an ordinary directory of yours. The result ends
+  with "[output clipped; redirect long output to a file to read all of it]"
+  and the journal records exactly what you were given, with no
+  "full_output".
 - The sh tool's `wait` counts only as a JSON number (rounded down, within
   1-600). A string such as "300", or anything else, means the default 120.
 - The harness no longer closes directories that exist. At admission it
   creates ~/inbox, ~/inbox/processed, ~/agents, ~/.messages and
   ~/.messages/agents where they are missing, 0750, and leaves existing ones
-  as they are, so one with permissions for others keeps them. A control
-  directory `agent new` makes is 0750 and is not changed afterwards.
+  as they are. An agent's control directory is created 0750 and not changed
+  afterwards.
 - A new subagent that cannot get a user because the pool is full is
   reported as "Agent limit reached"; "No free agent user" is no longer
   used.
@@ -64,9 +63,10 @@ seen to its inbox with its next wake. Write facts, not instructions.
   (JPEG, PNG and GIF). An image of any other type arrives as a note that
   names the types that would be shown; WebP is still one of these.
 - A PDF that holds binary data, as nearly all do, arrives as a note with its
-  path and type (`application/pdf`), like other binary files. The seed README now describes extracting a PDF's text
-  and rendering its pages to PNG, with PyMuPDF installable in a Python
-  virtual environment in your home.
+  path and type (`application/pdf`), like other binary files. The seed
+  README now describes extracting a PDF's text and rendering its pages to
+  PNG, with PyMuPDF installable in a Python virtual environment in your
+  home.
 - The 20 MiB limit on the images shown applies to each run, since every
   run starts fresh: an image over it arrives as a note until the run ends,
   and the next run can show 20 MiB again.

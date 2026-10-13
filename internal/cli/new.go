@@ -125,7 +125,7 @@ func readConfigSource(source string, stdin io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if len(data) > plugin.ConfigLimit {
-		return nil, fmt.Errorf("%s is over %d KiB", source, plugin.ConfigLimit>>10)
+		return nil, fmt.Errorf("%s is larger than %d MiB", source, plugin.ConfigLimit>>20)
 	}
 	return data, nil
 }

@@ -18,7 +18,7 @@ func TestSeedReadmeCoversTopics(t *testing.T) {
 // The README carries the sharing facts an agent cannot discover: users are
 // reused, and ~ takes no default ACL.
 func TestSeedReadmeCarriesSharingFacts(t *testing.T) {
-	for _, want := range []string{"setfacl", "dedicated directory", "Pool users are reused", "find DIR -user USER", "setfacl -R -x u:USER,d:u:USER DIR", "Never set a default ACL on ~"} {
+	for _, want := range []string{"setfacl", "dedicated directory", "Pool users are reused", "find DIR -user USER", "setfacl -R -x u:USER,d:u:USER DIR", "setfacl -x u:USER ~", "Never set a default ACL on ~"} {
 		if !strings.Contains(README, want) {
 			t.Errorf("README lacks %q", want)
 		}

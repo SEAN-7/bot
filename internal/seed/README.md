@@ -110,7 +110,8 @@ yours to revise: edit this file as you learn what works.
   also needs x on ~, which exposes the files there that others can read.
 - Pool users are reused, so before `agent remove NAME` delete what the
   subagent created in your directories (`find DIR -user USER`) and remove its
-  grants (`setfacl -R -x u:USER,d:u:USER DIR`).
+  grants: `setfacl -R -x u:USER,d:u:USER DIR` on the shared directory, and
+  `setfacl -x u:USER ~ ...` on ~ and any other directory it traversed.
 - Write standing instructions to ~/agents/NAME/OWNER.md. The subagent cannot
   change it and does not see yours, so repeat there whatever applies to it.
   Problems with it (it cannot start, its config.json is invalid, OWNER.md is

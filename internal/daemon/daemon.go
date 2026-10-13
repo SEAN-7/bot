@@ -179,7 +179,7 @@ func poolLost(cfg Config) error {
 	}
 	for _, e := range entries {
 		if !e.Type().IsRegular() {
-			return fmt.Errorf("not starting: %s is missing but %s holds agent journals; restore it from a backup, or move the journals somewhere only root can read", cfg.PoolFile(), cfg.Log)
+			return fmt.Errorf("not starting: %s is missing but %s holds agent journals; see \"If pool.json is lost\" in the harness README", cfg.PoolFile(), cfg.Log)
 		}
 	}
 	return nil

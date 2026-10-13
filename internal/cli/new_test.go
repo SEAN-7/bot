@@ -214,7 +214,7 @@ func TestNewLimitsConfigSize(t *testing.T) {
 		"file":  func() error { return New(l, false, home, "big", writeConfigFile(t, atLimit+" "), nil, &bytes.Buffer{}) },
 		"stdin": func() error { return New(l, false, home, "big", "-", strings.NewReader(atLimit+" "), &bytes.Buffer{}) },
 	} {
-		if err := run(); err == nil || !strings.Contains(err.Error(), "over 1024 KiB") {
+		if err := run(); err == nil || !strings.Contains(err.Error(), "larger than 1 MiB") {
 			t.Errorf("%s: got %v", name, err)
 		}
 		if _, err := os.Stat(filepath.Join(home, "agents", "big")); err == nil {

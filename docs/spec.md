@@ -127,14 +127,14 @@ default its ancestors can read what it writes, and nobody else can traverse
 its home. An agent can tighten its own files' modes; its journals stay
 readable by its ancestors regardless. What an agent grants to let a child
 through its home (x on `~`, see Sharing) opens what others can read
-there, so the harness keeps its own parts of the home group-only: the
+there, so the harness creates its own parts of the home group-only: the
 directories `inbox/`, `inbox/processed/`, `agents/`, `.messages/` and
 `.messages/agents/` (0750, see Admission), the inbox notes and delivered
-messages it writes (0640), the control directories `agent new` creates (0750, `config.json` 0640) and the spools
-`agent message` and `agent send` write (`.messages/` directories 0750,
-files 0640). A child never needs its control directory, and cannot read
-its parent's inbox, its siblings' `OWNER.md`, `ERROR` or
-starting `config.json`, or messages in flight.
+messages it writes (0640), the control directories `agent new` creates
+(0750, `config.json` 0640) and the spools `agent message` and `agent send`
+write (`.messages/` directories 0750, files 0640). A child never needs its
+control directory, and cannot read its parent's inbox, its siblings'
+`OWNER.md`, `ERROR` or starting `config.json`, or messages in flight.
 Processes started before a membership change (an ancestor's user manager,
 for example) see the new group only after they restart; commands the
 harness runs always get current groups. Likewise, a process an ancestor
@@ -187,8 +187,10 @@ agent user access with `setfacl` (no root needed); the harness does nothing
 more. Granting `x` on a directory lets that user reach every entry inside
 it that others can read, so the seed README advises a dedicated share
 directory. Users are reused, so a parent deletes what a child created in
-its directories and removes its grants (`setfacl -R -x u:USER,d:u:USER DIR`)
-before removing the child; the seed README says so too.
+its directories and removes its grants before removing the child: on the
+shared directory (`setfacl -R -x u:USER,d:u:USER DIR`), and on `~` and any
+other directory the child traversed (`setfacl -x u:USER ~ ...`); the seed
+README says so too.
 
 **Plugins** run as the dedicated system user `agent-provider`, with no login
 and no home directory. The daemon reads `/etc/agent/credentials/NAME.env` and
@@ -211,13 +213,18 @@ agent user cannot read another user's process environment.
   `/var/log/agent` holds anything other than regular files (an agent's
   journal directory, or a link that may lead to one), since `pool.json` is
   the only record of which user each agent holds and without it a live
-  agent's home could be cleared or handed to another agent: the error says
-  to restore `/var/lib/agent/pool.json` from a backup, or move the journals
-  somewhere only root can read (a fresh install has neither, and starts);
-  resolve the provider user and the pool users (missing ones are logged,
-  and agents are limited to the rest); start root's helper; then poll about
-  once a second. Each poll first finishes any reclaim left in progress (see
-  Reclaim), then walks the tree, then collects messages.
+  agent's home could be cleared or handed to another agent (a fresh install
+  has neither, and starts); resolve the provider user and the pool users
+  (missing ones are logged, and agents are limited to the rest); start
+  root's helper; then poll about once a second. Each poll first finishes
+  any reclaim left in progress (see Reclaim), then walks the tree, then
+  collects messages. The refusal names the README section "If pool.json is
+  lost", which gives two ways to start again: restore only the latest
+  backup of `pool.json`, taken after the last admission or removal (see
+  Known limits), or start with no agents by moving the journals somewhere
+  only root can read, after stopping every pool user's processes, crontab
+  and lingering (`loginctl disable-linger agent-N`, `crontab -r -u
+  agent-N`, `pkill -KILL -u agent-N`), which the daemon does not stop.
 - **Discovery.** The tree is walked breadth-first from root, each node's
   `agents/` directory checked (`stat`) and listed through its own helper,
   never following symlinks. A control directory is a real directory (not a
@@ -251,11 +258,11 @@ agent user cannot read another user's process environment.
   starting `config.json` from the control directory into the home (written
   through the agent's helper, removed through the parent's; a home that
   already has one keeps it, and the parent's stays in the control
-  directory, unread); enables lingering; creates its journal directory;
-  and writes the `home` symlink into the control directory, through the
-  parent's helper, but never creates the directory: if `agent remove`
-  moved it away since the scan, admission stops there and the agent is not
-  started. Every step goes through the helpers,
+  directory, unread until the home lacks one); enables lingering; creates
+  its journal directory; and writes the `home` symlink into the control
+  directory, through the parent's helper, but never creates the directory:
+  if `agent remove` moved it away since the scan, admission stops there and
+  the agent is not started. Every step goes through the helpers,
   and a failed step is retried at the next poll. A new agent whose
   starting `config.json` is larger than 1 MiB is not given a user: the
   daemon writes "config.json: larger than 1 MiB" to its `ERROR` and the
@@ -322,7 +329,12 @@ agent user cannot read another user's process environment.
 - Starting again after moving the journals aside, no agent holds a user:
   the existing control directories are left alone, having no
   `config.json`, and a user given to a new agent has its home cleared, but
-  its former holder's processes, crontab and lingering are not stopped.
+  its former holder's processes, crontab and lingering are not stopped:
+  root stops them first (see Startup).
+- A restored `pool.json` older than the last admission or removal can map a
+  user to an agent that has since been removed: the daemon then reclaims
+  that user and wipes the home of the agent that now holds it. Only the
+  latest backup is safe to restore.
 - While a Stat or lookup error persists for a not-yet-running child's
   control directory (for example a parent setting it to mode 000), messages
   for that child wait and the error is logged once.
@@ -433,7 +445,7 @@ context size from `describe`.
   full. Save your state to TASK.md and notes now."
 - At 95%, end the run (`reason: "context"`) and write to the agent's inbox:
   "Context reset. Continue from TASK.md. Previous journal: <path>".
-- Guard: if the first call of a fresh run is already at 95%, write the reason
+- Guard: if a run's first call is already at 95%, write the reason
   to the agent's `ERROR` and the service log instead of a reset note, and
   wait for new inbox input. This prevents an endless reset loop.
 
@@ -659,7 +671,10 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 `plugins/index.json` lists each plugin's version and per-architecture SHA-256,
 and is compiled into the `agent` binary. Each is published with the release
 as `plugin-<name>-linux-<arch>`; `install.sh` downloads it and
-`agent provider install` installs it only if it matches the index.
+`agent provider install` installs it only if it matches the index. To add
+another provider after installation, root downloads its asset the same way,
+through the GitHub API with the token on curl's stdin (the README shows the
+commands), and runs `sudo agent provider install NAME FILE`.
 
 - **openai-compatible**: Chat Completions with function calling. Settings:
   `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODELS` (`id=context_tokens`
@@ -763,7 +778,8 @@ agent edits `~/agents/NAME/OWNER.md`.
     through a dedicated directory with `setfacl`, never a default ACL on
     `~` (the harness's directories created there later would inherit it);
     users are reused, so before `agent remove` delete what the child
-    created in the parent's directories and remove its grants;
+    created in the parent's directories and remove its grants, including
+    those on `~` and the directories it traversed;
     each child is its own user with its own home and config, which the
     parent can read but not write; `~/agents/NAME/OWNER.md` holds standing
     instructions the child cannot change and does not see the parent's;
