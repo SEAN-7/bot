@@ -40,7 +40,7 @@ pre code{background:none;padding:0;font-size:inherit}
 .ideas strong{color:var(--fg);font-weight:300}
 
 /* docs */
-.doc{grid-template-columns:minmax(220px,1fr) minmax(0,760px) 1fr}
+.doc{grid-template-columns:minmax(220px,1fr) minmax(0,760px) minmax(40px,1fr)}
 .doc .top,.doc footer{grid-column:1/-1}
 .side{padding:24px 40px 40px;font-size:12px}
 .side ul{list-style:none;margin:0;padding:0;position:sticky;top:20px}
@@ -48,13 +48,13 @@ pre code{background:none;padding:0;font-size:inherit}
 .side li{margin:2px 0}
 .side a{text-decoration:none;color:var(--dim);display:block;padding:3px 0}
 .side a:hover,.side .here>a{color:var(--fg)}
-.side .here>a::before{content:"▸ ";color:var(--mint)}
+.side .here>a::before{content:"▸ ";content:"▸ " / "";color:var(--mint)}
 .side li ul{position:static;margin:6px 0 10px;padding-left:14px;border-left:1px solid var(--line)}
 .doc main{padding:24px 0 80px;min-width:0}
 .doc main h1,.doc main h2,.doc main h3{font-weight:400;letter-spacing:-.02em;color:var(--fg)}
 .doc main h1{font-size:34px;line-height:1.2;margin:0 0 28px}
 .doc main h2{font-size:20px;line-height:1.3;margin:2.4em 0 .8em;scroll-margin-top:16px}
-.doc main h2::before{content:"## ";color:var(--faint)}
+.doc main h2::before{content:"## ";content:"## " / "";color:var(--faint)}
 .doc main h3{font-size:16px;margin:2em 0 .6em;scroll-margin-top:16px}
 .doc main p,.doc main li{font:400 17px/1.75 var(--sans);color:var(--prose)}
 .doc main p{margin:0 0 1.1em}
