@@ -1,8 +1,64 @@
 # Release notes
 
-What changed for agents in each release, newest first. After an upgrade the
-daemon delivers the sections an agent has not seen to its inbox with its
-next wake. Write facts, not instructions.
+What changed for agents in each release, newest first. `agent notes` prints
+them. Through 0.5.0 the daemon also delivers the sections an agent has not
+seen to its inbox with its next wake. Write facts, not instructions.
+
+## 0.5.0
+- `agent notes` prints these release notes. From 0.5.1 they are no longer
+  delivered to your inbox after an upgrade. `agent version` prints the
+  installed version, so an agent that wants them can record it (say in
+  ~/.notes-version) and read the newer sections of `agent notes` when it
+  changes.
+- `agent new NAME [CONFIG|-]` replaces `--provider`, `--model` and
+  `--option`. CONFIG is a config.json file, `-` reads one from stdin, and
+  without it the child gets a copy of your ~/config.json. It is checked
+  against `agent provider describe` before anything is created. `agent new`
+  no longer waits for admission: it prints the control directory and
+  returns. The child's home appears at ~/agents/NAME/home, and the reason
+  it was not started in ~/agents/NAME/ERROR. A NAME that starts with "-"
+  is a usage error.
+- `agent log` and `agent messages` print once and exit; `agent log` shows
+  the ERROR first, then only the newest run. To follow, use `tail -F` on
+  the journal file or on messages.jsonl in the journal directory
+  (~/journal for your own).
+- `agent help` lists the commands and no longer has the recipe for sharing
+  files with a child; an existing README does not have it either. A
+  child's user (`stat -L -c %U ~/agents/NAME/home`) can be granted access
+  with `setfacl`; that needs x on ~, which reaches the files in ~ that
+  others can read, so a dedicated directory holds what is shared. A default
+  ACL on ~ naming the child is inherited by the directories the harness
+  creates there later. Pool users are reused: the next agent to hold a
+  child's user finds what it created in your directories and its ACL
+  entries. Before `agent remove NAME`, delete what the child created
+  (`find DIR -user USER`) and remove its grants:
+  `setfacl -R -x u:USER,d:u:USER DIR` on the shared directory and
+  `setfacl -x u:USER` on ~ and the directories it traversed.
+- `agent provider describe` prints the providers, models and options as
+  indented JSON, the shape of providers.json, not a list.
+- Every run starts fresh. A message that arrives soon after a run ends
+  does not continue it, ~/.reset is neither read nor deleted, call ids in
+  the journal start at call-1 in each run, and the journal's start record
+  has no "continues".
+- Clipped command output (over 16 KiB, shown as its first and last 8 KiB)
+  is no longer saved to ~/.outputs. The result ends with "[output clipped;
+  redirect long output to a file to read all of it]" and the journal
+  records exactly what you were given, with no "full_output". The harness
+  no longer creates or closes ~/.outputs; one that exists is an ordinary
+  directory of yours.
+- The sh tool's `wait` counts only as a JSON number (rounded down, within
+  1-600). A string such as "300", or anything else, means the default 120.
+- The harness no longer closes directories that exist. At admission it
+  creates ~/inbox, ~/inbox/processed, ~/agents, ~/.messages and
+  ~/.messages/agents where they are missing, 0750, and leaves existing ones
+  as they are, so one with permissions for others keeps them. A control
+  directory `agent new` makes is 0750 and is not changed afterwards.
+- A new subagent that cannot get a user because the pool is full is
+  reported as "Agent limit reached"; "No free agent user" is no longer
+  used.
+- A config.json written into the control directory of an admitted
+  subagent is ignored and stays where it is; it is no longer renamed
+  config.json.ignored.
 
 ## 0.5.1
 - Each model's plugin now declares which image types it accepts, and an

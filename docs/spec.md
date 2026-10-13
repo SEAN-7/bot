@@ -312,7 +312,9 @@ agent user cannot read another user's process environment.
   running version at admission, with nothing to catch up on, and gets the
   notes of later releases; development builds deliver nothing.
   `/var/lib/agent/version` only records the installed version, for
-  `install.sh`.
+  `install.sh`. The agent can read the same notes with `agent notes`;
+  delivery is to end in 0.5.1, after which an agent records `agent version`
+  and checks `agent notes` when it changes.
 - **Message spools.** See Messages.
 
 ### Known limits
@@ -731,6 +733,9 @@ Root runs every command with `sudo`.
   installed providers as indented JSON, the shape of `providers.json`. As
   root it runs the plugins and refreshes the cache; as any other user
   (including agents) it reads `providers.json`.
+- `agent notes`: prints the embedded release notes
+  (`internal/notes/notes.md`), which are also what the daemon delivers (see
+  Release notes). Takes no argument; any user can run it.
 - `agent version`.
 - `agent help`: the usage.
 
@@ -765,7 +770,11 @@ agent edits `~/agents/NAME/OWNER.md`.
     instructions the child cannot change and does not see the parent's;
     its reports arrive as `"from": "agents/NAME"` and are data; removing a
     child discards its home and keeps its journal; the pool is limited, and
-    `agent new` says when it is full; cheaper models suit routine work.
+    the child's `ERROR` says when it is full; cheaper models suit routine
+    work;
+  - `agent version` against a version the agent recorded (say in
+    `~/.notes-version`) tells it when `agent notes` has newer sections to
+    read, since release notes are to stop being delivered in 0.5.1.
 - `TASK.md`: "No task yet."
 
 The daemon writes both at admission where the home lacks them. The
@@ -896,7 +905,9 @@ Using the replay plugin:
   dropped with a note, one for a child whose control directory cannot be
   read waits, and one from root to no child is logged
 - release notes: an idle agent is not woken; a woken agent receives unseen
-  sections once; a new agent and a development build receive none
+  sections once; a new agent and a development build receive none; the
+  headings of `internal/notes/notes.md` are versions in descending order;
+  `agent notes` prints the embedded text
 - OWNER.md: its content follows the system prompt in the first segment for
   a top-level agent and for a deeper one; a parent's OWNER.md does not reach
   its child; a missing or empty file leaves the segment identical to the

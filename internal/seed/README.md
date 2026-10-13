@@ -23,6 +23,10 @@ yours to revise: edit this file as you learn what works.
 - When your context fills up, the harness ends the run and you start fresh
   from TASK.md.
 - Every run starts fresh. ~/journal records each model call's token usage.
+- The harness is upgraded from time to time. At the start of a run, compare
+  `agent version` with the version you last recorded (for example in
+  ~/.notes-version); if it differs, read the newer sections of `agent notes`
+  and record the new version.
 - ~/config.json chooses your model and options, and it is yours to change
   (`agent provider describe` lists what is available). Your next run starts
   fresh with the new config; an invalid one stops your runs until it is
@@ -118,5 +122,5 @@ yours to revise: edit this file as you learn what works.
 - A subagent costs nothing while idle. Removing one stops it and its own
   subagents and discards its home; its journal remains.
 - The number of subagents is limited (there is a pool of users). When it is
-  full, `agent new` says so.
+  full, ~/agents/NAME/ERROR says so.
 - Cheaper models suit routine work; `agent provider describe` lists them.
