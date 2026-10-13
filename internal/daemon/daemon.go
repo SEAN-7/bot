@@ -42,8 +42,8 @@ type Config struct {
 	RetryMax       time.Duration
 	ErrorAfter     int
 	DrainTimeout   time.Duration // how long a stop waits for active runs
-	Version        string // this harness version; "dev" builds deliver no release notes
-	ReleaseNotes   string // agent-facing notes, "## X.Y.Z" sections
+	Version        string        // this harness version; "dev" builds deliver no release notes
+	ReleaseNotes   string        // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
 	InboxClip      int
 	ImageBudget    int // bytes of image data one conversation may show
