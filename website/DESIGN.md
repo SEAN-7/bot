@@ -79,7 +79,7 @@ Sizes (desktop; phone sizes scale down in one media query):
 ### Home
 
 One centred column, max width 1120px, generous vertical space. The first
-block is a row: items 1–3 on the left, the mascot (360×360px) on the right;
+block is a row: items 1–3 on the left, the mascot (square, up to 360px) on the right;
 under 800px the mascot moves above the headline at 240×240px.
 
 1. Headline: "an always-on agent with one tool: **the shell**." The first

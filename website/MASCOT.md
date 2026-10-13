@@ -35,7 +35,8 @@ spec fixes the shared definition both read, so the two cannot drift.
 
 The home column widens from 920px to 1120px and its first block becomes a
 row: the existing headline, introduction and commands on the left
-(`flex: 1 1 480px`, `min-width: 0`), the swarm on the right (360×360px). The
+(`flex: 1 1 400px`, `min-width: 0`), the swarm on the right, square, up to
+360px and at most 30% of the viewport width, so the row holds down to 800px. The
 three ideas stay below, in the left column's width.
 
 Under 800px the swarm moves above the headline, centred, 240×240px.
@@ -77,7 +78,7 @@ physics step and the renderer.
                            "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2],
                            "thread": 0.04 },
                 "sway": 0.45, "k": 30, "damping": 8 },
-    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0,
+    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 2.7,
                            "depth": 0.05 },
                 "flat": true, "k": 34, "damping": 9 }
   },
@@ -125,11 +126,15 @@ Per frame, for particle *i*, the target is its form point, then:
 `φ = 1.618i`) adds `x += 0.22 sin(0.55t + 3.1φ) + 0.18 sin(0.37t + 2y)`,
 then `y += 0.16 sin(0.71t + 2.3φ) + 0.12 cos(0.5t + 1.7x)`, then
 `z += 0.2 cos(0.45t + 1.7φ)`, all scaled by `wander`; `jitter` adds random noise of that size; the form
-turns by `angle + lean` (yaw, `angle` growing at `spin` rad/s, `sway` adding
-`sway × sin(0.6t)`) and `camera.pitch + leanY` (pitch); `flat` forms face the
-viewer. Each particle moves toward its target as a damped spring:
+turns by `angle − lean` (yaw, `angle` growing at `spin` rad/s, `sway` adding
+`sway × sin(0.6t)`) and `camera.pitch − leanY` (pitch), which turns the near
+side toward the pointer, then shifts by `0.12 × lean` across and
+`−0.12 × leanY` up, following it; `flat` forms face the viewer and only
+shift. Each particle moves toward its target as a damped spring:
 `v += ((target − p) × k − v × damping) × dt`, then `p += v × dt`.
-Projection is perspective with `camera.distance`. Brightness
+Projection is perspective with `camera.distance`; on the web one model unit
+is 0.3 of the canvas's shorter side, and characters fade out within 24px of
+the canvas edge so no form shows a hard cut. Brightness
 `b = clamp((1.1 − z) / 2.2)` picks the ramp character (or `dense` for a
 `flat` form), the size, and the colour (`light` above `lightAbove`).
 

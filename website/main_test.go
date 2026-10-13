@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,21 +159,107 @@ func TestForms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	for _, p := range formsProblems(data) {
+		t.Error(p)
+	}
+}
+
+// TestFormsCatchesBrokenEdits applies edits that would break the mascot and
+// expects formsProblems to report each one.
+func TestFormsCatchesBrokenEdits(t *testing.T) {
+	data, err := static.ReadFile("mascot/forms.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	edits := map[string]func(f map[string]any){
+		"home missing from order": func(f map[string]any) { f["order"] = []any{"drift", "work", "spawn"} },
+		"form not in order": func(f map[string]any) {
+			f["forms"].(map[string]any)["think"] = map[string]any{"shape": map[string]any{"type": "sphere", "radius": 0.5}, "k": 30, "damping": 8}
+			a := f["ambient"].(map[string]any)
+			a["sequence"] = append(a["sequence"].([]any), "think")
+		},
+		"ambient.every missing":  func(f map[string]any) { delete(f["ambient"].(map[string]any), "every") },
+		"ambient.every reversed": func(f map[string]any) { f["ambient"].(map[string]any)["every"] = []any{24, 18} },
+		"hold zero":              func(f map[string]any) { f["ambient"].(map[string]any)["hold"] = 0 },
+		"font width":             func(f map[string]any) { f["font"].(map[string]any)["width"] = 6 },
+		"extra glyph too wide": func(f map[string]any) {
+			f["font"].(map[string]any)["glyphs"].(map[string]any)["0"] = []any{"......", "......", "......", "......", "......", "......", "......"}
+		},
+		"speak entry on a non-word form": func(f map[string]any) {
+			f["ambient"].(map[string]any)["sequence"] = []any{"drift", "work:hello"}
+		},
+		"empty ramp": func(f map[string]any) { f["ramp"] = "" },
+	}
+	for name, edit := range edits {
+		var f map[string]any
+		if err := json.Unmarshal(data, &f); err != nil {
+			t.Fatal(err)
+		}
+		edit(f)
+		broken, _ := json.Marshal(f)
+		if len(formsProblems(broken)) == 0 {
+			t.Errorf("%s: not reported", name)
+		}
+	}
+}
+
+// formsProblems checks the mascot's shared definition, which the web renderer
+// and a later terminal version both read.
+func formsProblems(data []byte) []string {
+	var probs []string
+	bad := func(format string, a ...any) { probs = append(probs, fmt.Sprintf(format, a...)) }
 	var f struct {
 		Particles struct{ Small, Large int }
 		Scatter   []float64
 		Pointer   struct{ Reach float64 }
 		Home      string
 		Order     []string
-		Ambient   struct{ Sequence []string }
-		Forms     map[string]struct {
+		Ramp      string
+		Dense     string
+		Ambient   struct {
+			Every           []float64
+			Hold, IdleAfter float64
+			Sequence        []string
+		}
+		Forms map[string]struct {
 			Shape      struct{ Type string }
 			K, Damping float64
 		}
-		Font struct{ Glyphs map[string][]string }
+		Font struct {
+			Width, Height int
+			Glyphs        map[string][]string
+		}
 	}
 	if err := json.Unmarshal(data, &f); err != nil {
-		t.Fatal(err)
+		return []string{err.Error()}
+	}
+	// Every form except word forms is generated up front, in order, so the
+	// layout seed is consumed the same way in every implementation.
+	inOrder := map[string]bool{}
+	for _, n := range f.Order {
+		inOrder[n] = true
+	}
+	for n, form := range f.Forms {
+		if form.Shape.Type != "word" && !inOrder[n] {
+			bad("form %q is not in order", n)
+		}
+	}
+	if !inOrder[f.Home] {
+		bad("home form %q is not in order", f.Home)
+	}
+	for _, s := range f.Ambient.Sequence {
+		if name, _, ok := strings.Cut(s, ":"); ok && f.Forms[name].Shape.Type != "word" {
+			bad("ambient %q: only a word form takes text", s)
+		}
+	}
+	if len(f.Ambient.Every) != 2 || f.Ambient.Every[0] <= 0 || f.Ambient.Every[0] > f.Ambient.Every[1] || f.Ambient.Hold <= 0 || f.Ambient.IdleAfter <= 0 {
+		bad("ambient: every %v, hold %v, idleAfter %v", f.Ambient.Every, f.Ambient.Hold, f.Ambient.IdleAfter)
+	}
+	if f.Ramp == "" || f.Dense == "" {
+		bad("ramp %q, dense %q", f.Ramp, f.Dense)
+	}
+	if f.Font.Width != 5 || f.Font.Height != 7 {
+		bad("font %dx%d, want 5x7", f.Font.Width, f.Font.Height)
 	}
 	names := append([]string{f.Home}, f.Order...)
 	for _, s := range f.Ambient.Sequence {
@@ -181,31 +268,35 @@ func TestForms(t *testing.T) {
 	}
 	for _, n := range names {
 		if _, ok := f.Forms[n]; !ok {
-			t.Errorf("form %q is used but not defined", n)
+			bad("form %q is used but not defined", n)
 		}
 	}
 	shapes := map[string]bool{"sphere": true, "cloud": true, "cube": true, "bud": true, "word": true}
 	for n, form := range f.Forms {
 		if !shapes[form.Shape.Type] || form.K <= 0 || form.Damping <= 0 {
-			t.Errorf("form %q: shape %q, k %v, damping %v", n, form.Shape.Type, form.K, form.Damping)
+			bad("form %q: shape %q, k %v, damping %v", n, form.Shape.Type, form.K, form.Damping)
 		}
 	}
 	for _, r := range "abcdefghijklmnopqrstuvwxyz.!? " {
-		rows, ok := f.Font.Glyphs[string(r)]
-		if !ok || len(rows) != 7 {
-			t.Errorf("glyph %q: %d rows", r, len(rows))
-			continue
+		if _, ok := f.Font.Glyphs[string(r)]; !ok {
+			bad("glyph %q missing", r)
+		}
+	}
+	for g, rows := range f.Font.Glyphs {
+		if len(rows) != 7 {
+			bad("glyph %q: %d rows", g, len(rows))
 		}
 		for _, row := range rows {
 			if len(row) != 5 || strings.Trim(row, ".#") != "" {
-				t.Errorf("glyph %q: bad row %q", r, row)
+				bad("glyph %q: bad row %q", g, row)
 			}
 		}
 	}
 	if len(f.Scatter) != 3 || f.Scatter[0] <= 0 || f.Scatter[1] <= 0 || f.Scatter[2] <= 0 || f.Pointer.Reach <= 0 {
-		t.Errorf("scatter %v, pointer reach %v", f.Scatter, f.Pointer.Reach)
+		bad("scatter %v, pointer reach %v", f.Scatter, f.Pointer.Reach)
 	}
 	if f.Particles.Small <= 0 || f.Particles.Small >= f.Particles.Large {
-		t.Errorf("particles: small %d, large %d", f.Particles.Small, f.Particles.Large)
+		bad("particles: small %d, large %d", f.Particles.Small, f.Particles.Large)
 	}
+	return probs
 }

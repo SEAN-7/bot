@@ -24,7 +24,7 @@
                            "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2],
                            "thread": 0.04 },
                 "sway": 0.45, "k": 30, "damping": 8 },
-    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0,
+    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 2.7,
                            "depth": 0.05 },
                 "flat": true, "k": 34, "damping": 9 }
   },

@@ -14,7 +14,8 @@
   const N = innerWidth < F.particles.smallBelow ? F.particles.small : F.particles.large;
 
   // Page behaviour that is not part of a form, so not in forms.json.
-  const SIZE = 0.36;            // model unit in canvas pixels, as a share of the canvas's shorter side
+  const SIZE = 0.3;             // model unit in canvas pixels, as a share of the canvas's shorter side
+  const FADE = 24;              // characters fade out within this many pixels of the canvas edge
 
   // mulberry32, used only for layout, in the order MASCOT.md § Determinism fixes;
   // timing, stagger and jitter use Math.random.
@@ -143,11 +144,12 @@
       z += c.wander * 0.2 * Math.cos(0.45 * t + 1.7 * phi);
     }
     if (c.jitter && !reduce) { x += (Math.random() - 0.5) * c.jitter; y += (Math.random() - 0.5) * c.jitter; z += (Math.random() - 0.5) * c.jitter; }
-    const yaw = c.flat ? 0 : s.angle + lean + (c.sway ? c.sway * Math.sin(0.6 * t) : 0);
-    const pitch = c.flat ? 0 : camera.pitch + leanY;
+    // The lean turns the near side toward the pointer and nudges the form after it.
+    const yaw = c.flat ? 0 : s.angle - lean + (c.sway ? c.sway * Math.sin(0.6 * t) : 0);
+    const pitch = c.flat ? 0 : camera.pitch - leanY;
     const cy = Math.cos(yaw), sn = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
     const x1 = cy * x + sn * z, z1 = -sn * x + cy * z;
-    aim[0] = x1; aim[1] = cp * y - sp * z1; aim[2] = sp * y + cp * z1;
+    aim[0] = x1 + 0.12 * lean; aim[1] = cp * y - sp * z1 - 0.12 * leanY; aim[2] = sp * y + cp * z1;
   }
 
   function step(dt) {
@@ -206,7 +208,7 @@
       const chars = s && s.cfg.flat ? dense : ramp;
       const f = `400 ${Math.round((6 + 9 * b) * persp * scale / 240 + 3)}px "Martian Mono", ui-monospace, monospace`;
       if (f !== font) { ctx.font = f; font = f; }
-      ctx.globalAlpha = 0.16 + 0.84 * b;
+      ctx.globalAlpha = (0.16 + 0.84 * b) * clamp(Math.min(sx[i], w - sx[i], sy[i], h - sy[i]) / FADE);
       ctx.fillStyle = b > colors.lightAbove ? colors.light : colors.mint;
       ctx.fillText(s && s.cfg.flat ? chars[i % chars.length] : chars[Math.round(b * (chars.length - 1))], sx[i], sy[i]);
     }
