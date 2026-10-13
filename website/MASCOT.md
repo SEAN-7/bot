@@ -90,7 +90,9 @@ then shuffled (Fisher–Yates from the last index down), then the arrival
 scatter. A `speak` form is generated when it is first needed, from the PRNG's
 state at that moment. With the same particle count, the same seed gives the
 same layout in both languages, so a later cross-language test can compare
-them point for point.
+them point for point. `mascot.js` is the reference for the exact order of
+draws within each shape. Only layout uses this PRNG: timing, stagger and
+jitter use each language's ordinary random source.
 
 ### Shapes
 
@@ -100,8 +102,9 @@ All points are in model units, about one unit across, centred on the origin.
   `y = 1 − 2(i + 0.5)/n`, angle `i × 2.399963`.
 - **cloud**: rejection-sampled points inside the unit ball, scaled by
   `radii`.
-- **cube**: `1 − edges` of the points uniformly on the faces (face chosen by
-  area), the rest along the 12 edges in turn.
+- **cube**: `1 − edges` of the points uniformly on the faces (face
+  `⌊6 × rand⌋`, then the two in-face coordinates), the rest along the 12
+  edges in turn.
 - **bud**: a sphere for the parent and one for the child (`[x, y, z, r]`,
   with `share` of the points each), the rest on the thread between their
   centres.
