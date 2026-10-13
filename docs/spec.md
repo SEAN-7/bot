@@ -82,7 +82,7 @@ be a script the agent writes, it stays out of the harness.
 | `/usr/local/bin/agent` | root, 0755 | The harness binary |
 | `/etc/agent/` | root, 0711 (traversable, not listable) | Root's place in the tree, in place of a home: `settings.json` (0600), `credentials/`, `plugins/`, `agents/`, `.messages/` |
 | `/etc/agent/credentials/NAME.env` | root, 0600 | Plugin settings and secrets as `KEY=value` lines |
-| `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables, root:agent-provider 0750; no agent user can read or run them |
+| `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables (also root:agent-provider 0750); no agent user can read or run them |
 | `/etc/agent/agents/NAME/` | root, 0700 | Root's control directory for its child NAME (`main` for the main agent) |
 | `/etc/agent/agents/NAME/OWNER.md` | root, 0644 | The human's standing instructions for NAME; optional |
 | `/etc/agent/.messages/agents/NAME/` | root, 0700 | Root's spool for its child NAME; files 0600 |
@@ -213,8 +213,8 @@ agent user cannot read another user's process environment.
 - Startup: require root; refuse to start when `pool.json` holds an agent
   id that is an absolute path, as releases before 0.4.0 wrote, since the
   daemon would take those agents for removed and wipe their homes (such a
-  tree upgrades with the v0.4.0 `install.sh` first); resolve the provider user
-  and the pool users (missing ones are logged, and agents are limited to
+  tree upgrades with the v0.4.0 `install.sh` first); resolve the provider
+  user and the pool users (missing ones are logged, and agents are limited to
   the rest); start root's helper; tighten the journals of agents that hold
   no user (they get the journal modes and the group of their nearest
   ancestor that holds one, root's for a top-level agent); then poll about
@@ -253,8 +253,8 @@ agent user cannot read another user's process environment.
   helper; when its entry records no release notes seen (a new agent, or
   one recovered by its home's evidence), records the running version; for
   a user new to this agent whose home does not hold this agent's evidence,
-  clears what a previous holder left in the home; sets the members of the user's group to the agent's ancestors other
-  than root; makes the harness's directories `inbox/`, `inbox/processed/`,
+  clears what a previous holder left in the home; sets the members of the
+  user's group to the agent's ancestors other than root; makes the harness's directories `inbox/`, `inbox/processed/`,
   `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` real
   directories closed to others (`private`: missing ones are created 0750,
   and existing ones, such as an earlier release's 0755 ones, lose their
@@ -330,9 +330,24 @@ agent user cannot read another user's process environment.
   assignment without `notes` (a newly assigned agent, one recovered after
   a lost `pool.json`, or one from before notes were recorded) records the
   running version at admission, with nothing to catch up on, and gets the
-  notes of later releases; development builds deliver nothing. `/var/lib/agent/version` only records the installed version, for
+  notes of later releases; development builds deliver nothing.
+  `/var/lib/agent/version` only records the installed version, for
   `install.sh`.
 - **Message spools.** See Messages.
+
+### Known limits
+
+- After a lost `pool.json`, an agent that cannot be recovered (no pool
+  record, no `home` link with evidence, no `config.json`) is left alone. If
+  it stays unrecovered across a second daemon restart, its journal group has
+  moved to its ancestor's, so its home no longer counts as evidence and its
+  user may be handed to a new agent, which clears that home.
+- The free-home evidence check is cached until the pool or a journal
+  group changes. A journal link recreated by an unrecovered agent's own
+  leftover processes in between is not seen until then.
+- While a Stat or lookup error persists for a not-yet-running child's
+  control directory (for example a parent setting it to mode 000), messages
+  for that child wait and the error is logged once.
 
 ## The loop (per agent)
 
@@ -475,9 +490,10 @@ Nothing reaches the human except from a top-level agent.
   `messages.jsonl` in its own journal directory (`~/journal/messages.jsonl`),
   root-owned 0640 in the agent's group, so the agent, its ancestors and root
   can read it. Records: `{"t", "from": "owner" | "agent", "text"}`; records
-  migrated from the 0.3 main agent's log keep their `"agent": "main"` field,
-  which readers ignore. Only the daemon writes the logs, so their labels are
-  trustworthy, and no agent can edit or delete anything in them.
+  that the 0.4.0 migration moved from the 0.3 main agent's log keep their
+  `"agent": "main"` field, which readers ignore. Only the daemon writes the
+  logs, so their labels are trustworthy, and no agent can edit or delete
+  anything in them.
 - `delivered.jsonl` records written by earlier versions have no sender; they
   mean `owner`.
 - `agent messages [NAME]` prints a conversation and follows new records,
@@ -529,7 +545,7 @@ revise; OWNER.md is the one thing in context the agent cannot change.
   by the human as root (`sudo $EDITOR /etc/agent/agents/main/OWNER.md`);
   for an agent's children `~/agents/NAME/OWNER.md`. There is no CLI
   command. The installer never creates, changes or removes one, so upgrades
-  keep them (the 0.4.0 migration moves the 0.3 `/etc/agent/OWNER.md` to
+  keep them (the 0.4.0 migration moved the 0.3 `/etc/agent/OWNER.md` to
   `/etc/agent/agents/main/`).
 - **Only the agent it is written for sees it.** Children do not see their
   parent's OWNER.md; a parent passes on what applies to them in theirs.
@@ -832,9 +848,12 @@ Using the replay plugin:
   agent is admitted again, the home's config being the one used
 - CLI: `agent new` rejects an invalid config before creating anything,
   reports the control directory's `ERROR`, defaults to the caller's config,
-  requires `--model` from root and refuses an existing NAME; `agent remove`
-  deletes the control directory; root must pass NAME to `messages` and `log`,
-  and cannot run `agent message`; control directories and spools are 0750
+  requires `--model` from root, refuses an existing NAME, a name that starts
+  with `.` or holds a control character, and a repeated `--option`, and
+  removes the control directory it made when writing `config.json` fails;
+  `agent remove` deletes the control directory; root must pass NAME to
+  `messages` and `log`, and cannot run `agent message`; control directories
+  and spools are 0750
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
   crontabs, homes and the `/home` links to them (however the target is

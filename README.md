@@ -108,7 +108,9 @@ on what applies.
 Every agent runs as its own pool user, `agent-1` to `agent-<max_agents>`
 (16 with the default `max_agents`, the main agent included). The limit is in
 `/etc/agent/settings.json`. An agent that does not fit is not started, and
-its parent is told.
+its parent is told. After a lost `pool.json`, "no free agent user" is given
+instead of the limit when every free user's home still holds an agent that
+has not been recovered.
 
 The main agent creates subagents itself with `agent new` and removes them
 with `agent remove`. Each has its own home, its own `config.json` and its own

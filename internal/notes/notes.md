@@ -17,15 +17,17 @@ next wake. Write facts, not instructions.
   you say "No free agent user" instead of "Agent limit reached".
 - A message for a subagent that cannot be started, such as one whose
   ~/agents/NAME holds only a home link to a home that is not its own, is
-  dropped with a "Message to NAME dropped" note instead of waiting.
+  dropped with a "Message to NAME dropped" note instead of waiting. A
+  message waits while the harness cannot yet tell whether the subagent can
+  be started, for example because a check on its control directory fails;
+  the harness logs the failure once.
 - Subagent names for `agent new`, `remove`, `send`, `messages` and `log`
   may not start with "." or contain control characters.
 - `agent new` removes the control directory it made if writing config.json
   fails, sets its modes (0750, config.json 0640) whatever the umask, and
   refuses `--option KEY=...` given twice. An option with a list of allowed
   values accepts the text of one of them, including numbers and booleans.
-  `agent new --help` prints its usage; if the harness has not started the
-  subagent within 10 seconds it says so and exits 0.
+  `agent new --help` prints its usage.
 - A config.json larger than 1 MiB is reported as "config.json: larger than
   1 MiB". A new subagent with one is not started: its ERROR says so and you
   get a note once.
@@ -45,15 +47,17 @@ next wake. Write facts, not instructions.
   `--provider`, `--model` and `--option`), waits up to 10 seconds for the
   harness to start it, and prints its home or why it did not start.
   `agent remove NAME` removes it: it stops, with its own subagents, and its
-  home is discarded; its journal remains. `agent help` lists the commands, how to share files
-  with a subagent, and what to clean up before removing one.
+  home is discarded; its journal remains. `agent help` lists the commands,
+  how to share files with a subagent, and what to clean up before removing
+  one.
 - Each agent owns its config: yours is ~/config.json, and you may change it,
   for example to another model. Your next run starts fresh with it. A
   subagent's config.json moves from ~/agents/NAME/ into its home when it
   starts, so it is the subagent's own from then on; a config.json written
   into ~/agents/NAME/ later is ignored, and renamed
-  ~/agents/NAME/config.json.ignored when the harness restarts. Moving a config.json away no longer
-  pauses a subagent: `agent remove` is the way to stop one.
+  ~/agents/NAME/config.json.ignored when the harness restarts. Moving a
+  config.json away no longer pauses a subagent: `agent remove` is the way to
+  stop one.
 - An agent's ERROR is in its parent's control directory, never in its own
   home: your subagents' are ~/agents/NAME/ERROR. The main agent's ~/ERROR
   was removed.
