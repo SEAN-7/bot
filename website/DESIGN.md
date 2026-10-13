@@ -11,15 +11,16 @@ inside it.
 - **One look.** Always dark; no light mode and no `prefers-color-scheme`
   switch. `color-scheme: dark` so scrollbars and form controls match.
 - **One accent, used scarcely.** Mint marks only the block cursor, link
-  underlines and list markers. Nothing else is coloured.
+  underlines, list markers and the mascot. Nothing else is coloured.
 - **The cursor is the signature.** A mint block follows the `bot` wordmark
   and ends the home page's commands. It blinks, and holds still under
-  `prefers-reduced-motion: reduce`. The mascot will later live in the home
-  page's cursor.
+  `prefers-reduced-motion: reduce`.
 - **The machine speaks mono; people read sans.** Martian Mono for everything
   the system says and for the site's frame; Instrument Sans only for running
   prose in the docs.
-- **No JavaScript, no external requests.** Fonts are served from the site.
+- **No JavaScript except the optional home-page mascot, no external
+  requests.** Fonts are served from the site; the mascot is specified in
+  `MASCOT.md`, and every page is complete without it.
 
 ## Colour
 
@@ -33,7 +34,7 @@ inside it.
 | `--line` | `#2a3531` | Table header rule, side-navigation rule |
 | `--rule` | `#1c2522` | Table row rules |
 | `--code` | `#161d1b` | Code and pre background |
-| `--mint` | `#5cf2a0` | Cursor, link underlines, list markers, current-page marker |
+| `--mint` | `#5cf2a0` | Cursor, link underlines, list markers, current-page marker, the mascot |
 | `--strong` | `#ffffff` | `strong` in prose |
 
 `--dim` on `--bg` is at least 4.5:1. Mint is never used for body text.
@@ -77,14 +78,16 @@ Sizes (desktop; phone sizes scale down in one media query):
 
 ### Home
 
-One centred column, max width 920px, generous vertical space:
+One centred column, max width 1120px, generous vertical space. The first
+block is a row: items 1–3 on the left, the mascot (360×360px) on the right;
+under 800px the mascot moves above the headline at 240×240px.
 
 1. Headline: "an always-on agent with one tool: **the shell**." The first
    clause in `--dim`, "the shell." in `--fg`.
 2. The README's introduction paragraph in `--dim`, max 60ch.
 3. The example commands as a plain `pre` (no background): `#` prompts in
    `--dim`, ending in a prompt and the mint cursor.
-4. The philosophy's three ideas as a numbered list: numbers `01`–`03` in
+4. The philosophy's three ideas as a numbered list, max width 760px: numbers `01`–`03` in
    `--dim`, the bold lead of each idea in `--fg`, the rest in `--dim`.
 5. Footer: the version in `--dim`.
 

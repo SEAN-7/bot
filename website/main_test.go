@@ -138,6 +138,17 @@ func TestBuild(t *testing.T) {
 	if !strings.Contains(h, ">source</a>") || strings.Contains(h, ">github</a>") {
 		t.Error("header should link the repository as source")
 	}
+	for _, want := range []string{`<canvas class="swarm" aria-hidden="true">`, `id="mascot-forms"`, `"home": "listen"`, `<script src="mascot/mascot.js" defer>`} {
+		if !strings.Contains(h, want) {
+			t.Errorf("home lacks %s", want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(out, "mascot/mascot.js")); err != nil {
+		t.Error(err)
+	}
+	if g := string(guide); strings.Contains(g, "mascot.js") || strings.Contains(g, "mascot-forms") {
+		t.Error("doc pages should not load the mascot")
+	}
 }
 
 // TestForms checks the mascot's shared definition, which the web renderer

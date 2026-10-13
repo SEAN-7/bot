@@ -27,13 +27,17 @@ pre code{background:none;padding:0;font-size:inherit}
 .pl-c{color:var(--dim)}
 
 /* home */
-.home main{max-width:920px;width:100%;margin:0 auto;padding:160px 40px 80px}
+.home main{max-width:1120px;width:100%;margin:0 auto;padding:160px 40px 80px}
 .home h1{margin:0 0 40px;max-width:22ch;font-size:44px;line-height:1.25;font-weight:300;letter-spacing:-.02em}
 .dim{color:var(--dim)}
 .lede{max-width:60ch;margin:0 0 56px;color:var(--dim)}
 .lede p{margin:0}
-.term{margin:0 0 160px;padding:0;background:none;font-size:14px;line-height:1.9;white-space:pre-wrap}
+.hero{display:flex;flex-wrap:wrap;align-items:center;gap:40px 56px;margin:0 0 160px}
+.intro{flex:1 1 480px;min-width:0}
+.swarm{flex:0 0 auto;width:360px;height:360px}
+.term{margin:0;padding:0;background:none;font-size:14px;line-height:1.9;white-space:pre-wrap}
 .term .p{color:var(--dim);user-select:none}
+.ideas{max-width:760px}
 .ideas ol{list-style:decimal-leading-zero;margin:0;padding-left:3.2em;color:var(--dim)}
 .ideas li{margin-bottom:14px;padding-left:.8em}
 .ideas li::marker{color:var(--dim)}
@@ -74,7 +78,9 @@ img{max-width:100%}
  footer{padding:24px 20px}
  .home main{padding:80px 20px 56px}
  .home h1{font-size:30px}
- .term{margin-bottom:80px}
+ .hero{flex-direction:column;align-items:stretch;margin-bottom:80px}
+ .intro{flex:none}
+ .swarm{order:-1;width:240px;height:240px;align-self:center}
  .doc{grid-template-columns:minmax(0,1fr)}
  .side{padding:0 20px 8px}
  .side ul{position:static}.side>ul{max-height:none;display:flex;flex-wrap:wrap;gap:4px 16px}

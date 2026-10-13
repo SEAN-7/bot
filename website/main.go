@@ -189,7 +189,7 @@ func (b *builder) build() error {
 }
 
 // home renders the landing page from the README's introduction and the
-// philosophy's three ideas.
+// philosophy's three ideas, with the mascot's definition inlined.
 func (b *builder) home() (template.HTML, error) {
 	readme, err := b.read("README.md")
 	if err != nil {
@@ -215,10 +215,15 @@ func (b *builder) home() (template.HTML, error) {
 	if err != nil {
 		return "", err
 	}
+	forms, err := static.ReadFile("mascot/forms.json")
+	if err != nil {
+		return "", err
+	}
 	var buf bytes.Buffer
 	err = tmpl.ExecuteTemplate(&buf, "home", struct {
 		Intro, Ideas template.HTML
-	}{template.HTML(introHTML), template.HTML(ideasHTML)})
+		Forms        template.JS
+	}{template.HTML(introHTML), template.HTML(ideasHTML), template.JS(forms)})
 	return template.HTML(buf.String()), err
 }
 
@@ -397,11 +402,15 @@ var tmpl = template.Must(template.New("").Parse(`
 {{- end}}
 
 {{- define "home" -}}
+<div class="hero"><div class="intro">
 <h1><span class="dim">an always-on agent with one tool:</span> the shell.</h1>
 <div class="lede">{{.Intro}}</div>
 <pre class="term"><span class="p">#</span> agent send main "Read your README, then tell me how you plan to keep notes."
 <span class="p">#</span> agent messages main
 <span class="p">#</span> <span class="cur"></span></pre>
+</div><canvas class="swarm" aria-hidden="true"></canvas></div>
 <section class="ideas">{{.Ideas}}</section>
+<script type="application/json" id="mascot-forms">{{.Forms}}</script>
+<script src="mascot/mascot.js" defer></script>
 {{- end}}
 `))
