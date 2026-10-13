@@ -1,24 +1,17 @@
 package daemon
 
 import (
-	"fmt"
 	"os"
-	"os/user"
 	"strings"
 	"sync"
-	"syscall"
 )
 
 // fakeSystem records the root-only operations instead of performing them.
 // PrepareHome still creates the home, so the agent's helper can seed it.
-// RenameUser renames a user in users, which lookup resolves.
 type fakeSystem struct {
 	mu    sync.Mutex
 	calls []string
 	fail  map[string]error // calls that fail, still recorded
-	users map[string]bool
-	// groups exist besides each user's own group.
-	groups map[string]bool
 }
 
 func (s *fakeSystem) record(call string) error {
@@ -75,62 +68,6 @@ func (s *fakeSystem) EnableLinger(user string) error  { return s.record("linger 
 func (s *fakeSystem) DisableLinger(user string) error { return s.record("unlinger " + user) }
 func (s *fakeSystem) StopProcesses(user string) error { return s.record("stop " + user) }
 func (s *fakeSystem) RemoveCrontab(user string) error { return s.record("crontab " + user) }
-
-func (s *fakeSystem) StopUserManager(user string) error  { return s.record("stop manager " + user) }
-func (s *fakeSystem) StartUserManager(user string) error { return s.record("start manager " + user) }
-
-// RenameUser fails before renaming as "rename OLD NEW" fails, and after
-// renaming the user as "renamed OLD NEW" does.
-func (s *fakeSystem) RenameUser(old, new, home string) error {
-	if err := s.record("rename " + old + " " + new); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.users[old] {
-		delete(s.users, old)
-		s.users[new] = true
-	} else if !s.users[new] {
-		return fmt.Errorf("no such user %q", old)
-	}
-	return s.fail["renamed "+old+" "+new]
-}
-
-func (s *fakeSystem) RenameCrontab(old, new string) error {
-	return s.record("rename crontab " + old + " " + new)
-}
-
-// lookup resolves the names in users, as the current user (nil), and fails
-// for any other name as user.Lookup does, or as "lookup NAME" fails.
-func (s *fakeSystem) lookup(name string) (*syscall.Credential, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.fail["lookup "+name]; err != nil {
-		return nil, err
-	}
-	if s.users[name] {
-		return nil, nil
-	}
-	return nil, user.UnknownUserError(name)
-}
-
-// lookupGroup reports each user's own group and those in groups.
-func (s *fakeSystem) lookupGroup(name string) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.users[name] || s.groups[name], nil
-}
-
-// setUser makes name resolve, or not.
-func (s *fakeSystem) setUser(name string, exists bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if exists {
-		s.users[name] = true
-	} else {
-		delete(s.users, name)
-	}
-}
 
 // inOrder reports whether calls were all made, in this order, possibly with
 // other calls between them.

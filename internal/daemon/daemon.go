@@ -37,8 +37,6 @@ type Config struct {
 	// LookupGroup reports whether a group exists; groupExists by default.
 	LookupGroup func(string) (bool, error)
 	TmpDirs     []string // shared directories swept when a user is reclaimed
-	LegacyUser  string   // the main agent's user before 0.4.0, which Migrate renames
-	SudoersDir  string   // where 0.3 granted LegacyUser sudo
 
 	Poll           time.Duration
 	CommandWait    time.Duration // how long a command runs when the model gives no wait
@@ -68,8 +66,6 @@ func DefaultConfig(self string) Config {
 		LookupUser:     osuser.Lookup,
 		LookupGroup:    groupExists,
 		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
-		LegacyUser:     "agent",
-		SudoersDir:     "/etc/sudoers.d",
 		Poll:           time.Second,
 		CommandWait:    120 * time.Second,
 		MaxCommandWait: 600 * time.Second,
@@ -136,9 +132,6 @@ type daemon struct {
 }
 
 func Run(ctx context.Context, cfg Config) error {
-	if err := checkMigrated(cfg); err != nil {
-		return err
-	}
 	syscall.Umask(0o022)
 	d := &daemon{cfg: cfg, agents: map[string]*agent{}, limited: map[string]bool{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
 	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
@@ -157,9 +150,11 @@ func Run(ctx context.Context, cfg Config) error {
 	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
 	}
+	// A release before 0.4.0 named agents by path. On that tree the daemon
+	// would take them for removed and wipe their homes.
 	for _, e := range d.pool.entries() {
 		if strings.HasPrefix(e.Agent, "/") {
-			return fmt.Errorf("not starting: %s holds the 0.3 agent id %s, so this installation is not migrated; run install.sh (agent _migrate) to migrate it", cfg.PoolFile(), e.Agent)
+			return fmt.Errorf("not starting: %s names agent %s by path, so this tree predates 0.4.0; upgrade it with the v0.4.0 install.sh first", cfg.PoolFile(), e.Agent)
 		}
 	}
 	if d.root.fs, err = fsio.Start(cfg.Self, rootCred); err != nil {
@@ -186,33 +181,6 @@ func Run(ctx context.Context, cfg Config) error {
 		case <-ticker.C:
 		}
 	}
-}
-
-// checkMigrated keeps the daemon from starting on a tree an upgrade has not
-// migrated, or migrated part way: there it would take agents for removed and
-// reclaim their users, wiping their homes. install.sh migrates the tree and
-// finishes an interrupted migration. pool.json is checked once it is loaded.
-func checkMigrated(cfg Config) error {
-	const fix = "; run install.sh (agent _migrate) to migrate it"
-	for _, f := range []string{cfg.MigratingFile(), cfg.MigratingUserFile()} {
-		if _, err := os.Lstat(f); err == nil {
-			return fmt.Errorf("not starting: %s marks an unfinished migration; rerun install.sh to finish it", f)
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("not starting: checking for an unfinished migration: %v; rerun install.sh to finish it", err)
-		}
-	}
-	if cfg.LegacyUser == "" {
-		return nil
-	}
-	_, err := cfg.LookupUser(cfg.LegacyUser)
-	var unknown user.UnknownUserError
-	switch {
-	case err == nil:
-		return fmt.Errorf("not starting: user %s, the 0.3 main agent's, exists, so this installation is not migrated%s", cfg.LegacyUser, fix)
-	case !errors.As(err, &unknown):
-		return fmt.Errorf("not starting: looking up user %s: %v; a 0.3 installation must be migrated first%s", cfg.LegacyUser, err, fix)
-	}
-	return nil
 }
 
 // secureUnheldJournals tightens, before any agent runs, the journals of the

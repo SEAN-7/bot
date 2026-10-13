@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -207,4 +208,38 @@ func (p *pool) save(m map[string]poolEntry) error {
 		return err
 	}
 	return replaceFile(p.path, data, 0o600)
+}
+
+// replaceFile writes data to path through a temp file in its directory,
+// synced before the rename and followed by a directory sync, so a crash
+// leaves the old file or the new one, never a torn or lost one.
+func replaceFile(path string, data []byte, mode fs.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, werr := tmp.Write(data)
+	if werr == nil {
+		werr = tmp.Chmod(mode)
+	}
+	if werr == nil {
+		werr = tmp.Sync()
+	}
+	if cerr := tmp.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		return werr
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+	return d.Sync()
 }

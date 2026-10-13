@@ -1,9 +1,12 @@
 package daemon
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPoolAssignLowestFreeAndPersist(t *testing.T) {
@@ -172,4 +175,41 @@ func TestPoolSetNotesPersists(t *testing.T) {
 	if _, ok := p.entryOf("b"); ok || len(p.entries()) != 1 {
 		t.Fatal(p.entries())
 	}
+}
+
+// The daemon never starts on a pool.json from before 0.4.0, which names
+// agents by absolute path: it would take them for removed and wipe their
+// homes. It refuses before changing anything.
+func TestDaemonRefusesPre040Pool(t *testing.T) {
+	h := newHarness(t)
+	old := `[{"user":"agent-2","agent":"/home/agent/agents/clinics","state":"active"}]`
+	if err := os.WriteFile(h.cfg.PoolFile(), []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := Run(ctx, h.cfg)
+	if err == nil || !strings.Contains(err.Error(), "0.4.0") || !strings.Contains(err.Error(), "install.sh") {
+		t.Fatalf("Run: %v", err)
+	}
+	if got := fileText(t, h.cfg.PoolFile()); got != old {
+		t.Fatalf("pool.json changed: %s", got)
+	}
+	if sys := h.cfg.System.(*fakeSystem); sys.String() != "" {
+		t.Fatalf("changed before refusing: %s", sys)
+	}
+}
+
+// What 0.4.0 refused to start on besides pool.json, a user named agent
+// (every name resolves in the harness) or the migration's marker files, no
+// longer keeps the daemon from starting.
+func TestDaemonIgnoresMigrationLeftovers(t *testing.T) {
+	h := newHarness(t, done())
+	for _, name := range []string{"migrating", "migrating-user"} {
+		if err := os.WriteFile(filepath.Join(h.cfg.Lib, name), []byte("x\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.run()
+	waitFor(t, "main admitted", func() bool { return strings.Contains(h.logs.String(), "main: admitted as agent-1") })
 }

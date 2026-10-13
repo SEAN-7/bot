@@ -48,21 +48,6 @@ func PoolUsers(maxAgents int) []string {
 	return users
 }
 
-// MigratingFile marks an upgrade's migration that has not finished:
-// install.sh writes it, and the daemon does not start while it exists.
-func (l Layout) MigratingFile() string { return filepath.Join(l.Lib, "migrating") }
-
-// MigratingUserFile records the pool user an upgrade from 0.3 is renaming
-// the main agent's user to, from before its first change until it is done,
-// so a rerun finishes with the same user.
-func (l Layout) MigratingUserFile() string { return filepath.Join(l.Lib, "migrating-user") }
-
-// VersionFile records the installed version, written by install.sh. The
-// next upgrade reads it, and the 0.4.0 migration records it as the newest
-// release notes each migrated agent has seen. It does not drive delivery:
-// each agent's pool entry does.
-func (l Layout) VersionFile() string { return filepath.Join(l.Lib, "version") }
-
 // ConversationFile is an agent's conversation with its owner, written only
 // by the daemon, in its journal directory.
 func (l Layout) ConversationFile(agentID string) string {

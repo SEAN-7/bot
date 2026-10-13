@@ -202,12 +202,10 @@ agent user cannot read another user's process environment.
   loop, no inbox, no journal and no owner. An agent's id is its path from
   root: `main`, `main/agents/research`, `main/agents/research/agents/scraper`.
   The id keys journals, pool assignments and delivery records.
-- Startup: require root; refuse to start on a tree that is not migrated
-  (see Migration): while `/var/lib/agent/migrating` or
-  `/var/lib/agent/migrating-user` marks an unfinished migration, while the
-  0.3 main agent's user `agent` exists, or when `pool.json` holds a 0.3
-  agent id (an absolute path), since the daemon would take those agents
-  for removed and wipe their homes; resolve the provider user
+- Startup: require root; refuse to start when `pool.json` holds an agent
+  id that is an absolute path, as releases before 0.4.0 wrote, since the
+  daemon would take those agents for removed and wipe their homes (such a
+  tree upgrades with the v0.4.0 `install.sh` first); resolve the provider user
   and the pool users (missing ones are logged, and agents are limited to
   the rest); start root's helper; tighten the journals of agents that hold
   no user (they get the journal modes and the group of their nearest
@@ -304,7 +302,7 @@ agent user cannot read another user's process environment.
   a lost `pool.json`, or one from before notes were recorded) records the
   running version at admission, with nothing to catch up on, and gets the
   notes of later releases; development builds deliver nothing. `/var/lib/agent/version` only records the installed version, for
-  `install.sh` and the migration.
+  `install.sh`.
 - **Message spools.** See Messages.
 
 ## The loop (per agent)
@@ -704,32 +702,34 @@ release binary. It:
    the GitHub API with the token, and verifies its checksum. The token is
    never written to disk and reaches curl on stdin, never in command
    arguments.
-2. Tells a fresh install from an upgrade: an upgrade is a machine with
-   `/var/lib/agent/version` (every completed install writes it),
-   `/etc/agent/agents/main`, or a 0.3 installation to migrate. A user
-   `agent` on a machine with neither `/etc/agent/settings.json` nor
-   `/var/lib/agent/version` (nor an unfinished migration) belongs to
-   someone else: it stops there, changing nothing. On an upgrade from 0.3
-   (the user `agent` exists, or an earlier run left the migration
-   unfinished), checks that the installation is 0.3.0 or later, lists the `agent` user's running transient `systemd-run` jobs and
-   asks before going on, since the migration stops them (see Migration).
-   Declining changes nothing; with no terminal it warns and goes on.
-3. Keeps the previous binary and, if anything fails while nothing has been
-   migrated, restores it and restarts the service. It stops the service
+2. Refuses, before changing anything, a machine running a release before
+   0.4.0: the user `agent` exists with no `/etc/agent/agents/main` and
+   `/var/lib/agent/version` names a 0.x release below 0.4; `pool.json`
+   holds an absolute agent id; or `/var/lib/agent/migrating` or
+   `/var/lib/agent/migrating-user` is left from the 0.4.0 migration. Such
+   a machine upgrades with the v0.4.0 `install.sh` first. A user `agent`
+   on a fresh or 0.4 machine belongs to someone else and is left alone.
+   An upgrade is a machine with `/var/lib/agent/version` (every completed
+   install writes it) or `/etc/agent/agents/main`; anything else is a
+   fresh install.
+3. Keeps the previous binary and, if anything fails before the service
+   starts, restores it and restarts the service. It stops the service
    (active runs finish first), installs the new binary, and creates the
    `agent-provider` user and the directories above.
-4. Runs the migration from 0.3 when needed (see Migration).
-5. Creates any missing pool users `agent-1` to `agent-<max_agents>`, each
+4. Creates any missing pool users `agent-1` to `agent-<max_agents>`, each
    with its own group, an empty home (2750) and no sudo.
-6. On a fresh install, asks which provider plugin to install, installs it
+5. On a fresh install, asks which provider plugin to install, installs it
    with `agent provider install`, which prompts for its settings, and asks
    for a model. On an upgrade, refreshes the installed plugins and keeps the
    configuration.
-7. Installs the systemd service and starts the daemon, then records the
-   installed version in `/var/lib/agent/version`. There is no harness
-   heartbeat: agents schedule their own wake-ups.
-8. On a fresh install, creates the main agent with
-   `agent new main --provider P --model M`.
+6. Installs the systemd service and starts the daemon, then records the
+   installed version in `/var/lib/agent/version` (a failure there only
+   warns: the agent is running). There is no harness heartbeat: agents
+   schedule their own wake-ups.
+7. On a fresh install, creates the main agent with
+   `agent new main --provider P --model M`. If that fails, it says how to
+   retry: `sudo agent remove main` first when `/etc/agent/agents/main`
+   exists, then `sudo agent new main --provider P --model M`.
 
 No agent gets sudo; there is no option for it.
 
@@ -799,11 +799,9 @@ Using the replay plugin:
   system prompt; a symlink, a wrong owner or a group-writable file stops
   runs with `ERROR` and leaves the inbox intact; an edit makes the next run
   start fresh instead of continuing
-- migration from 0.3, against a fixture shaped like the live VM: the user
-  is renamed with its uid kept and `/home/agent` linked, files reach their
-  new places, delivered inbox files keep their labels; interrupted before
-  each change, a rerun finishes; a failure before the rename leaves the 0.3
-  installation able to run
+- startup: a `pool.json` with an absolute agent id stops the daemon before
+  it changes anything; a user named `agent` or a leftover migration marker
+  does not
 
 Paths, user names and timings are configurable so the loop can be tested in
 a temporary root. Tests that depend on privilege separation need root and
@@ -814,7 +812,8 @@ agent.
 ## Operator README
 
 It covers:
-- installation, and what the 0.4.0 upgrade does to a 0.3 installation
+- installation and upgrades, and that an installation older than 0.4.0
+  upgrades through v0.4.0 first
 - setting a spend limit on the provider key
 - sending the first message (`sudo agent send main "..."`)
 - writing `/etc/agent/agents/main/OWNER.md`: what it is for, that each edit
@@ -849,71 +848,12 @@ After the harness is built and tested:
 
 ### To a recursive tree
 
-Releases 0.3.x ran the main agent as the user `agent` at `/home/agent`, with
-its conversation in `/var/log/agent/messages.jsonl`, its `ERROR` and
-`config.json` in its home, the human's `OWNER.md` at `/etc/agent/OWNER.md`
-and the human's spool in `/var/lib/agent/owner/`; subagents' `config.json`
-stayed in their control directories. 0.4.0 makes the main agent root's child
-`main` on an ordinary pool user. The code for it lives in `install.sh` and
-the hidden `agent _migrate` command, and can be removed once no installation
-predates 0.4.0. It migrates from 0.3.0 or later; older installations upgrade
-to 0.3.1 first.
-
-1. **Before anything changes**, `install.sh` checks the starting version,
-   lists the `agent` user's running transient units and asks to go on
-   (see Install). It stops the daemon.
-2. **Backup and marker.** The first run writes a root-only tarball,
-   `/var/backups/agent-0.4-<UTC time>.tgz`, of `/etc/agent`,
-   `/var/lib/agent`, the `agent` crontab, the linger file and the `agent`
-   lines of `/etc/passwd`, `/etc/group`, `/etc/shadow` and `/etc/gshadow`.
-   The home is not copied: its files do not change. The backup's path goes
-   into the marker `/var/lib/agent/migrating`, written before the new
-   binary is installed; the daemon refuses to start while it exists.
-3. **Choose the user.** `agent _migrate` checks every step before the first
-   change. The new main user is the first pool name with no user,
-   `agent-16` by default (`agent-M` below); it is recorded in
-   `/var/lib/agent/migrating-user`, so a rerun uses the same one.
-4. **Stop the user.** Stop its user manager (`systemctl stop user@UID`,
-   waiting up to 3 minutes, so its services shut down cleanly), disable
-   lingering, and kill the uid's remaining processes until none is left. A
-   failure up to here re-enables lingering and restarts the user manager,
-   and exits 1.
-5. **Rename** (from here on, a failure is partial). `usermod -l agent-M
-   agent`, `groupmod -n agent-M agent`, `usermod -d /home/agent-M agent-M`
-   (uid and gid kept); move `/home/agent` to `/home/agent-M` with
-   `rename(2)` (refusing a cross-device target); chmod it to 2750; rename
-   its crontab; create the root-owned symlink `/home/agent -> /home/agent-M`
-   for the absolute paths in its crontab, units and programs; enable
-   lingering for `agent-M`, which starts its user manager and its enabled
-   units again. Transient `systemd-run` jobs do not come back.
-6. **Restructure state.**
-   - Create `/etc/agent/agents/main/` (root, 0700) and move
-     `/etc/agent/OWNER.md` into it when present. Remove `~/ERROR`.
-   - Rewrite agent ids in `pool.json` (`home/agent` becomes `main`), add
-     `main` assigned to `agent-M`, and set every migrated assignment's
-     `notes` to the version in `/var/lib/agent/version` (0.3.0 when it holds
-     none), so each agent gets the release notes since then.
-   - Rename `/var/log/agent/home/agent` to `/var/log/agent/main`, move
-     `/var/log/agent/messages.jsonl` to `/var/log/agent/main/messages.jsonl`,
-     and point each agent's `journal` link at its journals.
-   - Rewrite agent ids in `delivered.jsonl`, so already-delivered inbox
-     files keep their labels.
-   - Move undelivered files from `/var/lib/agent/owner/` to
-     `/etc/agent/.messages/agents/main/`.
-   - Delete `/etc/sudoers.d/agent`.
-   - Remove `/var/lib/agent/migrating-user`.
-7. **Finish.** On success `install.sh` removes the marker, creates the
-   remaining pool users and starts the daemon. The daemon re-admits every
-   agent with its recorded user, moving each subagent's `config.json` from
-   its control directory into its home, and recomputes group memberships.
-   Each agent gets the 0.4.0 notes on its next wake.
-
-Every step skips what an earlier run did, so a rerun finishes the
-migration. A failure before the rename (exit 1) restores the previous
-release. A failure from the rename on (exit 2), or any failure once an
-earlier run may have renamed the user, keeps the new binary with the agent
-stopped: the marker stays, the daemon refuses to start, and rerunning
-`install.sh` finishes the migration. The backup stays either way.
+Releases 0.3.x ran the main agent as the user `agent` at `/home/agent`.
+0.4.0 made it root's child `main` and migrated each installation once:
+`install.sh` renamed that user, keeping its uid, to a pool user (`agent-16`
+by default) and left `/home/agent` as a compatibility link to the new home.
+The migration code was removed in 0.4.1; an older installation upgrades
+through v0.4.0 first.
 
 Reclaim removes the root-owned symlinks in `/home` that lead to the home it
 reclaims, so `/home/agent` disappears if `main` is ever removed and cannot

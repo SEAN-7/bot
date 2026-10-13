@@ -8,7 +8,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -31,11 +30,6 @@ import (
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "agent:", err)
-		// install.sh keeps the new release when a migration stopped part way.
-		var partial *daemon.PartialError
-		if errors.As(err, &partial) {
-			os.Exit(2)
-		}
 		os.Exit(1)
 	}
 }
@@ -131,20 +125,6 @@ func run(args []string) error {
 		return nil
 	case "_fsio":
 		return fsio.Serve(os.Stdin, os.Stdout)
-	case "_migrate":
-		// install.sh runs this with the daemon stopped, to move a 0.3
-		// installation's main agent to a pool user. Exit status 2: it failed
-		// part way, so the previous release must not run.
-		if os.Geteuid() != 0 {
-			return errors.New("agent _migrate must run as root")
-		}
-		self, err := os.Executable()
-		if err != nil {
-			return err
-		}
-		cfg := daemon.DefaultConfig(self)
-		cfg.Logger = log.New(os.Stdout, "", 0)
-		return daemon.Migrate(cfg)
 	case "help", "-h", "--help":
 		io.WriteString(os.Stdout, cli.Usage+cli.SharingHelp)
 		return nil

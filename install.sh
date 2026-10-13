@@ -17,31 +17,15 @@ SHA_agent_linux_arm64=2d14b6e11f6003b0b8182b0b82c494f9692469ff65ddfdc71a04c73e76
 # END CHECKSUMS
 
 ROLLBACK=no
-MIGRATED=no
-MARKED=no # this run wrote $MIGRATING
-# Marks an upgrade from 0.3 whose migration has not finished, and holds the
-# path of its backup. install.sh writes it before replacing the binary and
-# removes it once `agent _migrate` succeeds; the daemon refuses to start
-# while it exists (layout.MigratingFile).
-MIGRATING=/var/lib/agent/migrating
-# The pool user `agent _migrate` is renaming the 0.3 main agent's user to,
-# while it works (layout.MigratingUserFile). It owns this file.
-MIGRATING_USER=/var/lib/agent/migrating-user
 
 # finish cleans up, and restores the previous binary and service if an
-# upgrade failed after it was stopped. Once the migration may have changed
-# anything, the previous release must not run: the agent stays stopped on
-# this one until a rerun completes.
+# upgrade failed after it was stopped.
 finish() {
 	status=$?
 	if [ "$status" != 0 ] && [ "$ROLLBACK" = yes ] && [ -x /usr/local/bin/agent.prev ]; then
-		# Nothing was migrated: the previous release starts without the marker.
-		if [ "$MARKED" = yes ]; then rm -f "$MIGRATING"; fi
 		mv /usr/local/bin/agent.prev /usr/local/bin/agent
 		systemctl start agent 2>/dev/null || true
 		printf 'install: failed; restored the previous version\n' >&2
-	elif [ "$status" != 0 ] && [ "$MIGRATED" = yes ]; then
-		printf 'install: failed (status %s) once the migration had begun; the agent stays stopped on v%s. Fix the cause and rerun install.sh.\n' "$status" "$VERSION" >&2
 	fi
 	rm -rf "${tmp:-}"
 	exit "$status"
@@ -64,9 +48,27 @@ main() {
 	[ "$(id -u)" = 0 ] || die "run as root (sudo)"
 	[ -n "${GITHUB_TOKEN:-}" ] || die "set GITHUB_TOKEN to a token with read access to $REPO"
 	[ "$VERSION" != dev ] || die "this install.sh is not from a release; use the one at a release tag"
-	for tool in curl sha256sum tar getent useradd usermod groupmod gpasswd pkill pgrep timeout systemctl loginctl crontab; do
+	for tool in curl sha256sum useradd gpasswd pkill pgrep systemctl loginctl crontab; do
 		command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
 	done
+
+	# A release before 0.4.0 ran the main agent as the user agent, without
+	# /etc/agent/agents/main, and named agents by path in pool.json; its
+	# migration left marker files while unfinished. This release cannot
+	# migrate it, so it stops before changing anything. A user agent on a
+	# fresh or 0.4 machine is someone else's.
+	old=no
+	if id agent >/dev/null 2>&1 && [ ! -e /etc/agent/agents/main ]; then
+		case $(cat /var/lib/agent/version 2>/dev/null || true) in
+		0.[0-3].*) old=yes ;;
+		esac
+	fi
+	if grep -q '"agent" *: *"/' /var/lib/agent/pool.json 2>/dev/null ||
+		[ -e /var/lib/agent/migrating ] || [ -e /var/lib/agent/migrating-user ]; then
+		old=yes
+	fi
+	[ "$old" = no ] || die "this machine runs a release before 0.4.0; upgrade it with the v0.4.0 install.sh first"
+
 	# Agents share files with each other through setfacl, from the acl package.
 	if ! command -v setfacl >/dev/null 2>&1; then
 		if command -v apt-get >/dev/null 2>&1; then
@@ -105,84 +107,15 @@ main() {
 	got=$(sha256sum "$tmp/agent" | cut -d' ' -f1)
 	[ "$got" = "$want" ] || die "checksum mismatch for agent-linux-$ARCH: got $got, want $want"
 
-	# A 0.3 installation runs its main agent as the user agent, which 0.4
-	# does not have: that user, or a migration an earlier run left
-	# unfinished, means this upgrade migrates. Nothing has changed yet, so
-	# every check up to stopping the service leaves the machine as it was.
-	# Any earlier release left settings.json or the version file: without
-	# them this is a fresh install, and a user agent is someone else's.
-	installed=no
-	if [ -e /etc/agent/settings.json ] || [ -e /var/lib/agent/version ]; then installed=yes; fi
-	legacy=no
-	if id agent >/dev/null 2>&1; then legacy=yes; fi
-	migrate=no
-	if [ "$legacy" = yes ] || [ -e "$MIGRATING" ] || [ -e "$MIGRATING_USER" ]; then migrate=yes; fi
-	if [ "$legacy" = yes ] && [ "$installed" = no ] && [ ! -e "$MIGRATING" ] && [ ! -e "$MIGRATING_USER" ]; then
-		die "a user named agent exists, but this machine has no earlier installation (neither /etc/agent/settings.json nor /var/lib/agent/version); only an upgrade from 0.3 takes that user over. Rename or remove it, then rerun. Nothing changed."
-	fi
 	# An upgrade keeps the configuration and creates no main agent. Every
 	# completed install records its version (the human may have removed
 	# main since); settings.json alone may be a fresh install that failed
 	# before choosing a provider, which a rerun finishes as one.
-	upgrade=$migrate
+	upgrade=no
 	if [ -e /var/lib/agent/version ] || [ -e /etc/agent/agents/main ]; then upgrade=yes; fi
 
-	if [ -e "$MIGRATING" ]; then
-		case $(cat "$MIGRATING") in
-		*/agent-subagents-*) die "$MIGRATING marks an unfinished migration to v0.3.0; finish it with the v0.3.1 install.sh, then run this one" ;;
-		esac
-	elif [ "$legacy" = yes ]; then
-		# The migration starts from v0.3.0 or later.
-		case $(cat /var/lib/agent/version 2>/dev/null || true) in
-		0.[0-2].*) die "upgrade to v0.3.1 first; this release migrates installations from v0.3.0 or later" ;;
-		esac
-		for dir in /home/agent/agents/*/inbox; do
-			if [ -d "$dir" ] && [ ! -L "${dir%/inbox}/home" ]; then
-				die "upgrade to v0.3.1 first; $dir belongs to a subagent from before v0.3.0"
-			fi
-		done
-	fi
-
-	# The migration stops the agent user's services, and with them its
-	# transient systemd-run jobs, which do not come back. Declining changes
-	# nothing.
-	if [ "$legacy" = yes ]; then
-		uid=$(id -u agent)
-		jobs=
-		for unit in "/run/user/$uid/systemd/transient/"*.service; do
-			[ -f "$unit" ] || continue
-			name=${unit##*/}
-			state=$(systemctl --user -M agent@ is-active "$name" 2>/dev/null) || true
-			case $state in
-			inactive | failed) ;;
-			'') jobs="$jobs  $name (state unknown)
-" ;;
-			*) jobs="$jobs  $name ($state)
-" ;;
-			esac
-		done
-		say "The upgrade moves the agent to a pool user. Its user services stop and restart during the move; whatever they serve is down meanwhile."
-		if [ -n "$jobs" ]; then
-			say "Running transient jobs (systemd-run) of user agent:"
-			printf '%s' "$jobs"
-			if (: </dev/tty) 2>/dev/null; then
-				case $(ask "These jobs will be stopped and not restarted. Continue? [y/N] ") in
-				y | Y | yes | Yes | YES) ;;
-				*) say "Nothing changed."; exit 0 ;;
-				esac
-			else
-				say "warning: no terminal to confirm; these jobs will be stopped and not restarted."
-			fi
-		fi
-	fi
-
-	# The release installed now is the one to restore if this run fails,
-	# unless an earlier run began migrating (its marker, or a recorded target
-	# with user agent gone): the binary may be this release already, and the
-	# previous one must not run again, whatever fails now.
-	if [ -e "$MIGRATING" ] || { [ -e "$MIGRATING_USER" ] && [ "$legacy" = no ]; }; then
-		MIGRATED=yes
-	elif [ -x /usr/local/bin/agent ]; then
+	# The release installed now is the one to restore if this run fails.
+	if [ -x /usr/local/bin/agent ]; then
 		cp -p /usr/local/bin/agent /usr/local/bin/agent.prev
 		ROLLBACK=yes
 	fi
@@ -191,37 +124,12 @@ main() {
 		active=yes
 		say "Stopping the agent; active runs finish first (up to 15 minutes)..."
 	fi
-	# Whenever the unit exists, even inactive or between restarts: a unit
-	# restarting on the new binary would race the migration below.
+	# Whenever the unit exists, even inactive or between restarts, so it
+	# does not restart on the new binary before the install is complete.
 	if [ "$active" = yes ] || [ -f /etc/systemd/system/agent.service ]; then
 		systemctl stop agent
 	fi
 
-	# Before the new binary is in place, the marker keeps it from starting
-	# on the 0.3 layout until the migration is done. The first run backs up
-	# the untouched state, root-only (it holds credentials and password
-	# hashes); the marker keeps the backup's path for every rerun. The home
-	# is not copied: the migration moves it but changes none of its files.
-	if [ "$migrate" = yes ] && [ ! -e "$MIGRATING" ]; then
-		mkdir -p /var/backups /var/lib/agent
-		backup=/var/backups/agent-0.4-$(date -u +%Y%m%dT%H%M%SZ).tgz
-		say "Backing up /etc/agent, /var/lib/agent and user agent's records to $backup..."
-		mkdir "$tmp/accounts"
-		for db in passwd group shadow gshadow; do
-			getent "$db" agent >"$tmp/accounts/$db" || true
-		done
-		set --
-		for path in etc/agent var/lib/agent var/spool/cron/crontabs/agent var/lib/systemd/linger/agent; do
-			if [ -e "/$path" ]; then set -- "$@" "$path"; fi
-		done
-		(umask 077; tar -czf "$backup" -C / "$@" -C "$tmp" accounts) || {
-			rm -f "$backup"
-			die "could not write the backup $backup"
-		}
-		chmod 600 "$backup"
-		printf '%s\n' "$backup" >"$MIGRATING"
-		MARKED=yes
-	fi
 	install -m 755 -o root -g root "$tmp/agent" /usr/local/bin/agent
 
 	id agent-provider >/dev/null 2>&1 || useradd --system --no-create-home --home-dir / --shell /usr/sbin/nologin agent-provider
@@ -235,39 +143,7 @@ main() {
 	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16, "repository": "%s"}\n' "$REPO" >/etc/agent/settings.json
 	chmod 600 /etc/agent/settings.json
 
-	# Migrate a 0.3 installation (agent _migrate): its main agent's user
-	# becomes the first pool user that does not exist yet, keeping its uid,
-	# files and services. Status 1: nothing was renamed, so the previous
-	# release can run again. Any other failure: it stopped part way, so the
-	# agent stays stopped on this release and a rerun finishes it. It runs
-	# from its installed path, which it starts helpers from as other users.
-	if [ "$migrate" = yes ]; then
-		backup=$(cat "$MIGRATING")
-		code=0
-		/usr/local/bin/agent _migrate || code=$?
-		case $code in
-		0)
-			rm -f "$MIGRATING"
-			# From here a failure keeps this release: the previous one cannot
-			# run the migrated tree.
-			ROLLBACK=no
-			MIGRATED=yes
-			;;
-		1)
-			# Nothing was renamed, by this run or an earlier one.
-			[ "$MIGRATED" = yes ] || rm -f "$MIGRATING"
-			die "could not migrate the agent, and nothing was renamed; the backup from before the upgrade is $backup"
-			;;
-		*)
-			ROLLBACK=no
-			MIGRATED=yes
-			die "the migration stopped part way; the backup from before it is $backup"
-			;;
-		esac
-	fi
-
-	# Pool users agent-1 to agent-<max_agents>, created only now: the
-	# migration renames the 0.3 main agent's user to the first one missing.
+	# Pool users agent-1 to agent-<max_agents>, before the daemon starts.
 	# Their homes start empty (no skeleton files), as an agent's home does.
 	max_agents=$(sed -n 's/.*"max_agents": *\([0-9]*\).*/\1/p' /etc/agent/settings.json | head -n 1)
 	max_agents=${max_agents:-16}
@@ -324,21 +200,26 @@ WantedBy=multi-user.target
 UNIT
 
 	systemctl daemon-reload
-	# A daemon refusing to start during an unfinished migration may have hit
-	# systemd's start limit.
+	# A daemon that failed to start before this run may have hit systemd's
+	# start limit.
 	systemctl reset-failed agent 2>/dev/null || true
 	systemctl enable --now agent
 	ROLLBACK=no
-	# The installed version, for the next upgrade. Release notes no longer
+	# The installed version, for the next upgrade. Release notes do not
 	# depend on it: they ride along with each agent's next wake, and a new
-	# agent starts current.
-	printf '%s\n' "$VERSION" >/var/lib/agent/version
+	# agent starts current. The agent is running by now, so a failure here
+	# only warns.
+	printf '%s\n' "$VERSION" >/var/lib/agent/version ||
+		say "warning: could not record v$VERSION in /var/lib/agent/version; the agent is running v$VERSION"
 
 	if [ "$upgrade" = yes ]; then
 		say "Upgraded to v$VERSION and started."
 	else
-		/usr/local/bin/agent new main --provider "$provider" --model "$model" ||
-			die "the harness is running, but creating the main agent failed (see above); once the cause is fixed, run: sudo agent new main --provider $provider --model $model"
+		if ! /usr/local/bin/agent new main --provider "$provider" --model "$model"; then
+			retry="sudo agent new main --provider $provider --model $model"
+			if [ -e /etc/agent/agents/main ]; then retry="sudo agent remove main, then $retry"; fi
+			die "the harness is running, but creating the main agent failed (see above); once the cause is fixed, run: $retry"
+		fi
 		say "Installed v$VERSION. Next:"
 		say "  sudo agent send main \"Hello. Read your README, then tell me how you plan to keep notes.\""
 		say "  sudo agent log main"

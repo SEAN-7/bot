@@ -94,19 +94,3 @@ func TestConversationFile(t *testing.T) {
 		t.Fatalf("child: %s", got)
 	}
 }
-
-// TestMigratingFileMatchesInstaller: install.sh writes the marker the daemon
-// checks, so both must name the same path.
-func TestMigratingFileMatchesInstaller(t *testing.T) {
-	path := Default().MigratingFile()
-	if path != "/var/lib/agent/migrating" {
-		t.Fatalf("got %s", path)
-	}
-	script, err := os.ReadFile(filepath.Join("..", "..", "install.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(script), "\nMIGRATING="+path+"\n") {
-		t.Fatalf("install.sh does not set MIGRATING=%s", path)
-	}
-}

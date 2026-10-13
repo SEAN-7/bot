@@ -34,32 +34,8 @@ agents' files, journals and credentials. The previous binary is kept as
 `/usr/local/bin/agent.prev`, and a failed upgrade restores it and restarts
 the service.
 
-### Upgrading from 0.3
-
-0.4.0 makes the main agent root's child `main`, running as a pool user like
-every other agent. On a 0.3.0 or later installation (older ones upgrade to
-0.3.1 first) the installer:
-
-- lists the `agent` user's running transient jobs (`systemd-run`) and asks
-  before going on, since they will be stopped and not restarted; answering
-  no changes nothing, so you can wait for a quiet moment;
-- backs up `/etc/agent`, `/var/lib/agent` and the `agent` user's records to
-  `/var/backups/agent-0.4-<UTC time>.tgz` (root only);
-- stops the `agent` user's services (waiting up to 3 minutes for them to
-  shut down), renames the user to the first unused pool name (`agent-16`
-  with the default settings), keeping its uid, files, crontab and services,
-  moves its home to `/home/agent-16` and leaves `/home/agent` as a link to
-  it, so absolute paths keep working; then its services start again. They
-  are down for the length of the move;
-- moves `/etc/agent/OWNER.md` to `/etc/agent/agents/main/OWNER.md` and the
-  conversation log to `/var/log/agent/main/messages.jsonl`, and removes any
-  `/etc/sudoers.d/agent`.
-
-If the migration fails before the user is renamed, the upgrade is rolled
-back. Once it has renamed the user, the agent stays stopped on the new
-version and rerunning `install.sh` finishes the job. The backup is kept
-either way. Each agent learns what changed from release notes delivered with
-its next wake.
+An installation older than 0.4.0 must upgrade through the v0.4.0
+`install.sh` first; later installers refuse it and change nothing.
 
 ## Set a spend limit first
 

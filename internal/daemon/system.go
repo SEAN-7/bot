@@ -6,8 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,26 +22,14 @@ type System interface {
 	SetMembers(group string, members []string) error
 	EnableLinger(user string) error
 	DisableLinger(user string) error
-	// StopUserManager stops the user's systemd instance and waits, for a
-	// bounded time, until its services have shut down.
-	StopUserManager(user string) error
-	// StartUserManager starts the user's systemd instance, without waiting.
-	StartUserManager(user string) error
 	// StopProcesses ends the user's systemd instance and every process it owns.
 	StopProcesses(user string) error
 	RemoveCrontab(user string) error
-	// RenameUser renames user old and its group to new, keeping their ids,
-	// and makes home its home directory. A rerun finishes a rename that
-	// stopped part way.
-	RenameUser(old, new, home string) error
-	// RenameCrontab gives old's crontab, if it has one, to new.
-	RenameCrontab(old, new string) error
 }
 
 type execSystem struct {
-	run      func(name string, args ...string) ([]byte, error)
-	lookup   func(string) (*syscall.Credential, error)
-	crontabs string // cron's spool of user crontabs
+	run    func(name string, args ...string) ([]byte, error)
+	lookup func(string) (*syscall.Credential, error)
 }
 
 func newExecSystem() System {
@@ -51,8 +37,7 @@ func newExecSystem() System {
 		run: func(name string, args ...string) ([]byte, error) {
 			return exec.Command(name, args...).CombinedOutput()
 		},
-		lookup:   osuser.Lookup,
-		crontabs: "/var/spool/cron/crontabs",
+		lookup: osuser.Lookup,
 	}
 }
 
@@ -99,43 +84,6 @@ func (s *execSystem) DisableLinger(user string) error {
 	return s.do("loginctl", "disable-linger", user)
 }
 
-// userStopTimeout bounds how long StopUserManager waits for the user's
-// services to shut down.
-const userStopTimeout = 3 * time.Minute
-
-func (s *execSystem) StopUserManager(user string) error {
-	cred, err := s.lookup(user)
-	if err != nil {
-		return err
-	}
-	if cred == nil {
-		return fmt.Errorf("no such user %q", user)
-	}
-	unit := fmt.Sprintf("user@%d.service", cred.Uid)
-	out, err := s.run("timeout", strconv.Itoa(int(userStopTimeout/time.Second)), "systemctl", "stop", unit)
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 124 {
-		return fmt.Errorf("%s did not stop within %s", unit, userStopTimeout)
-	}
-	if err != nil {
-		return fmt.Errorf("systemctl stop %s: %v: %s", unit, err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// StartUserManager queues the start: the manager starts the user's units on
-// its own.
-func (s *execSystem) StartUserManager(user string) error {
-	cred, err := s.lookup(user)
-	if err != nil {
-		return err
-	}
-	if cred == nil {
-		return fmt.Errorf("no such user %q", user)
-	}
-	return s.do("systemctl", "start", "--no-block", fmt.Sprintf("user@%d.service", cred.Uid))
-}
-
 func (s *execSystem) StopProcesses(user string) error {
 	if cred, err := s.lookup(user); err == nil && cred != nil {
 		// Queued, not waited for: the poll goroutine must not wait for
@@ -169,78 +117,6 @@ func (s *execSystem) RemoveCrontab(user string) error {
 		return fmt.Errorf("crontab -r -u %s: %v: %s", user, err, strings.TrimSpace(string(out)))
 	}
 	return nil
-}
-
-// RenameUser skips each part already done: usermod refuses to change a user
-// whose processes run, as the renamed user's do once it lingers again. A
-// user or group already named new stops it before anything changes.
-func (s *execSystem) RenameUser(old, new, home string) error {
-	if _, err := s.lookup(old); err == nil {
-		if _, err := s.lookup(new); err == nil {
-			return fmt.Errorf("users %s and %s both exist", old, new)
-		}
-		group, err := s.getent("group", new)
-		if err != nil {
-			return err
-		}
-		if group != "" {
-			return fmt.Errorf("group %s already exists", new)
-		}
-		if err := s.do("usermod", "-l", new, old); err != nil {
-			return err
-		}
-	}
-	group, err := s.getent("group", old)
-	if err != nil {
-		return err
-	}
-	if group != "" {
-		if err := s.do("groupmod", "-n", new, old); err != nil {
-			return err
-		}
-	}
-	entry, err := s.getent("passwd", new)
-	if err != nil {
-		return err
-	}
-	if entry == "" {
-		return fmt.Errorf("no such user %q", new)
-	}
-	if fields := strings.Split(entry, ":"); len(fields) > 5 && fields[5] == home {
-		return nil
-	}
-	return s.do("usermod", "-d", home, new)
-}
-
-// getent returns key's entry in database, or "" when it has none.
-func (s *execSystem) getent(database, key string) (string, error) {
-	out, err := s.run("getent", database, key)
-	var ee *exec.ExitError
-	if errors.As(err, &ee) && ee.ExitCode() == 2 {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("getent %s %s: %v: %s", database, key, err, strings.TrimSpace(string(out)))
-	}
-	line, _, _ := strings.Cut(string(out), "\n")
-	return line, nil
-}
-
-// RenameCrontab renames the crontab file, which cron reads by user name;
-// its owner is the uid, which the rename keeps. It never replaces one.
-func (s *execSystem) RenameCrontab(old, new string) error {
-	from, to := filepath.Join(s.crontabs, old), filepath.Join(s.crontabs, new)
-	if _, err := os.Lstat(from); errors.Is(err, fs.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	if _, err := os.Lstat(to); err == nil {
-		return fmt.Errorf("%s and %s both exist", from, to)
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	return os.Rename(from, to)
 }
 
 func (s *execSystem) do(name string, args ...string) error {
