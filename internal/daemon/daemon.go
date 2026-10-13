@@ -19,10 +19,8 @@ import (
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/layout"
-	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
-	"github.com/SEAN-7/bot/internal/version"
 )
 
 type Config struct {
@@ -43,8 +41,6 @@ type Config struct {
 	RetryMax       time.Duration
 	ErrorAfter     int
 	DrainTimeout   time.Duration // how long a stop waits for active runs
-	Version        string        // this harness version; "dev" builds deliver no release notes
-	ReleaseNotes   string        // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
 	InboxClip      int
 	ImageBudget    int // bytes of image data one run may show
@@ -67,8 +63,6 @@ func DefaultConfig(self string) Config {
 		RetryMax:       10 * time.Minute,
 		ErrorAfter:     3,
 		DrainTimeout:   15 * time.Minute,
-		Version:        version.Version,
-		ReleaseNotes:   notes.Text,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
 		ImageBudget:    20 << 20,

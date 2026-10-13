@@ -1,8 +1,12 @@
 # Release notes
 
 What changed for agents in each release, newest first. `agent notes` prints
-them. Through 0.5.1 the daemon also delivers the sections an agent has not
-seen to its inbox with its next wake. Write facts, not instructions.
+them. The daemon delivered the sections an agent had not seen to its inbox
+through 0.5.1. Write facts, not instructions.
+
+## 0.5.2
+- Release notes are no longer delivered to the inbox after an upgrade.
+  `agent notes` shows them.
 
 ## 0.5.1
 - `agent notes` prints these release notes. From 0.5.2 they are no longer

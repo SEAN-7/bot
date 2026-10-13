@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Every section is "## X.Y.Z", newest first: the daemon parses the headings
-// to pick the sections an agent has not seen.
+// Every section is "## X.Y.Z", newest first, so an agent reading `agent notes`
+// finds the newest sections at the top.
 func TestHeadingsAreDescendingVersions(t *testing.T) {
 	var prev [3]int
 	n := 0

@@ -90,7 +90,7 @@ be a script the agent writes, it stays out of the harness.
 | `/etc/agent/agents/NAME/OWNER.md` | root, 0644 | The human's standing instructions for NAME; optional |
 | `/etc/agent/.messages/agents/NAME/` | root, 0700 | Root's spool for its child NAME; files 0600 |
 | `/var/lib/agent/delivered.jsonl` | root, 0600 | Record of messages delivered (agent id, file name, SHA-256, sender) |
-| `/var/lib/agent/pool.json` | root, 0600 | Pool assignments: user, agent id, state, release notes seen |
+| `/var/lib/agent/pool.json` | root, 0600 | Pool assignments: user, agent id, state |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output with no secrets, for `agent provider describe` |
 | `/var/lib/agent/version` | root, 0644 | The installed version, written by `install.sh` |
 | `/var/log/agent/` | root, 0755 | Journals and conversation logs (see Journal) |
@@ -245,8 +245,7 @@ agent user cannot read another user's process environment.
 - **Admission.** The daemon takes the lowest free pool user and
   records the assignment in `pool.json`, then: prepares the home
   (`/home/agent-N`, 2750, setgid to the user's group); starts the user's
-  helper; when its entry records no release notes seen (a new agent),
-  records the running version; for a user new to this agent, clears what a
+  helper; for a user new to this agent, clears what a
   previous holder left in the home (reclaim normally leaves it empty); sets
   the members of the user's group to the agent's ancestors other than root;
   creates the harness's directories `inbox/`, `inbox/processed/`,
@@ -307,21 +306,6 @@ agent user cannot read another user's process environment.
   gives the user write permission on every directory it owns there (never
   following symlinks), so read-only directories such as a module cache
   cannot block it.
-- **Release notes.** Each `pool.json` assignment records `notes`, the newest
-  release-notes version that agent has seen. When a run is about to start
-  because the inbox holds work, and the embedded release notes
-  (`internal/notes/notes.md`) have sections newer than the agent's `notes`, up
-  to the running version, the daemon first writes them to its inbox as one
-  `<time>-harness-update.md`, then records the running version; the run
-  collects the file with the rest. Nobody is woken for notes alone. An
-  assignment without `notes` (a newly assigned agent, or one from before
-  notes were recorded) records the
-  running version at admission, with nothing to catch up on, and gets the
-  notes of later releases; development builds deliver nothing.
-  `/var/lib/agent/version` only records the installed version, for
-  `install.sh`. The agent can read the same notes with `agent notes`;
-  delivery is to end in 0.5.2, after which an agent records `agent version`
-  and checks `agent notes` when it changes.
 - **Message spools.** See Messages.
 
 ### Known limits
@@ -362,10 +346,8 @@ a dot.
    untouched.
 2. Read `OWNER.md` (see OWNER.md); if it is unsafe, do not start and leave
    the inbox untouched.
-3. Write the release notes the agent has not seen into its inbox (see The
-   daemon).
-4. Read `README.md` and `TASK.md` (missing files are empty).
-5. Collect inbox files in name order, skipping dot-files and directories.
+3. Read `README.md` and `TASK.md` (missing files are empty).
+4. Collect inbox files in name order, skipping dot-files and directories.
    Write them to the journal, then move them to `inbox/processed/` (adding a
    numeric suffix if a name is already taken). Each file is classified
    first: images the model accepts and the daemon can check are shown to
@@ -748,8 +730,8 @@ Root runs every command with `sudo`.
   root it runs the plugins and refreshes the cache; as any other user
   (including agents) it reads `providers.json`.
 - `agent notes`: prints the embedded release notes
-  (`internal/notes/notes.md`), which are also what the daemon delivers (see
-  Release notes). Takes no argument; any user can run it.
+  (`internal/notes/notes.md`). The daemon does not deliver them. Takes no
+  argument; any user can run it.
 - `agent version`.
 - `agent help`: the usage.
 
@@ -789,7 +771,7 @@ agent edits `~/agents/NAME/OWNER.md`.
     work;
   - `agent version` against a version the agent recorded (say in
     `~/.notes-version`) tells it when `agent notes` has newer sections to
-    read, since release notes are to stop being delivered in 0.5.2.
+    read.
 - `TASK.md`: "No task yet."
 
 The daemon writes both at admission where the home lacks them. The
@@ -919,10 +901,8 @@ Using the replay plugin:
   child that can never be admitted (a `home` link and nothing else) is
   dropped with a note, one for a child whose control directory cannot be
   read waits, and one from root to no child is logged
-- release notes: an idle agent is not woken; a woken agent receives unseen
-  sections once; a new agent and a development build receive none; the
-  headings of `internal/notes/notes.md` are versions in descending order;
-  `agent notes` prints the embedded text
+- release notes: the headings of `internal/notes/notes.md` are versions in
+  descending order; `agent notes` prints the embedded text
 - OWNER.md: its content follows the system prompt in the first segment for
   a top-level agent and for a deeper one; a parent's OWNER.md does not reach
   its child; a missing or empty file leaves the segment identical to the

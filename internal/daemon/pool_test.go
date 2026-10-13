@@ -134,29 +134,31 @@ func TestPoolReclaimingUserIsNeverHandedOut(t *testing.T) {
 	}
 }
 
-func TestPoolSetNotesPersists(t *testing.T) {
+// A pool.json written by 0.5.1 or older records "notes" per entry; the field
+// is ignored, and the next write drops it.
+func TestPoolLoadsEntriesWithOldNotesField(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pool.json")
-	users := []string{"agent-1", "agent-2"}
-	p, _ := loadPool(path, users)
-	p.assign("a", 2)
-	if err := p.setNotes("agent-1", "0.4.0"); err != nil {
+	old := `[{"user":"agent-1","agent":"a","state":"active","notes":"0.4.0"},{"user":"agent-2","agent":"b","state":"reclaiming","notes":"0.5.1"}]`
+	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	users := []string{"agent-1", "agent-2"}
+	p, err := loadPool(path, users)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, ok := p.entryOf("a"); !ok || e.User != "agent-1" || e.State != poolActive {
+		t.Fatal(e, ok)
+	}
+	if e, ok := p.entryOf("b"); !ok || e.User != "agent-2" || e.State != poolReclaiming {
+		t.Fatal(e, ok)
 	}
 	if err := p.mark("agent-1", poolReclaiming); err != nil {
 		t.Fatal(err)
 	}
-	q, err := loadPool(path, users)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if e, _ := q.entryOf("a"); e.Notes != "0.4.0" || e.State != poolReclaiming {
-		t.Fatal(e)
-	}
-	if err := p.setNotes("agent-2", "0.4.0"); err != nil {
-		t.Fatal(err) // a user without an entry is left alone
-	}
-	if _, ok := p.entryOf("b"); ok || len(p.entries()) != 1 {
-		t.Fatal(p.entries())
+	data, _ := os.ReadFile(path)
+	if strings.Contains(string(data), "notes") {
+		t.Fatalf("pool.json %s", data)
 	}
 }
 

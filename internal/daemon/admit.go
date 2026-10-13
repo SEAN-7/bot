@@ -91,16 +91,6 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err != nil {
 		return fail("file helper", err)
 	}
-	if e, _ := d.pool.entryOf(id); e.Notes == "" {
-		if _, ok := parseVersion(d.cfg.Version); ok {
-			// A new agent's seed README describes this version; an entry
-			// without notes (from before they existed) does not know what
-			// it saw. Nothing to catch up on, either way.
-			if err := d.pool.setNotes(user, d.cfg.Version); err != nil {
-				return fail("notes", err)
-			}
-		}
-	}
 	if fresh {
 		if err := c.fs.Clear(c.home); err != nil {
 			return fail("clear home", err)

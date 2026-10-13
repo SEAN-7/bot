@@ -209,10 +209,8 @@ UNIT
 	systemctl reset-failed agent 2>/dev/null || true
 	systemctl enable --now agent
 	ROLLBACK=no
-	# The installed version, for the next upgrade. Release notes do not
-	# depend on it: they ride along with each agent's next wake, and a new
-	# agent starts current. The agent is running by now, so a failure here
-	# only warns.
+	# The installed version, for the next upgrade. The agent is running by
+	# now, so a failure here only warns.
 	printf '%s\n' "$VERSION" >/var/lib/agent/version ||
 		say "warning: could not record v$VERSION in /var/lib/agent/version; the agent is running v$VERSION"
 
