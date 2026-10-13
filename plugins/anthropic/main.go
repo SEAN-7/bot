@@ -67,6 +67,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -161,7 +162,7 @@ func (handler) Describe() proto.DescribeResponse {
 				Values:      anyList(m.thinking),
 			}
 		}
-		resp.Models = append(resp.Models, proto.Model{ID: m.id, ContextTokens: m.contextTokens, Options: opts})
+		resp.Models = append(resp.Models, proto.Model{ID: m.id, ContextTokens: m.contextTokens, Images: true, Options: opts})
 	}
 	return resp
 }
@@ -186,6 +187,17 @@ type textBlock struct {
 	Type         string        `json:"type"`
 	Text         string        `json:"text"`
 	CacheControl *cacheControl `json:"cache_control,omitempty"`
+}
+
+type imageBlock struct {
+	Type   string      `json:"type"`
+	Source imageSource `json:"source"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type toolUseBlock struct {
@@ -304,15 +316,21 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 		return fail("anthropic: HTTP %d: read body: %v", httpResp.StatusCode, err)
 	}
 	if httpResp.StatusCode/100 != 2 {
+		var resp proto.CompleteResponse
 		var e apiError
 		if json.Unmarshal(respData, &e) == nil && e.Error.Message != "" {
-			resp := fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
+			resp = fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
 			if httpResp.StatusCode == http.StatusBadRequest && isOverflow(e.Error.Message) {
 				resp.Error.Kind = proto.ErrContextOverflow
 			}
-			return resp
+		} else {
+			resp = fail("anthropic: HTTP %d: %s", httpResp.StatusCode, clip(string(respData), 2000))
 		}
-		return fail("anthropic: HTTP %d: %s", httpResp.StatusCode, clip(string(respData), 2000))
+		// The request body itself exceeded the size limit; images make that likely.
+		if httpResp.StatusCode == http.StatusRequestEntityTooLarge {
+			resp.Error.Kind = proto.ErrContextOverflow
+		}
+		return resp
 	}
 	return parseResponse(respData)
 }
@@ -407,6 +425,13 @@ func buildMessages(in []proto.Message) ([]apiMessage, error) {
 		case "user":
 			if m.Content != "" {
 				add("user", mustJSON(textBlock{Type: "text", Text: m.Content}))
+			}
+			for _, img := range m.Images {
+				add("user",
+					mustJSON(textBlock{Type: "text", Text: img.File + ":"}),
+					mustJSON(imageBlock{Type: "image", Source: imageSource{
+						Type: "base64", MediaType: img.MediaType, Data: base64.StdEncoding.EncodeToString(img.Data),
+					}}))
 			}
 		case "assistant":
 			if blocks, ok := opaqueBlocks(m.Opaque); ok {

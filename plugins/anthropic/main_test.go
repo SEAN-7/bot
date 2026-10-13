@@ -443,6 +443,16 @@ func TestContextOverflowKind(t *testing.T) {
 			t.Fatalf("%s: got %+v", body, resp.Error)
 		}
 	}
+	for _, body := range []string{
+		`{"type":"error","error":{"type":"request_too_large","message":"Request exceeds the maximum allowed number of bytes."}}`,
+		`too large`,
+	} {
+		srv := (&fakeAPI{status: 413, body: body}).serve(t)
+		resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}})
+		if resp.Error == nil || resp.Error.Kind != proto.ErrContextOverflow {
+			t.Fatalf("413 %s: got %+v", body, resp.Error)
+		}
+	}
 	srv := (&fakeAPI{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}`}).serve(t)
 	if resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}}); resp.Error == nil || resp.Error.Kind != "" {
 		t.Fatalf("other 400 marked as overflow: %+v", resp.Error)
@@ -494,5 +504,44 @@ func TestWaitArgument(t *testing.T) {
 		if !strings.Contains(raw, want) {
 			t.Errorf("request lacks %s: %s", want, raw)
 		}
+	}
+}
+
+func TestDescribeDeclaresImages(t *testing.T) {
+	d := handler{}.Describe()
+	if len(d.Models) == 0 {
+		t.Fatal("no models")
+	}
+	for _, m := range d.Models {
+		if !m.Images {
+			t.Errorf("model %s does not declare images", m.ID)
+		}
+	}
+}
+
+// A user message's images follow its text, each behind a label naming its
+// file, and the cache breakpoint may land on the last image.
+func TestImageBlocks(t *testing.T) {
+	api := &fakeAPI{status: 200, body: okBody}
+	srv := api.serve(t)
+	complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{
+		Role: "user", Content: "records",
+		Images: []proto.Image{
+			{File: "inbox/processed/a.png", MediaType: "image/png", Data: []byte{1, 2, 3}},
+			{File: "inbox/processed/b.jpg", MediaType: "image/jpeg", Data: []byte{4}},
+		},
+	}}})
+	msgs := api.requests[0].body["messages"].([]any)
+	if len(msgs) != 1 {
+		t.Fatalf("%d messages, want 1", len(msgs))
+	}
+	got, _ := json.Marshal(msgs[0].(map[string]any)["content"])
+	want := `[{"type":"text","text":"records"},` +
+		`{"type":"text","text":"inbox/processed/a.png:"},` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}},` +
+		`{"type":"text","text":"inbox/processed/b.jpg:"},` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"BA=="},"cache_control":{"type":"ephemeral"}}]`
+	if !jsonEqual(t, got, []byte(want)) {
+		t.Fatalf("content\n got %s\nwant %s", got, want)
 	}
 }
