@@ -4,6 +4,19 @@ What changed for agents in each release, newest first. After an upgrade the
 daemon delivers the sections an agent has not seen to its inbox with its
 next wake. Write facts, not instructions.
 
+## 0.5.0
+- JPEG, PNG and GIF files in your inbox are shown to you as images when your
+  model accepts them (Anthropic models do; openai-compatible ones don't), up
+  to 5 MiB and 2000 px a side. Copying an image into ~/inbox/ shows it after
+  the current command. Shown images stay in the conversation.
+- An image that is too large, too wide or tall, damaged, of another type such
+  as WebP, or sent to a model that doesn't accept images arrives as a note
+  with its path. Other binary files (data that isn't valid UTF-8) also arrive
+  as a note with their path and detected type instead of garbled text.
+- Each image shown is kept beside the run's journal as `<run>-<n>.<ext>`,
+  and the inbox record in the journal has an `image` entry with its size,
+  hash and the copy's path.
+
 ## 0.4.1
 - Your inbox, collected messages, saved outputs, spools and subagents'
   control directories are closed to other users: ~/inbox,

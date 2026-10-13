@@ -377,7 +377,9 @@ a dot.
 4. Read `README.md` and `TASK.md` (missing files are empty).
 5. Collect inbox files in name order, skipping dot-files and directories.
    Write them to the journal, then move them to `inbox/processed/` (adding a
-   numeric suffix if a name is already taken).
+   numeric suffix if a name is already taken). Each file is classified
+   first: JPEG, PNG and GIF images are shown to the model (below); other
+   binary data is replaced by a one-line note.
 
 **Context.**
 - System segments, most stable first: the system prompt (verbatim, below)
@@ -390,8 +392,25 @@ a dot.
   SHA-256 match a record in `delivered.jsonl` with that sender. The content
   is a JSON string, so text inside a file can never create its own `from`
   field. Contents over 64 KiB are clipped, with the file's path included.
-- After each step, new inbox files (collected the same way) are appended as a
-  user message after the command result.
+- **Images.** A file that `http.DetectContentType` calls `image/jpeg`,
+  `image/png` or `image/gif` is shown to the model, as an image on the user
+  message beside the records, when the model's `describe` entry sets `images`.
+  Its record's `content` describes it (`[image/jpeg 1280x960, 169027 bytes,
+  shown below]`). Limits: 5 MiB by the file's full size, and 2000 px on each
+  side (checked from the declared dimensions before decoding, because the
+  API rejects larger images in a request with more than 20 images instead
+  of downscaling them); the harness resizes nothing. The whole image is
+  decoded, so a damaged file cannot cause an API error that would be retried
+  forever. An image that is not shown, whether over a limit, undecodable, of
+  another `image/*` type or for a model without `images`, gets a note as its
+  `content` naming the file's full path. Other data that is not valid UTF-8
+  (ignoring a rune cut by the read limit) gets a "binary file not shown"
+  note with its detected type and size. Everything else is text. Exact
+  wording is in `internal/daemon/messages.go`. Shown images stay in the
+  conversation and are resent on every call; a request over the API's 32 MB
+  limit is answered 413, reported as `context_overflow`.
+- After each step, new inbox files (collected the same way, images included)
+  are appended as a user message after the command result.
 
 **Steps.** Call the model with the single tool `sh(command, wait)` (see The
 sh tool).
@@ -519,13 +538,20 @@ Nothing reaches the human except from a top-level agent.
   on, inside its parent's journal directory whichever pool user holds the
   parent. Only timestamp-named files are run journals; the directory also
   holds the agent's conversation log, `messages.jsonl`.
+- Each shown image is also saved beside its run as `<run>-<n>.<ext>` (`n`
+  counting the run's images from 1; `jpg`, `png` or `gif`), with the run
+  file's owner, group and mode. These names are not run journals (`IsRun`,
+  `Latest`, crash recovery and `agent log` ignore them), and `image.copy`
+  holds the path. An image whose copy cannot be saved is not shown.
 - Journal directories and files are root-owned, in the agent's own group,
   which holds it and its ancestors. Directories are 0751 and files 0640, so
   siblings cannot read each other's journals. A child's journal directory is
   nested inside its parent's, so directories must be traversable by others;
   without read permission they cannot be listed, and the files stay
   unreadable. `/var/log/agent` itself is 0755.
-- Records: `start` (config), `inbox` (each file with its label), `assistant`
+- Records: `start` (config), `inbox` (each file with its label; a shown
+  image's record also has `image: {media_type, width, height, bytes, sha256,
+  copy}`, never the data), `assistant`
   (each model message), `result` (each command result), `note` (warnings and
   errors) and `end` (the clean-end marker, with `reason`).
 - `~/journal` is a symlink to the agent's journal directory, created and
@@ -622,7 +648,8 @@ service log. Every request and response carries `"protocol": 1`.
 - Response:
   - `settings`: list of `{name, description, secret}`, the environment
     variables the plugin needs. The installer prompts for these.
-  - `models`: list of `{id, context_tokens, options}`. `options` maps each
+  - `models`: list of `{id, context_tokens, images, options}`. `images`
+    (boolean, omitted when false) says the model accepts images. `options` maps each
     option name to `{description, values}` (allowed values) or
     `{description, type: "integer", min, max}`.
 
@@ -631,7 +658,9 @@ service log. Every request and response carries `"protocol": 1`.
   unchanged), `system` (list of `{text}` segments, most stable first, so
   plugins can place cache markers), `tools` (the `sh` definition with its
   JSON Schema), and `messages`:
-  - `{role: "user", content}`
+  - `{role: "user", content, images}`; `images` (omitted when empty) lists
+    `{file, media_type, data}`, `data` being the raw bytes (base64 in JSON),
+    and is sent only to models that set `images`
   - `{role: "assistant", text, command, wait, call_id, opaque}`
   - `{role: "tool", call_id, content}`
 - Response: `{text, command, wait, usage: {input_tokens, output_tokens,
@@ -650,7 +679,7 @@ service log. Every request and response carries `"protocol": 1`.
 - A plugin returns at most one command per response and disables parallel
   tool calls at the provider.
 
-The daemon interprets nothing but `context_tokens` and `usage`.
+The daemon interprets nothing but `context_tokens`, `images` and `usage`.
 
 ## Plugins
 
@@ -663,6 +692,9 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 - **anthropic**: Messages API. Settings: `ANTHROPIC_API_KEY`. Places
   a prompt-cache marker on each system segment (at most the last three) and
   on the latest message, so a TASK.md edit leaves the earlier segments cached.
+  Every model declares `images`: a user message's images follow its text,
+  each as a text block naming its file and an image block. HTTP 413 is
+  reported as `context_overflow`.
   Exposes the reasoning settings current models accept as options. Model IDs,
   context sizes, caching and reasoning parameters are taken from the current
   Anthropic documentation at implementation time, not from memory.

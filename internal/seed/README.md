@@ -56,6 +56,10 @@ yours to revise: edit this file as you learn what works.
   your inbox, write it under a dot-prefixed name (files starting with a dot
   are ignored) and then rename it into the inbox, so it arrives whole. This is
   only for your own inbox: other agents' inboxes are not yours to write to.
+  JPEG, PNG and GIF files up to 5 MiB and 2000 px a side are shown to you as
+  images when your model accepts them; to look at an image file yourself, copy
+  it into ~/inbox/ and you will see it after the current command. Other binary
+  files, and images that can't be shown, arrive as a note with their path.
 - Your owner is whoever created you: the human (for the main agent, for
   example) or your parent agent. To tell your owner something, run
   `agent message "text"` (or pipe longer text with `agent message -`). It is
