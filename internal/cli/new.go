@@ -14,6 +14,7 @@ import (
 
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
+	"github.com/SEAN-7/bot/internal/proto"
 )
 
 // Base is the directory whose agents/ holds the caller's children: root's
@@ -27,6 +28,13 @@ func Base(l layout.Layout, root bool, home string) (string, error) {
 	}
 	return home, nil
 }
+
+// The file operations that can fail after the control directory exists;
+// tests replace them.
+var (
+	writeFile = os.WriteFile
+	rename    = os.Rename
+)
 
 // NewOptions are the flags of agent new, and how long to wait for admission.
 type NewOptions struct {
@@ -61,8 +69,10 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		switch {
 		case os.IsNotExist(err) && o.Provider != "" && o.Model != "":
 			// The flags say everything a starting config would.
-		case err != nil:
+		case os.IsNotExist(err):
 			return fmt.Errorf("no starting config to copy (%v); pass --provider and --model", err)
+		case err != nil:
+			return err
 		default:
 			if config, err = plugin.ParseConfig(data); err != nil {
 				return fmt.Errorf("%s: %w", filepath.Join(home, "config.json"), err)
@@ -96,20 +106,19 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 		config.Provider = installed[0]
 	}
 	describe := providers[config.Provider]
+	given := map[string]bool{}
 	for _, option := range o.Options {
 		key, value, ok := strings.Cut(option, "=")
 		if !ok || key == "" {
 			return fmt.Errorf("option %q is not key=value (--option k=v)", option)
 		}
-		var parsed any = value
-		for _, m := range describe.Models {
-			if m.ID == config.Model && m.Options[key].Type == "integer" {
-				n, err := strconv.Atoi(value)
-				if err != nil {
-					return fmt.Errorf("option %q: %q is not an integer", key, value)
-				}
-				parsed = float64(n)
-			}
+		if given[key] {
+			return fmt.Errorf("option %s given twice", key)
+		}
+		given[key] = true
+		parsed, err := parseOption(describe, config.Model, key, value)
+		if err != nil {
+			return err
 		}
 		if config.Options == nil {
 			config.Options = map[string]any{}
@@ -138,15 +147,57 @@ func New(l layout.Layout, root bool, home, name string, o NewOptions, w io.Write
 	if err := os.Mkdir(ctrl, mode); err != nil {
 		return err
 	}
-	// The dot-name rename keeps the daemon from reading half a config.
-	temp := filepath.Join(ctrl, ".config.json")
-	if err := os.WriteFile(temp, data, 0o640); err != nil {
-		return err
-	}
-	if err := os.Rename(temp, filepath.Join(ctrl, "config.json")); err != nil {
+	// From here the directory is ours: a failure removes it again, so
+	// nothing half-made waits for the daemon.
+	if err := writeConfig(ctrl, data, mode); err != nil {
+		os.RemoveAll(ctrl)
 		return err
 	}
 	return awaitAdmission(ctrl, name, o, w)
+}
+
+// writeConfig sets the modes of the new control directory and writes its
+// config.json, whatever the umask. The dot-name rename keeps the daemon from
+// reading half a config.
+func writeConfig(ctrl string, data []byte, mode os.FileMode) error {
+	if err := os.Chmod(ctrl, mode); err != nil {
+		return err
+	}
+	temp := filepath.Join(ctrl, ".config.json")
+	if err := writeFile(temp, data, 0o640); err != nil {
+		return err
+	}
+	if err := os.Chmod(temp, 0o640); err != nil {
+		return err
+	}
+	return rename(temp, filepath.Join(ctrl, "config.json"))
+}
+
+// parseOption turns the text of --option key=value into the JSON value the
+// model's describe entry calls for: an integer for an integer option, the
+// allowed value that prints as the text for an enumeration (which may be a
+// number or a boolean), and the text itself otherwise, for validation to
+// refuse.
+func parseOption(describe proto.DescribeResponse, model, key, value string) (any, error) {
+	for _, m := range describe.Models {
+		if m.ID != model {
+			continue
+		}
+		opt := m.Options[key]
+		if opt.Type == "integer" {
+			n, err := strconv.Atoi(value)
+			if err != nil {
+				return nil, fmt.Errorf("option %q: %q is not an integer", key, value)
+			}
+			return float64(n), nil
+		}
+		for _, allowed := range opt.Values {
+			if fmt.Sprint(allowed) == value {
+				return allowed, nil
+			}
+		}
+	}
+	return value, nil
 }
 
 // awaitAdmission polls the control directory for the home link the daemon

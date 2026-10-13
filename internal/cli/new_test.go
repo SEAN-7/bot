@@ -3,9 +3,11 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,6 +26,8 @@ func installProviders(t *testing.T, l layout.Layout, providers ...string) {
 			{ID: "m", ContextTokens: 1000, Options: map[string]proto.Option{
 				"budget": {Type: "integer"},
 				"effort": {Values: []any{"low", "high"}},
+				"level":  {Values: []any{float64(1), float64(2)}},
+				"fast":   {Values: []any{true, false}},
 			}},
 			{ID: "m2", ContextTokens: 1000},
 		}}
@@ -357,5 +361,152 @@ func TestLoadProviders(t *testing.T) {
 	got, err := LoadProviders(l)
 	if err != nil || len(got["p"].Models) != 2 {
 		t.Fatal(got, err)
+	}
+}
+
+// newHome is a caller's home with a valid config.json.
+func newHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "config.json"), []byte(`{"provider":"p","model":"m"}`), 0o644)
+	return home
+}
+
+func TestNewRejectsBadNames(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := newHome(t)
+	for _, name := range []string{".hidden", ".", "..", "a\nb", "a\tb", "a\x7fb", "a\x1bb", "a\x00b", "a/b", ""} {
+		if cleanName(name) {
+			t.Errorf("cleanName(%q) accepted", name)
+		}
+		if err := New(l, false, home, name, fastNew(time.Millisecond), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
+			t.Errorf("New %q: %v", name, err)
+		}
+		if err := Remove(l, false, home, name); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
+			t.Errorf("Remove %q: %v", name, err)
+		}
+		if err := SendChild(home, name, "hi", time.Now()); err == nil || !strings.Contains(err.Error(), "not a direct subagent name") {
+			t.Errorf("SendChild %q: %v", name, err)
+		}
+		if _, _, _, err := Target(l, true, "", name); err == nil {
+			t.Errorf("Target %q accepted", name)
+		}
+	}
+	if !cleanName("scraper-2") || !cleanName("a.b") {
+		t.Error("plain names rejected")
+	}
+}
+
+// A failed write leaves no control directory behind, and does not remove one
+// that was already there.
+func TestNewLeavesNothingOnFailure(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := newHome(t)
+	defer func(f func(string, []byte, os.FileMode) error) { writeFile = f }(writeFile)
+	writeFile = func(string, []byte, os.FileMode) error { return errors.New("disk full") }
+	err := New(l, false, home, "x", fastNew(time.Millisecond), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "disk full") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "agents", "x")); !os.IsNotExist(err) {
+		t.Fatalf("control directory remains: %v", err)
+	}
+	// Failing to rename the finished config away cleans up too.
+	writeFile = os.WriteFile
+	defer func(f func(string, string) error) { rename = f }(rename)
+	rename = func(string, string) error { return errors.New("no rename") }
+	if err := New(l, false, home, "y", fastNew(time.Millisecond), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "no rename") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(home, "agents", "y")); !os.IsNotExist(err) {
+		t.Fatalf("control directory remains: %v", err)
+	}
+}
+
+func TestNewModesIgnoreUmask(t *testing.T) {
+	for _, umask := range []int{0o077, 0o027, 0o000} {
+		l := tempLayout(t)
+		installProviders(t, l, "p")
+		home := newHome(t)
+		o := fastNew(5 * time.Millisecond)
+		o.Model = "m"
+		old := syscall.Umask(umask)
+		err := New(l, false, home, "x", o, &bytes.Buffer{})
+		rootErr := New(l, true, "", "r", o, &bytes.Buffer{})
+		syscall.Umask(old)
+		if err != nil || rootErr != nil {
+			t.Fatal(err, rootErr)
+		}
+		for _, c := range []struct {
+			ctrl      string
+			dir, file os.FileMode
+		}{
+			{filepath.Join(home, "agents", "x"), 0o750, 0o640},
+			{filepath.Join(l.RootHome(), "agents", "r"), 0o700, 0o640},
+		} {
+			di, _ := os.Stat(c.ctrl)
+			fi, _ := os.Stat(filepath.Join(c.ctrl, "config.json"))
+			if di.Mode().Perm() != c.dir || fi.Mode().Perm() != c.file {
+				t.Errorf("umask %04o: %s is %v, config.json %v; want %v and %v", umask, c.ctrl, di.Mode().Perm(), fi.Mode().Perm(), c.dir, c.file)
+			}
+		}
+	}
+}
+
+func TestNewRejectsRepeatedOption(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := newHome(t)
+	o := fastNew(time.Millisecond)
+	o.Options = []string{"effort=low", "effort=high"}
+	err := New(l, false, home, "x", o, &bytes.Buffer{})
+	if err == nil || err.Error() != "option effort given twice" {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "agents", "x")); err == nil {
+		t.Fatal("a rejected option left a control directory")
+	}
+}
+
+func TestNewOptionValueTypes(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := newHome(t)
+	o := fastNew(5 * time.Millisecond)
+	o.Options = []string{"level=2", "fast=true", "effort=low", "budget=7"}
+	if err := New(l, false, home, "x", o, &bytes.Buffer{}); err != nil {
+		t.Fatal(err)
+	}
+	c := readConfig(t, filepath.Join(home, "agents", "x", "config.json"))
+	if c.Options["level"] != float64(2) || c.Options["fast"] != true || c.Options["effort"] != "low" || c.Options["budget"] != float64(7) {
+		t.Fatalf("options %#v", c.Options)
+	}
+	// A value outside the allowed list stays a string and Validate rejects it.
+	for _, bad := range []string{"level=3", "level=two", "fast=yes", "effort=medium"} {
+		o.Options = []string{bad}
+		err := New(l, false, home, "y", o, &bytes.Buffer{})
+		if err == nil || !strings.Contains(err.Error(), "not allowed") {
+			t.Errorf("%s: got %v", bad, err)
+		}
+	}
+}
+
+func TestNewAdviceMatchesError(t *testing.T) {
+	l := tempLayout(t)
+	installProviders(t, l, "p")
+	home := t.TempDir()
+	cfg := filepath.Join(home, "config.json")
+	if err := os.WriteFile(cfg, []byte(`{"provider":"p","model":"m"}`), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := os.Open(cfg); err == nil {
+		f.Close()
+		t.Skip("running as a user that can read mode 000 files")
+	}
+	err := New(l, false, home, "x", fastNew(time.Millisecond), &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "permission denied") || strings.Contains(err.Error(), "pass --provider") {
+		t.Fatalf("got %v", err)
 	}
 }

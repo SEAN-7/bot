@@ -18,6 +18,14 @@ next wake. Write facts, not instructions.
 - A message for a subagent that cannot be started, such as one whose
   ~/agents/NAME holds only a home link to a home that is not its own, is
   dropped with a "Message to NAME dropped" note instead of waiting.
+- Subagent names for `agent new`, `remove`, `send`, `messages` and `log`
+  may not start with "." or contain control characters.
+- `agent new` removes the control directory it made if writing config.json
+  fails, sets its modes (0750, config.json 0640) whatever the umask, and
+  refuses `--option KEY=...` given twice. An option with a list of allowed
+  values accepts the text of one of them, including numbers and booleans.
+  `agent new --help` prints its usage; if the harness has not started the
+  subagent within 10 seconds it says so and exits 0.
 - A config.json larger than 1 MiB is reported as "config.json: larger than
   1 MiB". A new subagent with one is not started: its ERROR says so and you
   get a note once.

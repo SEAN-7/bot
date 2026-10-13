@@ -32,9 +32,18 @@ func Message(root bool, home, text string, now time.Time) error {
 	return queue(filepath.Join(home, ".messages"), text, now, false)
 }
 
-// cleanName reports whether name is one plain directory name.
+// cleanName reports whether name is one plain directory name: not hidden (so
+// neither "." nor ".."), without a slash, and without control characters.
 func cleanName(name string) bool {
-	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\x00")
+	if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, "/") {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // SendChild queues a message to the direct child name of the agent whose

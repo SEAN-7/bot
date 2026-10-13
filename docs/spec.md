@@ -639,20 +639,35 @@ Sources live in `plugins/<name>/` (each its own `main` package).
 `NAME` is a child of the caller, relative to its own `agents/` directory:
 `~/agents/` for an agent, `/etc/agent/agents/` for root. `messages` and
 `log` also take a deeper descendant, such as `research/agents/scraper`.
+A name must be one plain directory name: not starting with `.`, and
+without `/` or control characters.
 Root runs every command with `sudo`.
 
 - `agent daemon`: run the service (root only).
 - `agent new NAME [--provider P] [--model M] [--option k=v]...`: creates a
   child. It builds the starting config, validates it against
-  `providers.json`, creates the control directory (root's 0700, an agent's
-  0750) and writes `config.json` (0640) with an atomic dot-name rename, then waits
-  up to 10 seconds for admission and prints the new home, or fails with the
-  control directory's `ERROR`. An agent's default is a copy of its own
-  `~/config.json`; root must pass `--model`. `--provider` or `--model`
+  `providers.json`, creates the control directory and writes `config.json`
+  with an atomic dot-name rename, then waits up to 10 seconds for admission
+  and prints the new home, or fails with the control directory's `ERROR`.
+  The modes are set explicitly, whatever the umask: root's directory 0700,
+  an agent's 0750, `config.json` 0640. If anything fails once the directory
+  exists, the directory is removed again. If the daemon has not admitted
+  the child after 10 seconds, it prints that and exits 0; the directory
+  stays and `agent log NAME` shows why. An agent's default is a copy of its
+  own `~/config.json`; root must pass `--model`. `--provider` or `--model`
   starts from no options, so only `--option` applies then; `--provider` is
   needed when more than one provider is installed and the caller's config
-  does not name one. It fails if NAME exists. It adds no daemon interface:
-  it writes the same control directory an agent could create by hand.
+  does not name one (the advice to pass `--provider` and `--model` is given
+  only when the caller has no `config.json`; other read errors are shown as
+  they are). Each `--option KEY=VALUE` may be given once. An option whose
+  describe entry has `type: "integer"` takes an integer; one with a list of
+  allowed values takes the text of one of them and is stored with that
+  value's JSON type (so numbers and booleans work); any other text is
+  refused by validation. Flags may follow NAME; only `--provider`,
+  `--model` and `--option` take the next argument. A flag error is printed
+  once, and `agent new --help` prints the usage of `agent new` and exits 0.
+  It fails if NAME exists. It adds no daemon interface: it writes the same
+  control directory an agent could create by hand.
 - `agent remove NAME`: removes the direct child's control directory, first
   renaming it out of `agents/` so the daemon cannot restore its `home` link
   meanwhile. Removal and reclaim follow (see The daemon).

@@ -16,3 +16,25 @@ func TestSharingHelpRecipe(t *testing.T) {
 		}
 	}
 }
+
+// Usage says what agent new does when the daemon is slow, and agent new --help
+// has its own text.
+func TestUsageDescribesNewTimeout(t *testing.T) {
+	for _, text := range []string{Usage, NewUsage} {
+		if !strings.Contains(text, "10 seconds") || !strings.Contains(text, "has not admitted") {
+			t.Errorf("usage lacks the admission timeout:\n%s", text)
+		}
+	}
+	if !strings.HasPrefix(NewUsage, "Usage: agent new NAME") {
+		t.Errorf("NewUsage starts %q", NewUsage)
+	}
+}
+
+// The help says which directories the harness keeps closed to others.
+func TestSharingHelpNamesClosedDirectories(t *testing.T) {
+	for _, want := range []string{"~/inbox, ~/agents, ~/.messages and ~/.outputs", "0750"} {
+		if !strings.Contains(SharingHelp, want) {
+			t.Errorf("agent help lacks %q", want)
+		}
+	}
+}

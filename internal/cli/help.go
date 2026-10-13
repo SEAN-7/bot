@@ -4,7 +4,8 @@ package cli
 // ~/agents/NAME, or for root /etc/agent/agents/NAME.
 const Usage = `Usage:
   agent new NAME [--provider P] [--model M] [--option k=v]...
-                                    create a subagent; waits for the daemon to admit it
+                                    create a subagent; waits up to 10 seconds for the
+                                    daemon to admit it (see agent new --help)
   agent remove NAME                 remove a subagent and reclaim its home
   agent send NAME "text"|-          send a message to your subagent NAME; - reads stdin
   agent message "text"|-            (agents) send a message to your owner; - reads stdin
@@ -19,6 +20,9 @@ const Usage = `Usage:
 
 NAME is a direct child of yours. messages and log also accept a deeper
 descendant, such as research/agents/scraper.
+
+If the daemon has not admitted a new subagent within 10 seconds, agent new
+says so and exits 0; agent log NAME shows why. Nothing is removed then.
 `
 
 // SharingHelp is the reference for what the harness leaves to the agent: a
@@ -38,9 +42,11 @@ USER below is the user that owns the subagent's home:
 The subagent needs x on every directory leading to the shared directory, and
 x on a directory lets USER reach everything inside it that others can read
 (new files are other-readable by default; in ~ that includes your README.md,
-TASK.md and notes; ~/agents and ~/.messages are closed to others when the
-harness creates them). So share a dedicated directory, and chmod o-rwx
-whatever on the way should stay private. For example:
+TASK.md and notes). The harness keeps
+~/inbox, ~/agents, ~/.messages and ~/.outputs closed to others (0750), so x
+on ~ exposes only other-readable files you create yourself. So share a
+dedicated directory, and chmod o-rwx whatever on the way should stay private.
+For example:
 
   mkdir -p ~/share && mkdir -m 700 ~/share/NAME
   setfacl -m u:USER:x ~ ~/share
@@ -61,4 +67,22 @@ Before running agent remove NAME:
   2. Remove its grants:
        setfacl -R -x u:USER,d:u:USER ~/share/NAME
        setfacl -x u:USER ~ ~/share
+`
+
+// NewUsage is the text of agent new --help.
+const NewUsage = `Usage: agent new NAME [--provider P] [--model M] [--option k=v]...
+
+Creates the subagent NAME. An agent's default is a copy of its own
+~/config.json; root must pass --model. --provider or --model starts from no
+options, so only --option applies then. --option KEY=VALUE may be given once
+per KEY; an integer option takes a number, and an option with a list of
+allowed values takes one of them. --provider is needed when more than one is
+installed and the config does not name one.
+
+agent new checks the config, creates the subagent's control directory and
+waits up to 10 seconds for the daemon to admit it. It then prints the new
+home, or fails with the reason the daemon gave. If the daemon has not
+admitted it in time, it prints that the daemon has not admitted it yet and
+exits 0; agent log NAME shows why. If anything fails after the directory was
+created, the directory is removed.
 `
