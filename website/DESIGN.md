@@ -1,10 +1,7 @@
 # Website design language: mint
 
-The site's look, decided 2026-10-13 from four explored directions (literate
-machine, phosphor, field guide, Swiss systems). It is a minimal take on the
-phosphor direction: the site reads like a quiet terminal. This file is the
-reference for the site's look; the mascot (a later project) is designed
-inside it.
+The site reads like a quiet terminal. The mascot (`MASCOT.md`) lives inside
+this look.
 
 ## Principles
 
@@ -79,7 +76,7 @@ Sizes (desktop; phone sizes scale down in one media query):
 ### Home
 
 One centred column, max width 1120px, generous vertical space. The first
-block is a row: items 1–3 on the left, the mascot (square, up to 360px) on the right;
+block is a row: items 1–3 on the left, the mascot (square, up to 360px and 30% of the viewport width) on the right;
 under 800px the mascot moves above the headline at 240×240px.
 
 1. Headline: "an always-on agent with one tool: **the shell**." The first
@@ -91,14 +88,11 @@ under 800px the mascot moves above the headline at 240×240px.
    `--dim`, the bold lead of each idea in `--fg`, the rest in `--dim`.
 5. Footer: the version in `--dim`.
 
-Content stays sourced as today (README introduction, philosophy's three
-ideas, version from the release notes); only the markup and styles change.
-
 ### Docs
 
 - Side navigation (left margin, at least 220px): page names in `--dim`, the current page in
   `--fg` with a mint `▸`, and its h2s nested under a 1px `--line` rule.
-  Collapses to a wrapped row above the article under 800px, as today.
+  Collapses to a wrapped row above the article under 800px.
 - Article: max width 760px, centred on the page like the home column. The
   page is a three-column grid, `minmax(220px, 1fr) minmax(0, 760px) 1fr`:
   side navigation in the left margin, the article in the middle, the right
@@ -110,34 +104,8 @@ ideas, version from the release notes); only the markup and styles change.
   header, `--rule` between rows, horizontal scroll when wide.
 - Code: inline `code` on `--code` with a 3px radius; `pre` on `--code`,
   4px radius, padding 18px 20px.
-- Source path at the end of the article in mono `--dim`, linking to GitHub,
-  as today.
+- Source path at the end of the article in mono `--dim`, linking to GitHub.
 
 ### Favicon
 
-A 16×16 SVG: `--bg` rounded square with a mint block cursor, replacing the
-current `>_` mark.
-
-## Implementation
-
-All changes are in `website/`; the markdown pipeline (GitHub's API, link and
-heading rewriting, asset copying) does not change.
-
-- `style.css`: rewritten to the tokens and rules above.
-- `main.go`: the `layout` and `home` templates updated to the structure
-  above; `fonts/*.woff2` added to the embedded files and written to
-  `fonts/` in the output.
-- `fonts/`: `MartianMono.woff2`, `InstrumentSans.woff2` and both licences.
-- `favicon.svg`: redrawn.
-- `main_test.go`: `TestBuild` also checks that the fonts are written.
-- `README.md`: notes the bundled fonts and their licences; "No JavaScript"
-  stays true.
-
-Verification: `go vet ./...` and `go test ./...` in `website/`, then a local
-build with `go run . -out <tmp> -serve localhost:8000`, checked in a browser
-at desktop and phone widths.
-
-## Out of scope
-
-The mascot, which is its own project and spec, and any change to which
-documents the site publishes.
+A 16×16 SVG: `--bg` rounded square with a mint block cursor.

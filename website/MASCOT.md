@@ -1,13 +1,9 @@
 # Mascot: the glyph swarm
 
-The site's mascot, decided 2026-10-14 after exploring a ghost, a voxel figure,
-a vector wireframe, eyes and faced ASCII creatures. It has no face: it is a
-swarm of Martian Mono characters that takes any form, shaded by depth with
-the `.,:;~=!*#$@` ramp. Its home form is **listen**, a slowly turning,
-breathing sphere. It lives inside the design language in `DESIGN.md`.
-
-This project puts it on the website. A terminal version follows later; this
-spec fixes the shared definition both read, so the two cannot drift.
+A faceless swarm of Martian Mono characters that takes any form, shaded by
+depth. Its home form is **listen**, a slowly turning, breathing sphere. The
+web version (`mascot/mascot.js`) and a later terminal version read the same
+definition, `mascot/forms.json`, so they cannot drift.
 
 ## Behaviour on the home page
 
@@ -31,63 +27,11 @@ spec fixes the shared definition both read, so the two cannot drift.
 - **Cost.** It pauses while off-screen (`IntersectionObserver`) or while the
   tab is hidden, and caps the canvas pixel ratio at 2.
 
-## Layout
+## The shared definition: `forms.json`
 
-The home column widens from 920px to 1120px and its first block becomes a
-row: the existing headline, introduction and commands on the left
-(`flex: 1 1 400px`, `min-width: 0`), the swarm on the right, square, up to
-360px and at most 30% of the viewport width, so the row holds down to 800px. The
-three ideas stay below, in the left column's width.
-
-Under 800px the swarm moves above the headline, centred, 240×240px.
-
-The swarm uses mint and a lighter mint, `#c8ffe1`, for the nearest
-characters. `DESIGN.md`'s list of where mint may appear gains "the mascot".
-
-## The shared definition: `website/mascot/forms.json`
-
-Everything that decides how the mascot looks and moves is data in this one
-file. The web script reads it now; the terminal version reads the same file
-later. Code in each language only implements the shape generators, the
-physics step and the renderer.
-
-```json
-{
-  "version": 1,
-  "seed": 7,
-  "particles": { "small": 420, "large": 720, "smallBelow": 600 },
-  "ramp": ".,:;~=!*#$@",
-  "dense": "@#$%&*8",
-  "colors": { "mint": "#5cf2a0", "light": "#c8ffe1", "lightAbove": 0.82 },
-  "camera": { "distance": 3.4, "pitch": 0.2 },
-  "stagger": 0.7,
-  "scatter": [3.3, 2.1, 2.2],
-  "pointer": { "reach": 90, "push": 9, "lean": [0.9, 0.5] },
-  "home": "listen",
-  "ambient": { "every": [18, 24], "hold": 4, "idleAfter": 60,
-               "sequence": ["drift", "work", "spawn", "speak:hello"] },
-  "order": ["listen", "drift", "work", "spawn"],
-  "forms": {
-    "listen": { "shape": { "type": "sphere", "radius": 0.85 },
-                "spin": 0.3, "breathe": 0.045, "k": 34, "damping": 8.5 },
-    "drift":  { "shape": { "type": "cloud", "radii": [1.5, 0.7, 1.1] },
-                "spin": 0.12, "wander": 1, "k": 18, "damping": 6 },
-    "work":   { "shape": { "type": "cube", "half": 0.62, "edges": 0.45 },
-                "spin": 0.9, "jitter": 0.012, "k": 40, "damping": 9 },
-    "spawn":  { "shape": { "type": "bud", "parent": [-0.42, -0.05, 0, 0.78],
-                           "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2],
-                           "thread": 0.04 },
-                "sway": 0.45, "k": 30, "damping": 8 },
-    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 2.7,
-                           "depth": 0.05 },
-                "flat": true, "k": 34, "damping": 9 }
-  },
-  "font": { "width": 5, "height": 7, "glyphs": { "a": [".....", "....."] } }
-}
-```
-
-(`font.glyphs` is abbreviated here; the file holds the full 5×7 lowercase
-font `a`–`z` plus `.`, `!`, `?` and space.)
+Everything that decides how the mascot looks and moves is data in this file;
+code in each language only implements the shape generators, the physics step
+and the renderer. Keys named below are keys of that file.
 
 ### Determinism
 
@@ -137,33 +81,3 @@ is 0.3 of the canvas's shorter side, and characters fade out within 24px of
 the canvas edge so no form shows a hard cut. Brightness
 `b = clamp((1.1 − z) / 2.2)` picks the ramp character (or `dense` for a
 `flat` form), the size, and the colour (`light` above `lightAbove`).
-
-## Files
-
-- `website/mascot/forms.json`: the shared definition.
-- `website/mascot/mascot.js`: the web implementation, hand-written, no
-  libraries, about 250 lines.
-- `website/main.go`: embeds both; inlines `forms.json` into the home page as
-  `<script type="application/json" id="mascot-forms">` (no extra request) and
-  loads `mascot.js` with `defer` on the home page only.
-- `website/style.css`, the `home` template: the layout above.
-- `website/DESIGN.md`, `website/README.md`: "No JavaScript" becomes "no
-  JavaScript except the optional home-page mascot"; the mint list gains the
-  mascot.
-
-## Testing
-
-- Go: `TestBuild` checks that `mascot/mascot.js` is written, that the home
-  page contains the canvas and the inlined `forms.json`, and that doc pages
-  load neither. A test parses `forms.json` and checks every form named in
-  `home`, `order` and `ambient.sequence` exists and every font glyph is 7
-  rows of 5.
-- Browser: home at 1440, 1024 and 375px: it assembles into listen, leans and
-  scatters with the pointer, cycles an ambient form, pauses off-screen, holds
-  one still frame under reduced motion, and leaves no console errors.
-
-## Out of scope
-
-The terminal version and where it lives (a separate tool, never the `agent`
-binary); controls or interaction beyond the pointer; the cross-language test,
-which arrives with the terminal version.
