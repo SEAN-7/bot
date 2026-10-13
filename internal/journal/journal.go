@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -15,8 +16,10 @@ import (
 const stamp = "20060102T150405.000000000Z"
 
 type Writer struct {
-	f    *os.File
-	path string
+	f           *os.File
+	path        string
+	gid         int
+	attachments int
 }
 
 // Directories are 0751: a child's journal directory is nested inside its
@@ -51,7 +54,7 @@ func Create(dir string, now time.Time, gid int) (*Writer, error) {
 			os.Remove(path)
 			return nil, err
 		}
-		return &Writer{f: f, path: path}, nil
+		return &Writer{f: f, path: path, gid: gid}, nil
 	}
 }
 
@@ -130,6 +133,34 @@ func (w *Writer) Record(typ string, fields map[string]any) error {
 	return w.f.Sync()
 }
 
+// Attach saves data beside the run file as <run>-<n>.<ext>, n counting this
+// writer's attachments from 1, with the run file's mode and group. It returns
+// the path and leaves nothing behind on error.
+func (w *Writer) Attach(ext string, data []byte) (string, error) {
+	w.attachments++
+	stem := strings.TrimSuffix(w.path, ".jsonl")
+	path := stem + "-" + strconv.Itoa(w.attachments) + "." + ext
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
+	if err != nil {
+		return "", err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Chmod(fileMode)
+	}
+	if err == nil && w.gid >= 0 {
+		err = f.Chown(-1, w.gid)
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
+}
+
 // End writes the clean-end marker and closes the file.
 func (w *Writer) End(reason string) error {
 	err := w.Record("end", map[string]any{"reason": reason})
@@ -180,6 +211,6 @@ func MarkInterrupted(path string) error {
 	if err != nil {
 		return err
 	}
-	w := &Writer{f: f, path: path}
+	w := &Writer{f: f, path: path, gid: -1}
 	return w.End("interrupted")
 }

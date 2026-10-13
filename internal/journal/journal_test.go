@@ -237,3 +237,41 @@ func TestSecureTreeFixesChildJournals(t *testing.T) {
 		}
 	}
 }
+
+func TestAttach(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Create(dir, time.Date(2026, 10, 11, 12, 0, 0, 0, time.UTC), -1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stem := strings.TrimSuffix(filepath.Base(w.Path()), ".jsonl")
+	p1, err := w.Attach("jpg", []byte("a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p2, err := w.Attach("png", []byte("b"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(p1) != stem+"-1.jpg" || filepath.Base(p2) != stem+"-2.png" {
+		t.Fatalf("names %s %s", p1, p2)
+	}
+	for p, want := range map[string]string{p1: "a", p2: "b"} {
+		data, err := os.ReadFile(p)
+		if err != nil || string(data) != want {
+			t.Fatalf("%s: %q %v", p, data, err)
+		}
+		if info, _ := os.Stat(p); info.Mode().Perm() != 0o640 {
+			t.Fatalf("%s mode %v", p, info.Mode())
+		}
+	}
+	if IsRun(filepath.Base(p1)) {
+		t.Fatalf("%s looks like a run", p1)
+	}
+	if err := w.End("done"); err != nil {
+		t.Fatal(err)
+	}
+	if path, ended, err := Latest(dir); err != nil || path != w.Path() || !ended {
+		t.Fatalf("latest %s %v %v", path, ended, err)
+	}
+}
