@@ -53,6 +53,7 @@ type Config struct {
 	ReleaseNotes   string // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
 	InboxClip      int
+	ImageBudget    int // bytes of image data one conversation may show
 	Logger         *log.Logger
 }
 
@@ -78,6 +79,7 @@ func DefaultConfig(self string) Config {
 		ReleaseNotes:   notes.Text,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
+		ImageBudget:    20 << 20,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
 	}
 }

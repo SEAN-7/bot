@@ -68,8 +68,9 @@ var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image
 
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
-// order, the images shown with them. images is whether the model accepts them.
-func (a *agent) collectInbox(j recorder, images bool) ([]inboxRecord, []proto.Image, error) {
+// order, the images shown with them. images is whether the model accepts them,
+// budget how many more bytes of images the conversation may show.
+func (a *agent) collectInbox(j recorder, images bool, budget int) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
 	names, err := a.pending()
 	if err != nil || len(names) == 0 {
@@ -111,6 +112,9 @@ func (a *agent) collectInbox(j recorder, images bool) ([]inboxRecord, []proto.Im
 				content += "\n" + fmt.Sprintf(MsgInboxClipFmt, filepath.Join(a.home, file))
 			}
 		}
+		if img != nil && len(img.Data) > budget {
+			content, img = fmt.Sprintf(MsgImageBudgetFmt, filepath.Join(a.home, file)), nil
+		}
 		var image map[string]any
 		if img != nil {
 			copyPath, err := j.Attach(imageExt[img.MediaType], img.Data)
@@ -132,10 +136,22 @@ func (a *agent) collectInbox(j recorder, images bool) ([]inboxRecord, []proto.Im
 		}
 		records = append(records, r)
 		if img != nil {
+			budget -= len(img.Data)
 			shown = append(shown, proto.Image{File: file, MediaType: img.MediaType, Data: img.Data})
 		}
 	}
 	return records, shown, nil
+}
+
+// imageBytes is how many bytes of images messages show.
+func imageBytes(messages []proto.Message) int {
+	n := 0
+	for _, m := range messages {
+		for _, img := range m.Images {
+			n += len(img.Data)
+		}
+	}
+	return n
 }
 
 // label is the sender the daemon recorded when it delivered this file

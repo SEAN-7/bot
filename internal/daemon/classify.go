@@ -68,6 +68,9 @@ func classify(data []byte, size int64, path string, images bool) (text bool, con
 		}
 	}
 	if !utf8.Valid(check) {
+		if strings.HasPrefix(typ, "text/") { // e.g. Latin-1 text
+			typ = "not valid UTF-8 text"
+		}
 		return false, fmt.Sprintf(MsgBinaryFmt, typ, size, path), nil
 	}
 	return true, "", nil

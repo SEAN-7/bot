@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,5 +135,78 @@ func TestTextRunSendsNoImagesField(t *testing.T) {
 	}
 	if fileContains(h.reqLog, `"images"`) {
 		t.Fatal(`request log holds an "images" field`)
+	}
+}
+
+func TestImageBudgetWithinCollection(t *testing.T) {
+	h := newHarness(t, step("sleep 0.5", 100), done())
+	a, b, c := encodePNG(4, 4), encodeJPEG(64, 64), encodePNG(2, 2)
+	if len(b) <= len(c) {
+		t.Fatalf("b.jpg (%d bytes) must be larger than c.png (%d bytes)", len(b), len(c))
+	}
+	h.cfg.ImageBudget = len(a) + len(c)
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
+	h.drop(h.mainHome, "a.png", string(a))
+	h.drop(h.mainHome, "b.jpg", string(b))
+	h.drop(h.mainHome, "c.png", string(c))
+	records := h.waitEnds(h.mainID, 1)
+	msgs := h.requests()[1].Messages
+	last := msgs[len(msgs)-1]
+	var files []string
+	for _, img := range last.Images {
+		files = append(files, img.File)
+	}
+	if strings.Join(files, " ") != "inbox/processed/a.png inbox/processed/c.png" {
+		t.Fatalf("image files %v", files)
+	}
+	note := fmt.Sprintf(MsgImageBudgetFmt, filepath.Join(h.mainHome, "inbox/processed/b.jpg"))
+	if rec := inboxRecordFor(t, records, "inbox/processed/b.jpg"); rec["content"] != note || rec["image"] != nil {
+		t.Fatalf("b.jpg record %v, want content %q and no image", rec, note)
+	}
+}
+
+func TestImageBudgetCarriesOver(t *testing.T) {
+	h := newHarness(t, done(), done())
+	a, b := encodePNG(4, 4), encodePNG(5, 5)
+	h.cfg.ImageBudget = len(a) + len(b) - 1 // b fits alone, not after a
+	h.start()
+	h.drop(h.mainHome, "a.png", string(a))
+	h.waitEnds(h.mainID, 1)
+	h.drop(h.mainHome, "b.png", string(b))
+	h.waitEnds(h.mainID, 2)
+	msgs := h.requests()[1].Messages
+	if len(msgs) != 3 || len(msgs[0].Images) != 1 {
+		t.Fatalf("second run did not continue the conversation: %+v", msgs)
+	}
+	if len(msgs[2].Images) != 0 || !strings.Contains(msgs[2].Content, "would exceed 20 MiB") {
+		t.Fatalf("%d images, content %q", len(msgs[2].Images), msgs[2].Content)
+	}
+}
+
+// failingAttach is a journal whose image copies cannot be saved.
+type failingAttach struct{}
+
+func (failingAttach) Record(string, map[string]any) error { return nil }
+func (failingAttach) Attach(string, []byte) (string, error) {
+	return "", errors.New("disk full")
+}
+
+func TestImageJournalCopyFails(t *testing.T) {
+	h := newHarness(t)
+	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}}}
+	main := detachedMain(t, h, d)
+	if err := os.MkdirAll(filepath.Join(h.mainHome, "inbox"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	h.drop(h.mainHome, "photo.png", string(encodePNG(4, 4)))
+	records, shown, err := main.collectInbox(failingAttach{}, true, h.cfg.ImageBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := fmt.Sprintf(MsgImageJournalFmt, "disk full", filepath.Join(h.mainHome, "inbox/processed/photo.png"))
+	if len(records) != 1 || records[0].Content != note || len(shown) != 0 {
+		t.Fatalf("records %+v, %d images; want content %q and none", records, len(shown), note)
 	}
 }

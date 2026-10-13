@@ -73,7 +73,7 @@ func TestClassify(t *testing.T) {
 		{name: "WebP", data: webp, images: true, want: []string{"image/webp is not supported", path}},
 		{name: "no-image model", data: encodePNG(4, 4), images: false, want: []string{"does not accept images", path}},
 		{name: "binary", data: []byte{0xff, 0x00, 0x01, 0x02}, images: true, want: []string{"[binary file not shown:", "4 bytes", path}},
-		{name: "Latin-1 text", data: []byte("caf\xe9 au lait"), images: true, want: []string{"[binary file not shown:"}},
+		{name: "Latin-1 text", data: []byte("caf\xe9 au lait"), images: true, want: []string{"[binary file not shown: not valid UTF-8 text, 12 bytes."}},
 		{name: "UTF-8 text", data: []byte("héllo"), images: true, text: true},
 		{name: "rune cut by read limit", data: []byte("héllo")[:2], size: 100, images: true, text: true},
 		{name: "invalid byte before the cut", data: []byte("a\xffb\xc3"), size: 100, images: true, want: []string{"[binary file not shown:"}},
