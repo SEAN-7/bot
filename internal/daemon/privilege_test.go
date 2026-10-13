@@ -587,9 +587,8 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	h.drop(home, "task.md", "task-for-c")
 	h.waitEnds(childID("c"), 1)
 	exitCodes(t, h.toolOutput("cron="), true, "cron", "tmp")
-	if code := exitCode(t, "pgrep", "-u", user, "sleep"); code != 0 {
-		t.Fatalf("the detached sleep is not running: pgrep %d", code)
-	}
+	// The run can end before the backgrounded setsid has exec'd sleep.
+	waitFor(t, "the detached sleep", func() bool { return exitCode(t, "pgrep", "-u", user, "sleep") == 0 })
 	if code := exitCode(t, "crontab", "-l", "-u", user); code != 0 {
 		t.Fatalf("no crontab installed: %d", code)
 	}
