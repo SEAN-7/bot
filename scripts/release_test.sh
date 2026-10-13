@@ -11,7 +11,7 @@ sh -n install.sh
 grep -q '^# BEGIN CHECKSUMS$' install.sh
 # The token must never appear in a command's arguments, where any local user
 # (including the agent) could read it with ps.
-if grep -n 'GITHUB_TOKEN' install.sh | grep -v -e "printf 'header" -e '^[0-9]*:#' -e 'GITHUB_TOKEN="\$GITHUB_TOKEN" /usr/local/bin/agent' -e 'GITHUB_TOKEN:-' | grep .; then
+if grep -n 'GITHUB_TOKEN' install.sh | grep -v -e "printf 'header" -e '^[0-9]*:#' -e 'GITHUB_TOKEN:-' | grep .; then
 	echo "install.sh passes GITHUB_TOKEN on a command line" >&2
 	exit 1
 fi

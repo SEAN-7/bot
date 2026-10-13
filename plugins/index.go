@@ -1,5 +1,6 @@
 // Package plugins embeds the release index: each provider plugin's SHA-256
-// per architecture. `agent provider install NAME` trusts only these sums.
+// per architecture. `agent provider install NAME FILE` installs FILE only if
+// it matches.
 package plugins
 
 import (

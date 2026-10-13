@@ -4,28 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"os/user"
-	"path"
 	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
-	"github.com/SEAN-7/bot/internal/release"
 	"github.com/SEAN-7/bot/plugins"
 )
 
 type InstallOptions struct {
 	Layout        layout.Layout
-	Release       *release.Client
-	Repo, Version string
 	Arch          string
 	Index         *plugins.Index // nil: the index compiled into this binary
 	ProviderGroup string         // group allowed to run plugins; "" leaves ownership alone
@@ -33,11 +25,12 @@ type InstallOptions struct {
 	Runner        *plugin.Runner
 }
 
-// Install downloads and verifies a plugin, installs it for the provider
-// user, collects its settings into a root-only credentials file and refreshes
-// the provider cache. Nothing is written if verification fails.
-func Install(ctx context.Context, target, sha string, o InstallOptions) error {
-	name, data, err := fetch(ctx, target, sha, o)
+// Install verifies the plugin binary at file, which install.sh downloaded,
+// against the release index, installs it as name for the provider user,
+// collects its settings into a root-only credentials file and refreshes the
+// provider cache. Nothing is written if verification fails.
+func Install(ctx context.Context, name, file string, o InstallOptions) error {
+	data, err := verify(name, file, o)
 	if err != nil {
 		return err
 	}
@@ -82,63 +75,33 @@ func Install(ctx context.Context, target, sha string, o InstallOptions) error {
 	return err
 }
 
-func fetch(ctx context.Context, target, sha string, o InstallOptions) (string, []byte, error) {
-	var name, want string
-	var data []byte
-	var err error
-	if strings.HasPrefix(target, "https://") || strings.HasPrefix(target, "http://") {
-		if sha == "" {
-			return "", nil, errors.New("installing from a URL requires --sha256")
-		}
-		name = strings.TrimPrefix(path.Base(target), "plugin-")
-		name = strings.TrimSuffix(strings.TrimSuffix(name, "-linux-amd64"), "-linux-arm64")
-		want = strings.ToLower(sha)
-		if plugin.ValidName.MatchString(name) {
-			data, err = download(ctx, target)
-		}
-	} else {
-		name = target
-		idx := o.Index
-		if idx == nil {
-			loaded, err := plugins.Load()
-			if err != nil {
-				return "", nil, err
-			}
-			idx = &loaded
-		}
-		want = idx.Plugins[name]["linux-"+o.Arch]
-		if want == "" {
-			return "", nil, fmt.Errorf("no plugin %q for linux-%s in release %s", name, o.Arch, idx.Version)
-		}
-		data, err = o.Release.Asset(ctx, o.Repo, "v"+o.Version, "plugin-"+name+"-linux-"+o.Arch)
-	}
+// verify reads the plugin binary at file and checks it against the SHA-256
+// the index records for name on this architecture.
+func verify(name, file string, o InstallOptions) ([]byte, error) {
 	if !plugin.ValidName.MatchString(name) {
-		return "", nil, fmt.Errorf("invalid plugin name %q", name)
+		return nil, fmt.Errorf("invalid plugin name %q", name)
 	}
+	idx := o.Index
+	if idx == nil {
+		loaded, err := plugins.Load()
+		if err != nil {
+			return nil, err
+		}
+		idx = &loaded
+	}
+	want := idx.Plugins[name]["linux-"+o.Arch]
+	if want == "" {
+		return nil, fmt.Errorf("no plugin %q for linux-%s in release %s", name, o.Arch, idx.Version)
+	}
+	data, err := os.ReadFile(file)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
 	sum := sha256.Sum256(data)
 	if got := hex.EncodeToString(sum[:]); got != want {
-		return "", nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s", name, got, want)
+		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s; nothing installed", name, got, want)
 	}
-	return name, data, nil
-}
-
-func download(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 256<<20))
+	return data, nil
 }
 
 // writePlugin installs the binary root-owned, executable by the provider

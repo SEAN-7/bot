@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -165,33 +164,19 @@ func TestNewErrorsCreateNothing(t *testing.T) {
 	}
 }
 
-func TestReorder(t *testing.T) {
-	for _, c := range []struct{ in, want []string }{
-		{[]string{"x", "--sha256", "ab"}, []string{"--sha256", "ab", "x"}},
-		{[]string{"--sha256", "ab", "x"}, []string{"--sha256", "ab", "x"}},
-		{[]string{"x", "--sha256=ab"}, []string{"--sha256=ab", "x"}},
-		{[]string{"x", "--bogus"}, []string{"--bogus", "x"}},
-		{[]string{"--bogus", "x"}, []string{"--bogus", "x"}},
-		{[]string{"x", "--help", "y"}, []string{"--help", "x", "y"}},
-		{[]string{"x", "--", "y"}, []string{"--", "x", "y"}},
-		{[]string{"--sha256", "ab", "x", "--", "--weird", "-h"}, []string{"--sha256", "ab", "--", "x", "--weird", "-h"}},
-		{[]string{"x", "-sha256", "ab"}, []string{"-sha256", "ab", "x"}},
-	} {
-		if got := reorder(c.in); !reflect.DeepEqual(got, c.want) {
-			t.Errorf("reorder(%q) = %q, want %q", c.in, got, c.want)
+// provider install takes exactly NAME and FILE, and prints nothing but the
+// usage error otherwise.
+func TestProviderInstallUsage(t *testing.T) {
+	for _, args := range [][]string{{}, {"--help"}, {"replay"}, {"replay", "f", "extra"}} {
+		e, out := testEnv(t, 0)
+		var err error
+		stderr := captureStderr(t, func() { err = run(append([]string{"provider", "install"}, args...), e) })
+		if err == nil || err.Error() != "usage: agent provider install NAME FILE" || out.Len() != 0 || stderr != "" {
+			t.Errorf("%q: err %v, stdout %q, stderr %q", args, err, out.String(), stderr)
 		}
 	}
-}
-
-func TestProviderInstallHelpAndFlagErrors(t *testing.T) {
-	e, out := testEnv(t, 0)
-	var err error
-	stderr := captureStderr(t, func() { err = run([]string{"provider", "install", "--help"}, e) })
-	if err != nil || !strings.HasPrefix(out.String(), "Usage: agent provider install") || stderr != "" {
-		t.Fatalf("err %v, stdout %q, stderr %q", err, out.String(), stderr)
-	}
-	stderr = captureStderr(t, func() { err = run([]string{"provider", "install", "--bogus", "x"}, e) })
-	if err == nil || stderr != "" {
-		t.Fatalf("err %v, stderr %q", err, stderr)
+	e, _ := testEnv(t, 1000)
+	if err := run([]string{"provider", "install", "replay", "f"}, e); err == nil || !strings.Contains(err.Error(), "needs root") {
+		t.Errorf("as an agent: %v", err)
 	}
 }

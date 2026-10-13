@@ -90,19 +90,29 @@ main() {
 			curl -fsSL -K - -H "X-GitHub-Api-Version: 2022-11-28" "$@"
 	}
 
-	# download NAME DEST: fetch a release asset through the GitHub API.
+	# download NAME DEST: fetch an asset of this release through the GitHub API.
 	download() {
 		id=$(api -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/tags/v$VERSION" |
 			tr -d '\n' | grep -o '"url": *"[^"]*/releases/assets/[0-9]*"[^{}]*"name": *"'"$1"'"' |
 			grep -o 'assets/[0-9]*' | head -n 1 | cut -d/ -f2) || true
-		[ -n "$id" ] || die "release v$VERSION has no asset $1"
+		[ -n "$id" ] || { printf 'install: release v%s has no asset %s\n' "$VERSION" "$1" >&2; return 1; }
 		api -H "Accept: application/octet-stream" -o "$2" "https://api.github.com/repos/$REPO/releases/assets/$id"
 	}
 
+	# plugin NAME: download provider plugin NAME from this release and install
+	# it. agent provider install checks it against the checksums compiled into
+	# the new binary and installs nothing on a mismatch.
+	plugin() {
+		download "plugin-$1-linux-$ARCH" "$tmp/plugin-$1" &&
+			/usr/local/bin/agent provider install "$1" "$tmp/plugin-$1"
+	}
+
 	say "Installing agent harness v$VERSION ($ARCH)"
+	# Downloads go to a directory only root can read (mktemp -d makes it
+	# 0700), removed on exit.
 	tmp=$(mktemp -d)
 	trap finish EXIT
-	download "agent-linux-$ARCH" "$tmp/agent"
+	download "agent-linux-$ARCH" "$tmp/agent" || die "could not download agent-linux-$ARCH"
 	eval "want=\$SHA_agent_linux_$ARCH"
 	got=$(sha256sum "$tmp/agent" | cut -d' ' -f1)
 	[ "$got" = "$want" ] || die "checksum mismatch for agent-linux-$ARCH: got $got, want $want"
@@ -133,7 +143,7 @@ main() {
 	install -d -m 700 -o root -g root /etc/agent/credentials /etc/agent/agents
 	install -d -m 750 -o root -g agent-provider /etc/agent/plugins
 	install -d -m 755 -o root -g root /var/lib/agent /var/log/agent
-	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16, "repository": "%s"}\n' "$REPO" >/etc/agent/settings.json
+	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16}\n' >/etc/agent/settings.json
 	chmod 600 /etc/agent/settings.json
 
 	# Pool users agent-1 to agent-<max_agents>, before the daemon starts.
@@ -152,10 +162,11 @@ main() {
 
 	if [ "$upgrade" = yes ]; then
 		# Upgrade: keep the configuration and refresh installed plugins.
-		for plugin in /etc/agent/plugins/*; do
-			[ -f "$plugin" ] || continue
-			GITHUB_TOKEN="$GITHUB_TOKEN" /usr/local/bin/agent provider install "$(basename "$plugin")" >/dev/null ||
-				say "warning: could not update plugin $(basename "$plugin"); keeping the installed version"
+		for path in /etc/agent/plugins/*; do
+			[ -f "$path" ] || continue
+			name=$(basename "$path")
+			plugin "$name" >/dev/null ||
+				say "warning: could not update plugin $name; keeping the installed version"
 		done
 	else
 		say "Which provider plugin?"
@@ -165,7 +176,7 @@ main() {
 		2) provider=openai-compatible ;;
 		*) provider=anthropic ;;
 		esac
-		GITHUB_TOKEN="$GITHUB_TOKEN" /usr/local/bin/agent provider install "$provider"
+		plugin "$provider" || die "could not install plugin $provider"
 		while :; do
 			model=$(ask "Model ID (from the list above): ")
 			/usr/local/bin/agent provider describe | grep -qF "\"id\": \"$model\"" && break

@@ -12,7 +12,8 @@ const Usage = `Usage:
   agent messages [NAME]             print your conversation with your owner, or the one
                                     of subagent NAME (root must name an agent)
   agent log [NAME]                  print your journal, or subagent NAME's (root must name an agent)
-  agent provider install NAME|URL   install a provider plugin (root; URL needs --sha256)
+  agent provider install NAME FILE  install provider plugin NAME from the downloaded FILE,
+                                    verified against this release's checksums (root)
   agent provider describe           print providers, models and options as JSON
   agent version
   agent help                        this text

@@ -59,8 +59,7 @@ func (l Layout) ConversationFile(agentID string) string {
 func (l Layout) JournalDir(agentID string) string { return filepath.Join(l.Log, agentID) }
 
 type Settings struct {
-	MaxAgents  int    `json:"max_agents"`
-	Repository string `json:"repository"`
+	MaxAgents int `json:"max_agents"`
 }
 
 // LoadSettings reads settings.json, filling defaults for a missing file or
@@ -77,9 +76,6 @@ func LoadSettings(path string) (Settings, error) {
 	}
 	if s.MaxAgents <= 0 {
 		s.MaxAgents = 16
-	}
-	if s.Repository == "" {
-		s.Repository = "SEAN-7/bot"
 	}
 	return s, err
 }

@@ -12,21 +12,23 @@ func TestLoadSettingsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.MaxAgents != 16 || s.Repository != "SEAN-7/bot" {
+	if s.MaxAgents != 16 {
 		t.Fatalf("got %+v", s)
 	}
 }
 
+// An installation from before 0.5.0 also records "repository", which is no
+// longer read.
 func TestLoadSettingsOverrides(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
-	if err := os.WriteFile(path, []byte(`{"max_agents":3}`), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"max_agents":3,"repository":"SEAN-7/bot"}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	s, err := LoadSettings(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.MaxAgents != 3 || s.Repository != "SEAN-7/bot" {
+	if s.MaxAgents != 3 {
 		t.Fatalf("got %+v", s)
 	}
 }

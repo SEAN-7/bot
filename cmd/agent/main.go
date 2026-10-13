@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -23,7 +22,6 @@ import (
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
-	"github.com/SEAN-7/bot/internal/release"
 	"github.com/SEAN-7/bot/internal/version"
 )
 
@@ -171,7 +169,7 @@ func runner(l layout.Layout) (*plugin.Runner, error) {
 func provider(ctx context.Context, e env, args []string) error {
 	l := e.l
 	if len(args) == 0 {
-		return errors.New("usage: agent provider install NAME|URL | agent provider describe")
+		return errors.New("usage: agent provider install NAME FILE | agent provider describe")
 	}
 	root := e.root()
 	switch args[0] {
@@ -185,71 +183,25 @@ func provider(ctx context.Context, e env, args []string) error {
 		}
 		return cli.Describe(ctx, l, r, root, os.Stdout)
 	case "install":
-		flags := flag.NewFlagSet("install", flag.ContinueOnError)
-		flags.SetOutput(io.Discard)
-		sha := flags.String("sha256", "", "expected SHA-256 when installing from a URL")
-		const usage = "Usage: agent provider install NAME|URL [--sha256 HEX]"
-		if err := flags.Parse(reorder(args[1:])); err != nil {
-			if errors.Is(err, flag.ErrHelp) {
-				_, err = fmt.Fprintln(e.out, usage)
-			}
-			return err
-		}
-		if flags.NArg() != 1 {
-			return errors.New(strings.ToLower(usage[:1]) + usage[1:])
+		if len(args) != 3 {
+			return errors.New("usage: agent provider install NAME FILE")
 		}
 		if !root {
 			return errors.New("agent provider install needs root (sudo)")
 		}
-		return install(ctx, l, flags.Arg(0), *sha)
+		return install(ctx, l, args[1], args[2])
 	}
 	return fmt.Errorf("unknown provider command %q", args[0])
 }
 
-// valueFlags are the flags that take a value, as "--name value" or
-// "--name=value".
-var valueFlags = map[string]bool{"sha256": true}
-
-// reorder moves flags before positional arguments, so flags may follow them.
-// Only the flags in valueFlags take the next argument; any other flag stands
-// alone, and flag reports it if it is unknown. After "--" everything is
-// positional.
-func reorder(args []string) []string {
-	var flags, rest []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "--":
-			// Everything, before and after, is positional from here.
-			rest = append(rest, args[i+1:]...)
-			return append(append(flags, "--"), rest...)
-		case len(arg) > 1 && arg[0] == '-':
-			flags = append(flags, arg)
-			if name := strings.TrimLeft(arg, "-"); !strings.Contains(name, "=") && valueFlags[name] && i+1 < len(args) {
-				flags = append(flags, args[i+1])
-				i++
-			}
-		default:
-			rest = append(rest, arg)
-		}
-	}
-	return append(flags, rest...)
-}
-
-func install(ctx context.Context, l layout.Layout, target, sha string) error {
-	settings, err := layout.LoadSettings(l.SettingsFile())
-	if err != nil {
-		return err
-	}
+// install installs the plugin binary install.sh downloaded to file as name.
+func install(ctx context.Context, l layout.Layout, name, file string) error {
 	r, err := runner(l)
 	if err != nil {
 		return err
 	}
-	err = cli.Install(ctx, target, sha, cli.InstallOptions{
+	err = cli.Install(ctx, name, file, cli.InstallOptions{
 		Layout:        l,
-		Release:       &release.Client{API: "https://api.github.com", Token: os.Getenv("GITHUB_TOKEN")},
-		Repo:          settings.Repository,
-		Version:       version.Version,
 		Arch:          runtime.GOARCH,
 		ProviderGroup: "agent-provider",
 		Prompt:        prompt,

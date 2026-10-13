@@ -96,8 +96,8 @@ be a script the agent writes, it stays out of the harness.
 | `/var/log/agent/` | root, 0755 | Journals and conversation logs (see Journal) |
 | `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home: an agent's home while assigned, empty while free |
 
-`settings.json` holds `max_agents` (default 16) and `repository`
-(`SEAN-7/bot`). The pool holds `max_agents` users, `agent-1` to
+`settings.json` holds `max_agents` (default 16); the `repository` an older
+install wrote there is ignored. The pool holds `max_agents` users, `agent-1` to
 `agent-<max_agents>`, and bounds the whole tree, main included. A fresh
 install's main agent is `agent-1`; one upgraded from 0.3 holds the user its
 0.3 user was renamed to (`agent-16` by default, see Migration).
@@ -655,7 +655,10 @@ The daemon interprets nothing but `context_tokens`, `image_types` and
 ## Plugins
 
 Sources live in `plugins/<name>/` (each its own `main` package).
-`plugins/index.json` lists each plugin's version and per-architecture SHA-256.
+`plugins/index.json` lists each plugin's version and per-architecture SHA-256,
+and is compiled into the `agent` binary. Each is published with the release
+as `plugin-<name>-linux-<arch>`; `install.sh` downloads it and
+`agent provider install` installs it only if it matches the index.
 
 - **openai-compatible**: Chat Completions with function calling. Settings:
   `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and `OPENAI_MODELS` (`id=context_tokens`
@@ -716,12 +719,14 @@ Root runs every command with `sudo`.
   caller's own without `NAME`, a descendant's with it. With `NAME` the
   agent's current `ERROR` is shown first. Root must pass `NAME`. Works as
   root or as the agent or any of its ancestors.
-- `agent provider install NAME|URL`: requires root. `NAME` downloads that
-  plugin from this repository's matching release with `GITHUB_TOKEN` and
-  verifies it against the index compiled into the binary. `URL` requires
-  `--sha256`. Installs to `/etc/agent/plugins/`, prompts for the plugin's
-  settings into `/etc/agent/credentials/NAME.env`, and refreshes
-  `providers.json`.
+- `agent provider install NAME FILE`: requires root. `FILE` is the plugin
+  binary `install.sh` downloaded from the release. It is installed as NAME
+  only if its SHA-256 matches the one the index compiled into the binary
+  lists for NAME on this machine's architecture; otherwise nothing is
+  written and the error says so. Installs to `/etc/agent/plugins/`
+  (root:agent-provider 0750), prompts for the plugin's settings it lacks
+  into `/etc/agent/credentials/NAME.env`, and refreshes `providers.json`.
+  It downloads nothing.
 - `agent provider describe`: prints the `describe` responses of the
   installed providers as indented JSON, the shape of `providers.json`. As
   root it runs the plugins and refreshes the cache; as any other user
@@ -774,13 +779,14 @@ starting `config.json` comes from the control directory (see The daemon).
 printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
 ```
 
-It takes no options. It pins its own version and the SHA-256 of every
-release binary. It:
+It takes no options. It pins its own version and the SHA-256 of the `agent`
+binary for each architecture; that binary holds the plugins' (see Plugins).
+It:
 1. Installs the `acl` package when `setfacl` is missing (a warning if it
    cannot), detects the architecture, downloads the release binary through
-   the GitHub API with the token, and verifies its checksum. The token is
-   never written to disk and reaches curl on stdin, never in command
-   arguments.
+   the GitHub API with the token into a temporary directory only root can
+   read (removed on exit), and verifies its checksum. The token is never
+   written to disk and reaches curl on stdin, never in command arguments.
 2. Tells an upgrade from a fresh install: an upgrade is a machine with
    `/var/lib/agent/version` (every completed install writes it) or
    `/etc/agent/agents/main`; anything else is a fresh install. An upgrade
@@ -793,10 +799,13 @@ release binary. It:
    `agent-provider` user and the directories above.
 4. Creates any missing pool users `agent-1` to `agent-<max_agents>`, each
    with its own group, an empty home (2750) and no sudo.
-5. On a fresh install, asks which provider plugin to install, installs it
-   with `agent provider install`, which prompts for its settings, and asks
-   for a model. On an upgrade, refreshes the installed plugins and keeps the
-   configuration.
+5. On a fresh install, asks which provider plugin to install, downloads it
+   from the same release (as in step 1, into a temporary directory only root
+   can read, removed on exit), installs it with
+   `agent provider install NAME FILE`, which verifies it and prompts for its
+   settings, and asks for a model. On an upgrade, it downloads and installs
+   each installed plugin the same way, keeping the installed version (with a
+   warning) when that fails, and keeps the configuration.
 6. Installs the systemd service and starts the daemon, then records the
    installed version in `/var/lib/agent/version` (a failure there only
    warns: the agent is running). There is no harness heartbeat: agents
@@ -866,7 +875,10 @@ Using the replay plugin:
   `agent messages` print once and exit, `log` the `ERROR` first and only the
   newest run; `agent provider describe` prints the cache as JSON; root must
   pass NAME to `messages` and `log`, and cannot run `agent message`; control
-  directories and spools are 0750
+  directories and spools are 0750; `agent provider install` installs a
+  plugin file only when its SHA-256 matches the index for its name and
+  architecture, writes nothing otherwise, and keeps existing settings on a
+  reinstall
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
   crontabs and homes, keeps their journals readable by the former parent
