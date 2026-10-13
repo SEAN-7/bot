@@ -105,13 +105,6 @@ func (c *Client) call(req request) (response, error) {
 	return resp, nil
 }
 
-// Scan lists the control directories <home>/agents/<name>, one level deep:
-// the real directories the helper's user owns.
-func (c *Client) Scan(home string) ([]string, error) {
-	resp, err := c.call(request{Op: "scan", Path: home})
-	return resp.Paths, err
-}
-
 func (c *Client) List(dir string) ([]Entry, error) {
 	resp, err := c.call(request{Op: "list", Path: dir})
 	return resp.Entries, err
@@ -131,12 +124,6 @@ func (c *Client) Write(path string, data []byte, mode os.FileMode) error {
 
 func (c *Client) Rename(from, to string) error {
 	_, err := c.call(request{Op: "rename", Path: from, Path2: to})
-	return err
-}
-
-// Mkdir creates path and its missing parents with mode (less the umask).
-func (c *Client) Mkdir(path string, mode os.FileMode) error {
-	_, err := c.call(request{Op: "mkdir", Path: path, Mode: uint32(mode.Perm())})
 	return err
 }
 

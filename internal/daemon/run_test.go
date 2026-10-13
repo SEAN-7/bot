@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -190,6 +191,52 @@ func TestJournalSymlinkRepaired(t *testing.T) {
 	h.waitEnds(h.mainID, 1)
 	if target, err := os.Readlink(filepath.Join(h.mainHome, "journal")); err != nil || target != h.cfg.JournalDir(h.mainID) {
 		t.Fatalf("journal link %q %v", target, err)
+	}
+}
+
+// countRecorder counts the journal records it is given.
+type countRecorder struct{ n *int }
+
+func (r countRecorder) Record(string, map[string]any) error { *r.n++; return nil }
+func (countRecorder) Attach(string, []byte) (string, error) {
+	return "", errors.New("no attachments")
+}
+
+// Collecting the inbox makes inbox/processed again if the agent removed it,
+// follows a link the agent put in its place to a directory, and fails
+// before recording anything when it leads nowhere.
+func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
+	h := newHarness(t)
+	main := detachedMain(t, h, &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}}})
+	inbox := filepath.Join(h.mainHome, "inbox")
+	processed := filepath.Join(inbox, "processed")
+	var recorded int
+	j := countRecorder{&recorded}
+	if err := os.MkdirAll(inbox, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(inbox, "a.md"), []byte("a"), 0o644)
+	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+		t.Fatalf("removed: %v %v", records, err)
+	}
+	if info, err := os.Lstat(processed); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
+		t.Fatalf("processed not made again: %v %v", info, err)
+	}
+	elsewhere := t.TempDir()
+	os.RemoveAll(processed)
+	os.Symlink(elsewhere, processed)
+	os.WriteFile(filepath.Join(inbox, "b.md"), []byte("b"), 0o644)
+	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+		t.Fatalf("link: %v %v", records, err)
+	}
+	if _, err := os.Stat(filepath.Join(elsewhere, "b.md")); err != nil {
+		t.Fatalf("link not followed: %v", err)
+	}
+	os.Remove(processed)
+	os.WriteFile(processed, nil, 0o644)
+	os.WriteFile(filepath.Join(inbox, "c.md"), []byte("c"), 0o644)
+	if _, _, err := main.collectInbox(j, nil, 0); err == nil || recorded != 2 {
+		t.Fatalf("a file: %d records, %v", recorded, err)
 	}
 }
 

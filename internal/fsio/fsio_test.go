@@ -188,15 +188,10 @@ func TestSymlinkReplaces(t *testing.T) {
 	}
 }
 
-func TestRenameMkdirRemove(t *testing.T) {
+func TestRenameRemove(t *testing.T) {
 	c, dir := start(t), t.TempDir()
-	if err := c.Mkdir(filepath.Join(dir, "a", "b"), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o750); err != nil {
 		t.Fatal(err)
-	}
-	for _, d := range []string{filepath.Join(dir, "a"), filepath.Join(dir, "a", "b")} {
-		if info, err := os.Stat(d); err != nil || info.Mode().Perm() != 0o750 {
-			t.Fatalf("%s: %v %v", d, info, err)
-		}
 	}
 	os.WriteFile(filepath.Join(dir, "x"), []byte("1"), 0o644)
 	if err := c.Rename(filepath.Join(dir, "x"), filepath.Join(dir, "a", "b", "x")); err != nil {
@@ -316,88 +311,6 @@ func TestHelperCallTimeout(t *testing.T) {
 	}
 }
 
-func controlDir(t *testing.T, home, name string) string {
-	t.Helper()
-	dir := filepath.Join(home, "agents", name)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func TestScanFindsControlDirs(t *testing.T) {
-	// Every real directory the user owns is a control directory, whatever it
-	// holds: the daemon decides what it is.
-	c, home := start(t), t.TempDir()
-	b, a := controlDir(t, home, "b"), controlDir(t, home, "a")
-	empty := filepath.Join(home, "agents", "empty")
-	os.MkdirAll(empty, 0o755)
-	linked := filepath.Join(home, "agents", "linked")
-	os.MkdirAll(linked, 0o755)
-	os.Symlink(filepath.Join(t.TempDir(), "home"), filepath.Join(linked, "home"))
-	// A home that is a real directory or a regular file is no link, but
-	// the control directory is still found.
-	homeDir := filepath.Join(home, "agents", "homedir")
-	os.MkdirAll(filepath.Join(homeDir, "home"), 0o755)
-	homeFile := filepath.Join(home, "agents", "homefile")
-	os.MkdirAll(homeFile, 0o755)
-	os.WriteFile(filepath.Join(homeFile, "home"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(home, "agents", "file"), []byte("x"), 0o644)
-	os.MkdirAll(filepath.Join(home, "agents", "a", "home", "agents", "deep"), 0o755) // not scanned: one level
-	got, err := c.Scan(home)
-	want := []string{a, b, empty, homeDir, homeFile, linked}
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v %v", got, err)
-	}
-}
-
-func TestScanSkipsSymlinks(t *testing.T) {
-	c, home := start(t), t.TempDir()
-	real := t.TempDir()
-	controlDir(t, real, "x")
-	// agents/ itself a symlink: nothing is found through it.
-	os.Symlink(filepath.Join(real, "agents"), filepath.Join(home, "agents"))
-	if got, err := c.Scan(home); err != nil || len(got) != 0 {
-		t.Fatalf("symlinked agents: got %v %v", got, err)
-	}
-	os.Remove(filepath.Join(home, "agents"))
-	// agents/x a symlink to a real control directory, agents/z a genuine
-	// control directory.
-	os.MkdirAll(filepath.Join(home, "agents"), 0o755)
-	os.Symlink(filepath.Join(real, "agents", "x"), filepath.Join(home, "agents", "x"))
-	z := controlDir(t, home, "z")
-	got, err := c.Scan(home)
-	if err != nil || !reflect.DeepEqual(got, []string{z}) {
-		t.Fatalf("got %v %v", got, err)
-	}
-}
-
-// A directory in agents/ that another user owns is not a control directory
-// of this helper's user. Only root can make one, so the test needs root.
-func TestScanSkipsOtherUsersDirs(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root to give a directory to another user")
-	}
-	c, home := start(t), t.TempDir()
-	mine, theirs := controlDir(t, home, "mine"), controlDir(t, home, "theirs")
-	if err := os.Lchown(theirs, 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := c.Scan(home); err != nil || !reflect.DeepEqual(got, []string{mine}) {
-		t.Fatalf("got %v %v", got, err)
-	}
-	// agents/ itself owned by another user: nothing is found.
-	if err := os.Lchown(filepath.Join(home, "agents"), 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := c.Scan(home); err != nil || len(got) != 0 {
-		t.Fatalf("got %v %v", got, err)
-	}
-}
-
 // Private leaves a directory another user owns alone and returns it. Only
 // root can make one, so the test needs root.
 func TestPrivateSkipsOtherUsersDirs(t *testing.T) {
@@ -417,13 +330,6 @@ func TestPrivateSkipsOtherUsersDirs(t *testing.T) {
 	}
 	if info, _ := os.Stat(theirs); info.Mode().Perm() != 0o755 {
 		t.Fatalf("another user's directory changed: %v", info.Mode())
-	}
-}
-
-func TestScanMissingHome(t *testing.T) {
-	c := start(t)
-	if got, err := c.Scan(filepath.Join(t.TempDir(), "missing")); err != nil || len(got) != 0 {
-		t.Fatalf("got %v %v", got, err)
 	}
 }
 

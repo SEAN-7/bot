@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -270,7 +271,7 @@ func (d *daemon) reconcile() {
 	tree := []*agent{d.root}
 	for i := 0; i < len(tree); i++ {
 		a := tree[i]
-		ctrls, err := a.fs.Scan(a.home)
+		ctrls, err := controlDirs(a)
 		if err != nil {
 			// Keep what is running rather than treat a failing helper as removal.
 			a.logf("scan: %v", err)
@@ -359,9 +360,44 @@ func joinID(parent, name string) string {
 	return parent + "/agents/" + name
 }
 
+// controlDirs lists a's control directories, home/agents/NAME, sorted: the
+// real directories (never links) in a real agents/ directory, all owned by
+// a's user. The daemon decides from what each holds whether it is an agent.
+// It looks one level deep only; deeper agents belong to their own users. An
+// agents/ that is missing, a link, another user's or unreachable holds none.
+func controlDirs(a *agent) ([]string, error) {
+	cred, err := a.cred()
+	if err != nil {
+		return nil, err
+	}
+	uid := credUID(cred)
+	dir := filepath.Join(a.home, "agents")
+	e, err := a.fs.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+		return nil, nil
+	} else if err != nil {
+		return nil, err
+	}
+	if e.Type != "dir" || e.UID != uid {
+		return nil, nil
+	}
+	entries, err := a.fs.List(dir)
+	if err != nil {
+		return nil, err
+	}
+	var ctrls []string
+	for _, e := range entries {
+		if e.Type == "dir" && e.UID == uid {
+			ctrls = append(ctrls, filepath.Join(dir, e.Name))
+		}
+	}
+	sort.Strings(ctrls)
+	return ctrls, nil
+}
+
 // validControlDir accepts only home/agents/NAME with one clean component.
-// Scan results come from a process the agent user could tamper with, and
-// journal paths are derived from them.
+// controlDirs's results come from a process the agent user could tamper
+// with, and journal paths are derived from them.
 func validControlDir(home, dir string) bool {
 	base := filepath.Base(dir)
 	return base != "." && base != ".." && base != "/" && dir == filepath.Join(home, "agents", base)

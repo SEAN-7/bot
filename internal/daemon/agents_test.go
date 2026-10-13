@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -276,7 +277,9 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
 		t.Errorf("followed a link: %v", info.Mode())
 	}
-	if info, _ := os.Lstat(spools); !info.Mode().IsRegular() {
+	// The empty file is also a message in main's spool, which the daemon
+	// may have delivered and removed by now; it must not become a directory.
+	if info, err := os.Lstat(spools); err == nil && !info.Mode().IsRegular() {
 		t.Errorf(".messages/agents file replaced: %v", info.Mode())
 	}
 }
@@ -408,6 +411,103 @@ func TestRestartKeepsChildHome(t *testing.T) {
 	h.drop(home, "task.md", "work")
 	if end := lastEnd(h.waitEnds(childID("c"), 1)); end != "done" {
 		t.Fatal(end)
+	}
+}
+
+// discoverer is an agent with its own empty home, its helper running as us.
+func discoverer(t *testing.T) *agent {
+	t.Helper()
+	h := newHarness(t)
+	a := detachedMain(t, h, &daemon{cfg: h.cfg})
+	a.home = t.TempDir()
+	return a
+}
+
+func emptyControlDir(t *testing.T, home, name string) string {
+	t.Helper()
+	dir := filepath.Join(home, "agents", name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestControlDirsFindsRealDirs(t *testing.T) {
+	// Every real directory the user owns is a control directory, whatever it
+	// holds: the daemon decides what it is.
+	a := discoverer(t)
+	b, c := writeConfig(t, filepath.Join(a.home, "agents", "b")), writeConfig(t, filepath.Join(a.home, "agents", "a"))
+	empty := emptyControlDir(t, a.home, "empty")
+	linked := emptyControlDir(t, a.home, "linked")
+	os.Symlink(t.TempDir(), filepath.Join(linked, "home"))
+	// A home that is a real directory or a regular file is no link, but
+	// the control directory is still found.
+	homeDir := emptyControlDir(t, a.home, "homedir")
+	os.Mkdir(filepath.Join(homeDir, "home"), 0o755)
+	homeFile := emptyControlDir(t, a.home, "homefile")
+	os.WriteFile(filepath.Join(homeFile, "home"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(a.home, "agents", "file"), []byte("x"), 0o644)
+	os.MkdirAll(filepath.Join(c, "home", "agents", "deep"), 0o755) // one level only
+	got, err := controlDirs(a)
+	if want := []string{c, b, empty, homeDir, homeFile, linked}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v %v, want %v", got, err, want)
+	}
+}
+
+func TestControlDirsSkipsSymlinks(t *testing.T) {
+	a, real := discoverer(t), t.TempDir()
+	writeConfig(t, filepath.Join(real, "agents", "x"))
+	// agents/ itself a symlink: nothing is found through it.
+	os.Symlink(filepath.Join(real, "agents"), filepath.Join(a.home, "agents"))
+	if got, err := controlDirs(a); err != nil || len(got) != 0 {
+		t.Fatalf("symlinked agents: got %v %v", got, err)
+	}
+	os.Remove(filepath.Join(a.home, "agents"))
+	// agents/x a symlink to a real control directory, agents/z a genuine
+	// one.
+	os.Mkdir(filepath.Join(a.home, "agents"), 0o755)
+	os.Symlink(filepath.Join(real, "agents", "x"), filepath.Join(a.home, "agents", "x"))
+	z := writeConfig(t, filepath.Join(a.home, "agents", "z"))
+	if got, err := controlDirs(a); err != nil || !reflect.DeepEqual(got, []string{z}) {
+		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+func TestControlDirsWithoutAgentsDir(t *testing.T) {
+	a := discoverer(t)
+	if got, err := controlDirs(a); err != nil || len(got) != 0 {
+		t.Fatalf("no agents/: got %v %v", got, err)
+	}
+	a.home = filepath.Join(a.home, "missing")
+	if got, err := controlDirs(a); err != nil || len(got) != 0 {
+		t.Fatalf("no home: got %v %v", got, err)
+	}
+	os.WriteFile(filepath.Join(filepath.Dir(a.home), "missing"), []byte("x"), 0o644)
+	if got, err := controlDirs(a); err != nil || len(got) != 0 {
+		t.Fatalf("home a file: got %v %v", got, err)
+	}
+}
+
+// A directory in agents/ that another user owns is not a control directory
+// of this agent's user, nor is anything in an agents/ another user owns.
+// Only root can make one, so the test needs root.
+func TestControlDirsSkipsOtherUsersDirs(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give a directory to another user")
+	}
+	a := discoverer(t)
+	mine, theirs := emptyControlDir(t, a.home, "mine"), emptyControlDir(t, a.home, "theirs")
+	if err := os.Lchown(theirs, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := controlDirs(a); err != nil || !reflect.DeepEqual(got, []string{mine}) {
+		t.Fatalf("got %v %v", got, err)
+	}
+	if err := os.Lchown(filepath.Join(a.home, "agents"), 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := controlDirs(a); err != nil || len(got) != 0 {
+		t.Fatalf("got %v %v", got, err)
 	}
 }
 

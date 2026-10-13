@@ -14,7 +14,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"syscall"
 )
@@ -40,7 +39,7 @@ type request struct {
 	Data  []byte   `json:"data,omitempty"`
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
-	Mode  uint32   `json:"mode,omitempty"` // mkdir's and write's permission bits
+	Mode  uint32   `json:"mode,omitempty"` // write's permission bits
 }
 
 type response struct {
@@ -82,9 +81,6 @@ func Serve(r io.Reader, w io.Writer) error {
 
 func handle(req request) (response, error) {
 	switch req.Op {
-	case "scan":
-		paths, err := scan(req.Path)
-		return response{Paths: paths}, err
 	case "clear":
 		return response{}, clearDir(req.Path)
 	case "purge_owned":
@@ -126,8 +122,6 @@ func handle(req request) (response, error) {
 		return response{Paths: skipped}, err
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
-	case "mkdir":
-		return response{}, os.MkdirAll(req.Path, os.FileMode(req.Mode).Perm())
 	case "remove":
 		return response{}, os.RemoveAll(req.Path)
 	case "unlink":
@@ -239,37 +233,6 @@ func private(paths []string) ([]string, error) {
 		}
 	}
 	return skipped, nil
-}
-
-// scan returns the control directories <home>/agents/<name>, sorted: every
-// real directory there owned by this user. The daemon decides from what each
-// holds whether it is an agent. It looks one level deep only; deeper agents
-// belong to their own users.
-func scan(home string) ([]string, error) {
-	agents := filepath.Join(home, "agents")
-	if !ownedDir(agents) {
-		return nil, nil // missing, or a symlink
-	}
-	items, err := os.ReadDir(agents)
-	if err != nil {
-		return nil, err
-	}
-	var found []string
-	for _, item := range items {
-		dir := filepath.Join(agents, item.Name())
-		if ownedDir(dir) {
-			found = append(found, dir)
-		}
-	}
-	sort.Strings(found)
-	return found, nil
-}
-
-// ownedDir reports whether path is a real directory (not a symlink) owned by
-// this user.
-func ownedDir(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.IsDir() && owner(info) == os.Getuid()
 }
 
 func owner(info fs.FileInfo) int {

@@ -158,16 +158,15 @@ separate process is the reliable way to do this.) If a helper dies, the
 daemon restarts it; operations in flight fail and the affected run is
 retried.
 
-Helper operations: `scan` (the real directories in `agents/` that the
-helper's user owns), `list` (directory entries with type, size and owner),
+Helper operations: `list` (directory entries with type, size and owner),
 `read` (path, byte limit; regular files only), `write` (atomic:
 dot-prefixed temporary file then rename, with the mode given), `private`
 (make each path a real directory: create a missing one 0750, closed to
 others, and keep an existing one the user owns as it is; never following a
 link, and leaving alone, and returning, what is not a directory the user
-owns, and anything below it), `rename`, `mkdir`,
-`remove` (recursive, never following symlinks), `unlink` (one entry, never a
-directory's contents), `symlink` (create or replace), `clear` (empty a
+owns, and anything below it), `rename`, `remove` (recursive, never
+following symlinks), `unlink` (one entry, never a directory's contents),
+`symlink` (create or replace), `clear` (empty a
 directory, never following symlinks), `purge_owned` (the user's files in
 the shared temporary directories), `stat` (size, mtime, type, mode, owner
 uid, device and inode, and a symlink's target, without following symlinks
@@ -220,10 +219,11 @@ agent user cannot read another user's process environment.
   once a second. Each poll first finishes any reclaim left in progress (see
   Reclaim), then walks the tree, then collects messages.
 - **Discovery.** The tree is walked breadth-first from root, each node's
-  `agents/` directory scanned through its own helper, never following
-  symlinks. A control directory is a real directory (not a symlink) at
-  `<home>/agents/<name>`, owned by that node's user (root for
-  `/etc/agent/agents/`). One the daemon does not run yet is admitted, in
+  `agents/` directory checked (`stat`) and listed through its own helper,
+  never following symlinks. A control directory is a real directory (not a
+  symlink) at `<home>/agents/<name>`, owned by that node's user (root for
+  `/etc/agent/agents/`), in an `agents/` that is itself a real directory
+  that user owns. One the daemon does not run yet is admitted, in
   this order:
   1. with its own user, when `pool.json` records one for its id (a daemon
      restart; the home is kept, and a missing `home` link is restored);
@@ -849,7 +849,10 @@ Using the replay plugin:
   parent's inbox as `agents/NAME` and its conversation log, and a top-level
   agent's reaches its log alone; a spool file not owned by the sender is
   ignored, and root's spool is private
-- discovery: a restart keeps every agent's home
+- discovery: a restart keeps every agent's home; every real directory in
+  `agents/` the user owns is a control directory whatever it holds, one
+  level deep; a symlinked `agents/` or entry, another user's directory and
+  a missing `agents/` give none
 - isolation: an agent cannot write its parent's or a sibling's home, its
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither; a child let through its parent's
