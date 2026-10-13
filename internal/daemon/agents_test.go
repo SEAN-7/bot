@@ -154,7 +154,7 @@ func TestRemovalStopsAgent(t *testing.T) {
 
 // removingSystem moves the control directory ctrl away, as agent remove
 // does, when admission enables the child's linger: after the scan, before
-// the control directory is closed and the home link written.
+// the home link is written.
 type removingSystem struct {
 	*fakeSystem
 	ctrl  string
@@ -180,7 +180,7 @@ func TestRemoveDuringAdmissionNotUndone(t *testing.T) {
 	makeChild(t, h, "x", true)
 	waitFor(t, "admission ended", func() bool {
 		logs := h.logs.String()
-		return strings.Contains(logs, childID("x")+": not started: control directory") ||
+		return strings.Contains(logs, childID("x")+": not started: home link") ||
 			strings.Contains(logs, childID("x")+": admitted")
 	})
 	time.Sleep(10 * h.cfg.Poll)
@@ -224,15 +224,11 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 		}
 	}
 	// The harness's directories are its ancestors' to read (the home's
-	// group), not its children's, should it let them through its home; so
-	// is its control directory, created 0755 here.
+	// group), not its children's, should it let them through its home.
 	for _, p := range []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents", ".outputs"} {
 		if info, err := os.Lstat(filepath.Join(home, p)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
 			t.Fatalf("%s: %v %v", p, info, err)
 		}
-	}
-	if info, _ := os.Stat(ctrl); info.Mode().Perm() != 0o750 {
-		t.Fatalf("control directory %v", info.Mode())
 	}
 	h.drop(home, "task.md", "work")
 	h.waitEnds(childID("c"), 1) // journals are keyed by the path from root
@@ -248,68 +244,20 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 	}
 }
 
-// TestRestartTightensHarnessDirs: the harness's directories that an earlier
-// release left open to others are closed to them when the agent is admitted
-// again, keeping their group's bits, and so are its control directories,
-// through its parent; root's stay 0700. No link is followed, and what is not
-// a directory is left alone.
-func TestRestartTightensHarnessDirs(t *testing.T) {
-	h := newHarness(t)
-	if err := os.Chmod(h.mainCtrl, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	h.start()
-	ctrl := makeChild(t, h, "c", true)
-	home := h.childHome(ctrl)
-	h.stop()
-	open := map[string]os.FileMode{"inbox": 0o755, "inbox/processed": 0o755, "agents": 0o775, ".messages": 0o755, ".messages/agents": 0o705}
-	for p, mode := range open {
-		path := filepath.Join(h.mainHome, p)
-		if err := os.MkdirAll(path, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		os.Chmod(path, mode)
-	}
-	os.Chmod(ctrl, 0o755)
-	outside := filepath.Join(h.root, "outside")
-	os.Mkdir(outside, 0o755)
-	os.Chmod(outside, 0o755)
-	for _, dir := range []string{h.mainHome, home} {
-		os.Remove(filepath.Join(dir, ".outputs"))
-	}
-	os.Symlink(outside, filepath.Join(h.mainHome, ".outputs"))
-	os.WriteFile(filepath.Join(home, ".outputs"), []byte("mine"), 0o644)
-	h.start()
-	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
-	for p, want := range map[string]os.FileMode{"inbox": 0o750, "inbox/processed": 0o750, "agents": 0o770, ".messages": 0o750, ".messages/agents": 0o700} {
-		if info, _ := os.Lstat(filepath.Join(h.mainHome, p)); info.Mode().Perm() != want {
-			t.Errorf("%s: %v, want %v", p, info.Mode(), want)
-		}
-	}
-	for path, want := range map[string]os.FileMode{ctrl: 0o750, h.mainCtrl: 0o700, outside: 0o755} {
-		if info, _ := os.Stat(path); info.Mode().Perm() != want {
-			t.Errorf("%s: %v, want %v", path, info.Mode(), want)
-		}
-	}
-	if info, _ := os.Lstat(filepath.Join(h.mainHome, ".outputs")); info.Mode()&fs.ModeSymlink == 0 {
-		t.Errorf(".outputs link replaced: %v", info.Mode())
-	}
-	if got := fileText(t, filepath.Join(home, ".outputs")); got != "mine" {
-		t.Errorf("c's .outputs file %q", got)
-	}
-}
-
-// A harness directory left alone because it is not a real directory the
-// agent owns (a link, a file) is named in the service log once per daemon
-// run, so a directory left open is visible, also when admission is retried.
+// A harness directory that is not a real directory the agent owns (a link,
+// a file) is left alone, no link followed, and named in the service log once
+// per daemon run, so a directory left open is visible, also when admission
+// is retried.
 func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	h := newHarness(t)
 	sys := h.cfg.System.(*fakeSystem)
 	h.start()
 	h.stop()
 	outputs, spools := filepath.Join(h.mainHome, ".outputs"), filepath.Join(h.mainHome, ".messages", "agents")
+	outside := t.TempDir()
+	os.Chmod(outside, 0o755)
 	os.RemoveAll(outputs)
-	os.Symlink(t.TempDir(), outputs)
+	os.Symlink(outside, outputs)
 	os.RemoveAll(spools)
 	os.WriteFile(spools, nil, 0o644)
 	sys.setFail("linger agent-1", errors.New("linger failed"))
@@ -321,6 +269,15 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 		if n := strings.Count(h.logs.String(), "main: not closed to others: "+p+" "); n != 1 {
 			t.Errorf("%s logged %d times:\n%s", p, n, h.logs)
 		}
+	}
+	if info, _ := os.Lstat(outputs); info.Mode()&fs.ModeSymlink == 0 {
+		t.Errorf(".outputs link replaced: %v", info.Mode())
+	}
+	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
+		t.Errorf("followed a link: %v", info.Mode())
+	}
+	if info, _ := os.Lstat(spools); !info.Mode().IsRegular() {
+		t.Errorf(".messages/agents file replaced: %v", info.Mode())
 	}
 }
 

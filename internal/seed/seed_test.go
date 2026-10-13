@@ -15,12 +15,9 @@ func TestSeedReadmeCoversTopics(t *testing.T) {
 	}
 }
 
-// The README names no path that 0.4.0 removed, and leaves the sharing recipe
-// to agent help.
-func TestSeedReadmeDropsOldLayout(t *testing.T) {
-	for _, old := range []string{"/var/log/agent/messages.jsonl", "~/agents/NAME/config.json", "setfacl", "pauses"} {
-		if strings.Contains(README, old) {
-			t.Errorf("README still has %q", old)
-		}
+// The README leaves the sharing recipe to agent help.
+func TestSeedReadmeLeavesSharingToHelp(t *testing.T) {
+	if strings.Contains(README, "setfacl") {
+		t.Error("README has the setfacl recipe")
 	}
 }

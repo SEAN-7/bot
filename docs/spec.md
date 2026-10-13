@@ -98,7 +98,6 @@ be a script the agent writes, it stays out of the harness.
 | `/var/lib/agent/version` | root, 0644 | The installed version, written by `install.sh` |
 | `/var/log/agent/` | root, 0755 | Journals and conversation logs (see Journal) |
 | `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home: an agent's home while assigned, empty while free |
-| `/home/agent` | root, symlink | Only on installations upgraded from 0.3: a link to the main agent's home |
 
 `settings.json` holds `max_agents` (default 16) and `repository`
 (`SEAN-7/bot`). The pool holds `max_agents` users, `agent-1` to
@@ -167,11 +166,10 @@ Helper operations: `scan` (the real directories in `agents/` that the
 helper's user owns), `list` (directory entries with type, size and owner),
 `read` (path, byte limit; regular files only), `write` (atomic:
 dot-prefixed temporary file then rename, with the mode given), `private`
-(make each path a real directory closed to others: create a missing one
-0750 if the request asks for it, else fail there; remove the permissions
-for others from an existing one the user owns, keeping the rest of its mode; never following a link, and leaving
-alone, and returning, what is not a directory the user owns, and anything
-below it), `rename`, `mkdir`,
+(make each path a real directory: create a missing one 0750, closed to
+others, and keep an existing one the user owns as it is; never following a
+link, and leaving alone, and returning, what is not a directory the user
+owns, and anything below it), `rename`, `mkdir`,
 `remove` (recursive, never following symlinks), `unlink` (one entry, never a
 directory's contents), `symlink` (create or replace), `clear` (empty a
 directory, never following symlinks), `purge_owned` (the user's files in
@@ -223,12 +221,8 @@ agent user cannot read another user's process environment.
   agent's home could be cleared or handed to another agent: the error says
   to restore `/var/lib/agent/pool.json` from a backup, or move the journals
   somewhere only root can read (a fresh install has neither, and starts);
-  refuse to start when `pool.json` holds an agent
-  id that is an absolute path, as releases before 0.4.0 wrote, since the
-  daemon would take those agents for removed and wipe their homes (such a
-  tree upgrades with the v0.4.0 `install.sh` first); resolve the provider
-  user and the pool users (missing ones are logged, and agents are limited to
-  the rest); start root's helper; then poll about
+  resolve the provider user and the pool users (missing ones are logged,
+  and agents are limited to the rest); start root's helper; then poll about
   once a second. Each poll first finishes any reclaim left in progress (see
   Reclaim), then walks the tree, then collects messages.
 - **Discovery.** The tree is walked breadth-first from root, each node's
@@ -255,23 +249,21 @@ agent user cannot read another user's process environment.
   helper; when its entry records no release notes seen (a new agent),
   records the running version; for a user new to this agent, clears what a
   previous holder left in the home (reclaim normally leaves it empty); sets
-  the members of the user's group to the agent's ancestors other than root; makes the harness's directories `inbox/`, `inbox/processed/`,
-  `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` real
-  directories closed to others (`private`: missing ones are created 0750,
-  and existing ones, such as an earlier release's 0755 ones, lose their
-  permissions for others; a link, a file or another user's directory of
-  that name is left alone, and the service log names it once per daemon
-  run) and
+  the members of the user's group to the agent's ancestors other than root;
+  creates the harness's directories `inbox/`, `inbox/processed/`,
+  `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` where
+  missing, 0750, closed to others (`private`: existing ones are kept as
+  they are; a link, a file or another user's directory of that name is
+  left alone, and the service log names it once per daemon run) and
   writes the seed `README.md` and `TASK.md` where missing; moves the
   starting `config.json` from the control directory into the home (written
   through the agent's helper, removed through the parent's; a home that
   already has one keeps it, and the parent's is renamed
   `config.json.ignored`); enables lingering; creates its journal directory;
-  closes its control directory to others the same way, through the
-  parent's helper (root's are 0700 and stay so), but never creates it: if
-  `agent remove` moved it away since the scan, admission stops there and
-  the agent is not started; and writes the `home`
-  symlink into the control directory. Every step goes through the helpers,
+  and writes the `home` symlink into the control directory, through the
+  parent's helper, but never creates the directory: if `agent remove`
+  moved it away since the scan, admission stops there and the agent is not
+  started. Every step goes through the helpers,
   and a failed step is retried at the next poll. A new agent whose
   starting `config.json` is larger than 1 MiB is not given a user: the
   daemon writes "config.json: larger than 1 MiB" to its `ERROR` and the
@@ -304,11 +296,7 @@ agent user cannot read another user's process environment.
   disables lingering; removes its crontab; stops its user manager and kills
   every remaining process of the uid until none is left; removes its
   home's contents and its files in `/tmp`, `/var/tmp` and `/dev/shm`
-  (through its helper, after its processes are gone); removes every
-  root-owned symlink directly in `/home` whose target, made absolute
-  against `/home` when relative and cleaned, is its home (such as
-  `/home/agent`), never following one, so no old path leads into the next
-  holder's home; clears
+  (through its helper, after its processes are gone); clears
   its group's members; and moves its journal directory's group to the
   nearest remaining ancestor's group (root's for a top-level agent), so the
   next holder of the user cannot read them. Only then is the user marked
@@ -344,12 +332,17 @@ agent user cannot read another user's process environment.
 - While a Stat or lookup error persists for a not-yet-running child's
   control directory (for example a parent setting it to mode 000), messages
   for that child wait and the error is logged once.
-- The harness closes its directories only to others. If an agent sets a
-  default ACL on `~` naming a child's user (`setfacl -d -m u:USER:...`),
-  the harness's directories created there later inherit that entry, and
-  closing them to others leaves it, so the child can list and read them.
-  `agent help` says to set default ACLs on the share directory only, never
-  on `~`.
+- The harness creates its directories closed only to others. If an agent
+  sets a default ACL on `~` naming a child's user (`setfacl -d -m
+  u:USER:...`), the harness's directories created there later inherit that
+  entry, so the child can list and read them. `agent help` says to set
+  default ACLs on the share directory only, never on `~`.
+- Admission only creates the harness's directories and leaves existing ones
+  as they are, so one the agent opened to others itself stays open.
+- Reclaim leaves the links in `/home`. On an installation upgraded from 0.3,
+  `/home/agent` leads to the main agent's home (see Migration); the
+  operator removes it by hand, or it would lead into the next holder's home
+  if `main` were removed.
 
 ## The loop (per agent)
 
@@ -515,13 +508,9 @@ Nothing reaches the human except from a top-level agent.
 - **Conversation logs.** Each agent's conversation with its owner is
   `messages.jsonl` in its own journal directory (`~/journal/messages.jsonl`),
   root-owned 0640 in the agent's group, so the agent, its ancestors and root
-  can read it. Records: `{"t", "from": "owner" | "agent", "text"}`; records
-  that the 0.4.0 migration moved from the 0.3 main agent's log keep their
-  `"agent": "main"` field, which readers ignore. Only the daemon writes the
-  logs, so their labels are trustworthy, and no agent can edit or delete
-  anything in them.
-- `delivered.jsonl` records written by earlier versions have no sender; they
-  mean `owner`.
+  can read it. Records: `{"t", "from": "owner" | "agent", "text"}`. Only
+  the daemon writes the logs, so their labels are trustworthy, and no agent
+  can edit or delete anything in them.
 - `agent messages [NAME]` prints a conversation and follows new records,
   with control characters removed (see CLI).
 
@@ -812,16 +801,12 @@ release binary. It:
    the GitHub API with the token, and verifies its checksum. The token is
    never written to disk and reaches curl on stdin, never in command
    arguments.
-2. Refuses, before changing anything, a machine running a release before
-   0.4.0: the user `agent` exists with no `/etc/agent/agents/main` and
-   `/var/lib/agent/version` names a 0.x release below 0.4; `pool.json`
-   holds an absolute agent id; or `/var/lib/agent/migrating` or
-   `/var/lib/agent/migrating-user` is left from the 0.4.0 migration. Such
-   a machine upgrades with the v0.4.0 `install.sh` first. A user `agent`
-   on a fresh or 0.4 machine belongs to someone else and is left alone.
-   An upgrade is a machine with `/var/lib/agent/version` (every completed
-   install writes it) or `/etc/agent/agents/main`; anything else is a
-   fresh install.
+2. Tells an upgrade from a fresh install: an upgrade is a machine with
+   `/var/lib/agent/version` (every completed install writes it) or
+   `/etc/agent/agents/main`; anything else is a fresh install. An upgrade
+   must come from 0.4.1 or later: before changing anything, it refuses one
+   whose `/var/lib/agent/version` names an earlier release or no release,
+   which upgrades with the v0.4.1 `install.sh` first.
 3. Keeps the previous binary and, if anything fails before the service
    starts, restores it and restarts the service. It stops the service
    (active runs finish first), installs the new binary, and creates the
@@ -877,10 +862,10 @@ Using the replay plugin:
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither; a child let through its parent's
   home cannot list or read the parent's `agents/`, inbox, collected
-  messages, saved outputs or spools, also where an earlier release left
-  them open to others, while its grandparent can; the harness's
-  directories are 0750 after admission and its inbox files and outputs
-  0640
+  messages, saved outputs or spools, while its grandparent can; the
+  harness's directories are created 0750 at admission, a link, file or
+  other user's directory of that name is left alone and logged once, and
+  its inbox files and outputs are 0640
 - config: admission moves `config.json` into the home; an agent's edit makes
   its next run fresh with the new model; an invalid config writes `ERROR` in
   the control directory, which the agent cannot remove, and tells the
@@ -898,10 +883,8 @@ Using the replay plugin:
   and spools are 0750
 - removal: deleting a control directory removes the agent and its
   descendants, kills their processes and `systemd-run` jobs, removes their
-  crontabs, homes and the `/home` links to them (however the target is
-  spelled; not a link to another home, nor another user's), keeps their journals
-  readable by the former parent only, and frees the users; an interrupted
-  reclaim finishes on restart; a reused user cannot read its previous
+  crontabs and homes, keeps their journals readable by the former parent
+  only, and frees the users; an interrupted reclaim finishes on restart; a reused user cannot read its previous
   holder's journals; a control directory removed while it is being
   admitted is not recreated and its agent is not started
 - max_agents: with the pool exhausted, a new control directory is not
@@ -920,10 +903,8 @@ Using the replay plugin:
   runs with `ERROR` and leaves the inbox intact; an edit makes the next run
   start fresh instead of continuing
 - startup: a missing `pool.json` with an agent's journal directory (or a
-  link) in the journal root, and a `pool.json` with an absolute agent id,
-  stop the daemon before it changes anything; with neither `pool.json` nor
-  journals it starts; a user named `agent` or a leftover migration marker
-  does not stop it
+  link) in the journal root stops the daemon before it changes anything;
+  with neither `pool.json` nor journals it starts
 
 Paths, user names and timings are configurable so the loop can be tested in
 a temporary root. Tests that depend on privilege separation need root and
@@ -935,14 +916,8 @@ agent.
 
 ### To a recursive tree
 
-Releases 0.3.x ran the main agent as the user `agent` at `/home/agent`.
-0.4.0 made it root's child `main` and migrated each installation once:
-`install.sh` renamed that user, keeping its uid, to a pool user (`agent-16`
-by default) and left `/home/agent` as a compatibility link to the new home.
-The migration code was removed in 0.4.1; an older installation upgrades
-through v0.4.0 first.
-
-Reclaim removes the root-owned symlinks in `/home` that lead to the home it
-reclaims, so `/home/agent` disappears if `main` is ever removed and cannot
-lead into the next holder's home. Verification on the VM uses read-only
-checks; nothing is sent to the live agent.
+0.4.0 migrated each 0.3 installation, whose main agent ran as the user
+`agent` at `/home/agent`, to the tree: it renamed that user to a pool user
+(`agent-16` by default) and left `/home/agent` as a link to its home.
+0.5.0 requires 0.4.1: an older installation upgrades through the v0.4.1
+`install.sh` first.

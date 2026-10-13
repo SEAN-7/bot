@@ -74,19 +74,19 @@ func TestMessagesShowsConversation(t *testing.T) {
 	os.MkdirAll(filepath.Dir(path), 0o755)
 	os.WriteFile(path, []byte(
 		`{"t":"2026-10-11T09:00:00Z","from":"owner","text":"set up telegram"}`+"\n"+
-			`{"t":"2026-10-11T09:05:00Z","from":"agent","agent":"main","text":"done\u001b[2J, token saved"}`+"\n"), 0o644)
+			`{"t":"2026-10-11T09:05:00Z","from":"agent","text":"done\u001b[2J, token saved"}`+"\n"), 0o644)
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
 	defer cancel()
 	var out bytes.Buffer
 	go func() {
 		time.Sleep(200 * time.Millisecond)
 		f, _ := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
-		f.WriteString(`{"t":"2026-10-11T09:06:00Z","from":"agent","agent":"research","text":"report ready"}` + "\n")
+		f.WriteString(`{"t":"2026-10-11T09:06:00Z","from":"agent","text":"report ready"}` + "\n")
 		f.Close()
 	}()
 	Messages(ctx, path, &out)
 	got := out.String()
-	for _, want := range []string{"owner: set up telegram", "main: done[2J, token saved", "research: report ready"} {
+	for _, want := range []string{"owner: set up telegram", "agent: done[2J, token saved", "agent: report ready"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
 		}

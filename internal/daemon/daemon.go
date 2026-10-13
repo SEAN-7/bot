@@ -106,7 +106,7 @@ type daemon struct {
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
 	// unclosed holds the harness directories already logged as left alone
-	// by private; only the poll goroutine touches it.
+	// by seed; only the poll goroutine touches it.
 	unclosed map[string]bool
 	// spoolIgnored holds the spool entries already logged as not an agent's
 	// message; only the poll goroutine touches it.
@@ -142,13 +142,6 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
-	}
-	// A release before 0.4.0 named agents by path. On that tree the daemon
-	// would take them for removed and wipe their homes.
-	for _, e := range d.pool.entries() {
-		if strings.HasPrefix(e.Agent, "/") {
-			return fmt.Errorf("not starting: %s names agent %s by path, so this tree predates 0.4.0; upgrade it with the v0.4.0 install.sh first", cfg.PoolFile(), e.Agent)
-		}
 	}
 	if d.root.fs, err = fsio.Start(cfg.Self, rootCred); err != nil {
 		return err

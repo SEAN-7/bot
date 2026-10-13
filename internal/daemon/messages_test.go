@@ -244,10 +244,7 @@ func TestSpoolFileNotOwnedIgnored(t *testing.T) {
 func TestConversationLogMode(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
-	// A log left by an earlier release is tightened on the next append.
 	log := h.cfg.ConversationFile(h.mainID)
-	os.WriteFile(log, nil, 0o644)
-	os.Chmod(log, 0o644)
 	h.sendOwner("check the mode")
 	waitFor(t, "owner message in log", func() bool { return hasMessage(h, "owner", "check the mode") })
 	if info, err := os.Stat(log); err != nil || info.Mode().Perm() != 0o640 {

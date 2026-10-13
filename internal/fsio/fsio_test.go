@@ -87,24 +87,20 @@ func TestWriteMode(t *testing.T) {
 	}
 }
 
-// Private makes each path a real directory closed to others: a missing one
-// is created 0750, an existing one loses only its permissions for others.
-// It never follows a link, leaves anything that is not a directory alone,
-// and skips what lies below one it left alone. It returns what it left alone.
+// Private makes each path a real directory: a missing one is created 0750,
+// an existing one is kept as it is. It never follows a link, leaves anything
+// that is not a directory alone, and skips what lies below one it left alone.
+// It returns what it left alone.
 func TestPrivate(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	path := func(p string) string { return filepath.Join(dir, p) }
 	os.Mkdir(path("open"), 0o755)
-	os.Mkdir(path("group"), 0o775)
-	os.Mkdir(path("closed"), 0o700)
-	for _, p := range []string{"open", "group", "closed"} {
-		os.Chmod(path(p), map[string]os.FileMode{"open": 0o755, "group": 0o775, "closed": 0o700}[p])
-	}
+	os.Chmod(path("open"), 0o755)
 	outside := t.TempDir()
 	os.Chmod(outside, 0o755)
 	os.Symlink(outside, path("linked"))
 	os.WriteFile(path("file"), []byte("x"), 0o644)
-	skipped, err := c.Private(true, path("new"), path("new/sub"), path("open"), path("group"), path("closed"),
+	skipped, err := c.Private(path("new"), path("new/sub"), path("open"),
 		path("linked"), path("linked/sub"), path("file"), path("file/sub"))
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +108,7 @@ func TestPrivate(t *testing.T) {
 	if want := []string{path("linked"), path("file")}; !reflect.DeepEqual(skipped, want) {
 		t.Errorf("skipped %q, want %q", skipped, want)
 	}
-	for p, want := range map[string]os.FileMode{"new": 0o750, "new/sub": 0o750, "open": 0o750, "group": 0o770, "closed": 0o700} {
+	for p, want := range map[string]os.FileMode{"new": 0o750, "new/sub": 0o750, "open": 0o755} {
 		if info, err := os.Lstat(path(p)); err != nil || !info.IsDir() || info.Mode().Perm() != want {
 			t.Errorf("%s: %v %v, want %v", p, info.Mode(), err, want)
 		}
@@ -125,49 +121,6 @@ func TestPrivate(t *testing.T) {
 	}
 	if info, _ := os.Lstat(path("file")); !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
 		t.Errorf("file changed: %v", info.Mode())
-	}
-}
-
-// Private without create closes an existing directory but never creates a
-// missing one: that is an error, and it stops there.
-func TestPrivateWithoutCreate(t *testing.T) {
-	c, dir := start(t), t.TempDir()
-	open, missing, after := filepath.Join(dir, "open"), filepath.Join(dir, "gone"), filepath.Join(dir, "after")
-	os.Mkdir(open, 0o755)
-	os.Chmod(open, 0o755)
-	os.Mkdir(after, 0o755)
-	os.Chmod(after, 0o755)
-	_, err := c.Private(false, open, missing, after)
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("missing path: %v, want not exist", err)
-	}
-	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
-		t.Fatalf("created a missing directory: %v", err)
-	}
-	if info, _ := os.Stat(open); info.Mode().Perm() != 0o750 {
-		t.Errorf("open: %v, want 0750", info.Mode())
-	}
-	if info, _ := os.Stat(after); info.Mode().Perm() != 0o755 {
-		t.Errorf("went on past the error: %v", info.Mode())
-	}
-}
-
-// Private keeps a setgid bit: a home's subdirectories stay in its group.
-func TestPrivateKeepsSetgid(t *testing.T) {
-	c, dir := start(t), t.TempDir()
-	path := filepath.Join(dir, "inbox")
-	os.Mkdir(path, 0o755)
-	if err := os.Chmod(path, 0o755|fs.ModeSetgid); err != nil {
-		t.Skip(err)
-	}
-	if info, _ := os.Stat(path); info.Mode()&fs.ModeSetgid == 0 {
-		t.Skip("cannot set setgid here")
-	}
-	if _, err := c.Private(true, path); err != nil {
-		t.Fatal(err)
-	}
-	if info, _ := os.Stat(path); info.Mode()&(fs.ModeSetgid|fs.ModePerm) != fs.ModeSetgid|0o750 {
-		t.Fatalf("mode %v", info.Mode())
 	}
 }
 
@@ -458,7 +411,7 @@ func TestPrivateSkipsOtherUsersDirs(t *testing.T) {
 	if err := os.Lchown(theirs, 1, 1); err != nil {
 		t.Fatal(err)
 	}
-	skipped, err := c.Private(true, theirs, filepath.Join(theirs, "sub"))
+	skipped, err := c.Private(theirs, filepath.Join(theirs, "sub"))
 	if err != nil || !reflect.DeepEqual(skipped, []string{theirs}) {
 		t.Fatalf("skipped %q, %v", skipped, err)
 	}

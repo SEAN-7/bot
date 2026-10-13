@@ -140,15 +140,14 @@ func (c *Client) Mkdir(path string, mode os.FileMode) error {
 	return err
 }
 
-// Private makes each of paths, in order, a real directory closed to others:
-// an existing one the helper's user owns loses its permissions for others,
-// keeping the rest of its mode, and a missing one is created 0750 (less the
-// umask) if create is set, or else is an error that stops there. It never
-// follows a link: a path that is not a real directory the user owns, or lies
-// below one, is left alone. It returns the paths it left alone because they
-// are not such a directory, not those below them.
-func (c *Client) Private(create bool, paths ...string) (skipped []string, err error) {
-	resp, err := c.call(request{Op: "private", Paths: paths, Create: create})
+// Private makes each of paths, in order, a real directory: a missing one is
+// created 0750 (less the umask), closed to others, and an existing one is
+// kept as it is. It never follows a link: a path that is not a real directory
+// the helper's user owns, or lies below one, is left alone. It returns the
+// paths it left alone because they are not such a directory, not those below
+// them.
+func (c *Client) Private(paths ...string) (skipped []string, err error) {
+	resp, err := c.call(request{Op: "private", Paths: paths})
 	return resp.Paths, err
 }
 

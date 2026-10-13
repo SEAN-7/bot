@@ -3,11 +3,9 @@ package daemon
 import (
 	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
@@ -77,7 +75,6 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		{"crontab", func() error { return sys.RemoveCrontab(user) }},
 		{"stop processes", func() error { return sys.StopProcesses(user) }},
 		{"wipe files", func() error { return d.wipe(user) }},
-		{"home links", func() error { return d.removeHomeLinks(user) }},
 		// Its descendants' groups still list this user, so it is not
 		// handed on while their homes may hold files; everything it runs
 		// is stopped above regardless.
@@ -123,54 +120,6 @@ func (d *daemon) wipe(user string) error {
 		return err
 	}
 	return helper.PurgeOwned(d.cfg.TmpDirs)
-}
-
-// removeHomeLinks removes the links in /home that lead to user's home, such
-// as the one an upgrade leaves at an old agent's path, so that path never
-// leads into the home of the user's next holder. A link leads there when its
-// target, made absolute against /home and cleaned, is the home, however it
-// is spelled. Only symlinks owned by the daemon are removed, and none is
-// followed; /home is root-owned, so nobody else can have made one. A link
-// that is already gone is fine.
-func (d *daemon) removeHomeLinks(user string) error {
-	entries, err := os.ReadDir(d.cfg.Homes)
-	if err != nil {
-		return err
-	}
-	home, uid := d.cfg.PoolHome(user), uint32(os.Getuid())
-	for _, e := range entries {
-		path := filepath.Join(d.cfg.Homes, e.Name())
-		fi, err := os.Lstat(path)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return err
-		}
-		if fi.Mode()&os.ModeSymlink == 0 {
-			continue
-		}
-		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != uid {
-			continue
-		}
-		target, err := os.Readlink(path)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return err
-		}
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(d.cfg.Homes, target)
-		}
-		if filepath.Clean(target) != filepath.Clean(home) {
-			continue
-		}
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-	}
-	return nil
 }
 
 // parentID is the id of agentID's parent: "" (root) for a top-level agent.

@@ -23,8 +23,8 @@ func logText(data []byte) string { return strings.ToValidUTF8(string(data), "�
 
 // appendConversation adds one record to an agent's conversation log with its
 // owner. Only the daemon writes these root-owned files, so their labels can
-// be trusted. Each append sets the file's mode and group, so a log left by an
-// earlier release is tightened.
+// be trusted. A new log is created 0640, and each append sets its group to
+// the agent's.
 func (d *daemon) appendConversation(path string, gid int, record map[string]any) error {
 	record["t"] = time.Now().UTC().Format(time.RFC3339Nano)
 	data, err := json.Marshal(record)
@@ -35,8 +35,7 @@ func (d *daemon) appendConversation(path string, gid int, record map[string]any)
 	if err != nil {
 		return err
 	}
-	err = f.Chmod(0o640)
-	if err == nil && gid >= 0 {
+	if gid >= 0 {
 		err = f.Chown(-1, gid)
 	}
 	if err == nil {

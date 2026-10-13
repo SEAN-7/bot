@@ -504,10 +504,9 @@ func TestPrivilegeControlDirsPrivate(t *testing.T) {
 
 // TestPrivilegeHarnessDirsPrivate: a child that its parent lets through its
 // home (x on ~) cannot list or read the parent's inbox, collected messages,
-// saved outputs or spools, nor a sibling's control directory, also where an
-// earlier release left those directories open to others: they are closed
-// when the parent is admitted again. The grandparent, in the parent's
-// group, reads them all.
+// saved outputs or spools, nor a sibling's control directory: admission
+// created those directories closed to others. The grandparent, in the
+// parent's group, reads them all.
 func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h, _ := rootHarness(t)
 	h.start()
@@ -536,22 +535,8 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		}
 	}
 	homeG := h.childHome(ctrlG)
-	// As an earlier release left them: open to others.
-	h.stop()
-	dirs := []string{"inbox", "inbox/processed", ".outputs", ".messages", ".messages/agents", "agents"}
-	for _, dir := range dirs {
-		if err := os.Chmod(filepath.Join(homeA, dir), fs.ModeSetgid|0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	os.Chmod(ctrlG, 0o755)
-	h.start()
-	waitFor(t, "g admitted again", func() bool { return strings.Count(h.logs.String(), childID("a/agents/g")+": admitted as") == 2 })
-	for _, dir := range dirs {
+	for _, dir := range []string{"inbox", "inbox/processed", ".outputs", ".messages", ".messages/agents", "agents"} {
 		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
-	}
-	if info, _ := os.Stat(ctrlG); info.Mode().Perm() != 0o750 {
-		t.Fatalf("g's control directory %v", info.Mode())
 	}
 	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
 		t.Fatal(err)
@@ -575,33 +560,6 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h.drop(h.mainHome, "go.md", "task-for-main")
 	h.waitEnds(h.mainID, 1)
 	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8")
-}
-
-// TestPrivilegeHomeLinkOfOtherUserKept: reclaim removes only the daemon's
-// own links in /home to the home it reclaims, never another user's.
-func TestPrivilegeHomeLinkOfOtherUserKept(t *testing.T) {
-	h, _ := rootHarness(t)
-	d := &daemon{cfg: h.cfg}
-	user := h.cfg.PoolUsers[1]
-	uid, gid := lookupIDs(t, h.cfg.PoolUsers[2])
-	own, theirs := filepath.Join(h.cfg.Homes, "own"), filepath.Join(h.cfg.Homes, "theirs")
-	for _, link := range []string{own, theirs} {
-		if err := os.Symlink(user, link); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.Lchown(theirs, uid, gid); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.removeHomeLinks(user); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(own); !os.IsNotExist(err) {
-		t.Fatalf("the daemon's link kept: %v", err)
-	}
-	if target, err := os.Readlink(theirs); err != nil || target != user {
-		t.Fatalf("another user's link: %q %v", target, err)
-	}
 }
 
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops

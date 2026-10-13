@@ -34,7 +34,7 @@ agents' files, journals and credentials. The previous binary is kept as
 `/usr/local/bin/agent.prev`, and a failed upgrade restores it and restarts
 the service.
 
-An installation older than 0.4.0 must upgrade through the v0.4.0
+An installation older than 0.4.1 must upgrade through the v0.4.1
 `install.sh` first; later installers refuse it and change nothing.
 
 ## Set a spend limit first

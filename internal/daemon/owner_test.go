@@ -107,33 +107,33 @@ func TestCrashRecovery(t *testing.T) {
 	}
 }
 
-func TestOldDeliveryRecordMeansOwner(t *testing.T) {
+// A delivery record labels its file once; its sender survives a reload, and
+// a consumed record does not come back.
+func TestDeliveryRecordReloaded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "delivered.jsonl")
-	old := `{"agent":"/home/agent","name":"20261011T120000Z-owner.md","sha256":"abc"}` + "\n"
-	if err := os.WriteFile(path, []byte(old), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	d, err := loadDelivered(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := d.add("/home/agent", "20261011T130000Z-c.md", "def", "agents/c"); err != nil {
+	if err := d.add("main", "20261011T120000Z-owner.md", "abc", "owner"); err != nil {
 		t.Fatal(err)
 	}
-	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "owner" {
-		t.Fatalf("old record labelled %q", from)
+	if err := d.add("main", "20261011T130000Z-c.md", "def", "agents/c"); err != nil {
+		t.Fatal(err)
 	}
-	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "" {
+	if from := d.take("main", "20261011T120000Z-owner.md", "abc"); from != "owner" {
+		t.Fatalf("record labelled %q", from)
+	}
+	if from := d.take("main", "20261011T120000Z-owner.md", "abc"); from != "" {
 		t.Fatalf("record taken twice: %q", from)
 	}
-	// The sender survives a reload.
 	if d, err = loadDelivered(path); err != nil {
 		t.Fatal(err)
 	}
-	if from := d.take("/home/agent", "20261011T130000Z-c.md", "def"); from != "agents/c" {
+	if from := d.take("main", "20261011T130000Z-c.md", "def"); from != "agents/c" {
 		t.Fatalf("reloaded record labelled %q", from)
 	}
-	if from := d.take("/home/agent", "20261011T120000Z-owner.md", "abc"); from != "" {
+	if from := d.take("main", "20261011T120000Z-owner.md", "abc"); from != "" {
 		t.Fatalf("consumed record came back: %q", from)
 	}
 }

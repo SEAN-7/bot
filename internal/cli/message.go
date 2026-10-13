@@ -193,10 +193,9 @@ func Messages(ctx context.Context, path string, w io.Writer) error {
 
 func formatMessage(line []byte) string {
 	var m struct {
-		T     string `json:"t"`
-		From  string `json:"from"`
-		Agent string `json:"agent"`
-		Text  string `json:"text"`
+		T    string `json:"t"`
+		From string `json:"from"`
+		Text string `json:"text"`
 	}
 	if json.Unmarshal(line, &m) != nil {
 		return sanitize(strings.TrimSpace(string(line)))
@@ -205,10 +204,6 @@ func formatMessage(line []byte) string {
 	if t, err := time.Parse(time.RFC3339Nano, m.T); err == nil {
 		clock = t.Local().Format("2006-01-02 15:04")
 	}
-	who := m.From
-	if m.From == "agent" && m.Agent != "" {
-		who = m.Agent // records from before 0.4.0 in main's conversation name the agent
-	}
 	text := strings.ReplaceAll(strings.TrimRight(m.Text, "\n"), "\n", "\n    ")
-	return sanitize(fmt.Sprintf("%s %s: %s", clock, who, text))
+	return sanitize(fmt.Sprintf("%s %s: %s", clock, m.From, text))
 }

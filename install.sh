@@ -52,22 +52,22 @@ main() {
 		command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
 	done
 
-	# A release before 0.4.0 ran the main agent as the user agent, without
-	# /etc/agent/agents/main, and named agents by path in pool.json; its
-	# migration left marker files while unfinished. This release cannot
-	# migrate it, so it stops before changing anything. A user agent on a
-	# fresh or 0.4 machine is someone else's.
-	old=no
-	if id agent >/dev/null 2>&1 && [ ! -e /etc/agent/agents/main ]; then
-		case $(cat /var/lib/agent/version 2>/dev/null || true) in
-		0.[0-3].*) old=yes ;;
-		esac
+	# An upgrade keeps the configuration and creates no main agent. Every
+	# completed install records its version (the human may have removed
+	# main since); settings.json alone may be a fresh install that failed
+	# before choosing a provider, which a rerun finishes as one.
+	upgrade=no
+	if [ -e /var/lib/agent/version ] || [ -e /etc/agent/agents/main ]; then upgrade=yes; fi
+
+	# An upgrade comes from 0.4.1 or later, by the version it recorded. An
+	# earlier release, or an installation that recorded none, upgrades with
+	# the v0.4.1 install.sh first, which records it; this one stops before
+	# changing anything.
+	if [ "$upgrade" = yes ]; then
+		installed=$(head -n 1 /var/lib/agent/version 2>/dev/null || true)
+		printf '%s\n' "$installed" | awk -F. '/^[0-9]+\.[0-9]+\.[0-9]+$/ && ($1 > 0 || $2 > 4 || ($2 == 4 && $3 >= 1)) { ok = 1 } END { exit !ok }' ||
+			die "this machine runs ${installed:+v$installed, }a release before 0.4.1; upgrade with the v0.4.1 install.sh first"
 	fi
-	if grep -q '"agent" *: *"/' /var/lib/agent/pool.json 2>/dev/null ||
-		[ -e /var/lib/agent/migrating ] || [ -e /var/lib/agent/migrating-user ]; then
-		old=yes
-	fi
-	[ "$old" = no ] || die "this machine runs a release before 0.4.0; upgrade it with the v0.4.0 install.sh first"
 
 	# Agents share files with each other through setfacl, from the acl package.
 	if ! command -v setfacl >/dev/null 2>&1; then
@@ -106,13 +106,6 @@ main() {
 	eval "want=\$SHA_agent_linux_$ARCH"
 	got=$(sha256sum "$tmp/agent" | cut -d' ' -f1)
 	[ "$got" = "$want" ] || die "checksum mismatch for agent-linux-$ARCH: got $got, want $want"
-
-	# An upgrade keeps the configuration and creates no main agent. Every
-	# completed install records its version (the human may have removed
-	# main since); settings.json alone may be a fresh install that failed
-	# before choosing a provider, which a rerun finishes as one.
-	upgrade=no
-	if [ -e /var/lib/agent/version ] || [ -e /etc/agent/agents/main ]; then upgrade=yes; fi
 
 	# The release installed now is the one to restore if this run fails.
 	if [ -x /usr/local/bin/agent ]; then

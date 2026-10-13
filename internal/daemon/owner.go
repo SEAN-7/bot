@@ -27,7 +27,7 @@ type deliveryRecord struct {
 	Agent    string `json:"agent"`
 	Name     string `json:"name"`
 	SHA256   string `json:"sha256"`
-	From     string `json:"from,omitempty"` // "" in records from earlier versions: the owner
+	From     string `json:"from,omitempty"` // "" in a consumed record
 	Consumed bool   `json:"consumed,omitempty"`
 }
 
@@ -51,8 +51,6 @@ func loadDelivered(path string) (*delivered, error) {
 		key := deliveryKey(r.Agent, r.Name, r.SHA256)
 		if r.Consumed {
 			delete(d.pending, key)
-		} else if r.From == "" {
-			d.pending[key] = "owner"
 		} else {
 			d.pending[key] = r.From
 		}

@@ -22,9 +22,8 @@ could build something as a script, it does not belong in the harness.
   The release workflow rebuilds and refuses to publish if any checksum differs.
 - Deploy to the VM (SSH host `bot`) by running the release's `install.sh`
   there; on an existing installation it upgrades in place and keeps the
-  agents' files, journals and credentials. Upgrading a 0.3 installation
-  briefly stops the main agent's user services and its transient
-  `systemd-run` jobs (the installer lists them first).
+  agents' files, journals and credentials. An installation older than 0.4.1
+  upgrades with the v0.4.1 `install.sh` first.
 - Verify service health after deploying (`systemctl is-active agent`,
   `journalctl -u agent`) with read-only checks.
 - Keep the cached prompt prefix stable: the system prompt, the `sh` tool
