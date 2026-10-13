@@ -152,6 +152,46 @@ func TestRemovalStopsAgent(t *testing.T) {
 	}
 }
 
+// removingSystem moves the control directory ctrl away, as agent remove
+// does, when admission enables the child's linger: after the scan, before
+// the control directory is closed and the home link written.
+type removingSystem struct {
+	*fakeSystem
+	ctrl  string
+	moved atomic.Bool
+}
+
+func (s *removingSystem) EnableLinger(user string) error {
+	if user != "agent-1" && !s.moved.Swap(true) {
+		if err := os.Rename(s.ctrl, s.ctrl+".removed"); err != nil {
+			return err
+		}
+	}
+	return s.fakeSystem.EnableLinger(user)
+}
+
+func TestRemoveDuringAdmissionNotUndone(t *testing.T) {
+	h := newHarness(t, done())
+	ctrl := filepath.Join(h.mainHome, "agents", "x")
+	sys := &removingSystem{fakeSystem: &fakeSystem{}, ctrl: ctrl}
+	h.cfg.System = sys
+	h.start()
+	waitFor(t, "main admitted", func() bool { return strings.Contains(h.logs.String(), "main: admitted") })
+	makeChild(t, h, "x", true)
+	waitFor(t, "admission ended", func() bool {
+		logs := h.logs.String()
+		return strings.Contains(logs, childID("x")+": not started: control directory") ||
+			strings.Contains(logs, childID("x")+": admitted")
+	})
+	time.Sleep(10 * h.cfg.Poll)
+	if _, err := os.Lstat(ctrl); !os.IsNotExist(err) {
+		t.Fatalf("removed control directory is back (%v):\n%s", err, h.logs)
+	}
+	if strings.Contains(h.logs.String(), childID("x")+": admitted") {
+		t.Fatalf("removed agent started:\n%s", h.logs)
+	}
+}
+
 func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
 	h := newHarness(t, step("sleep 0.5", 100), done())
 	h.start()

@@ -147,8 +147,10 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return fail("journal", err)
 	}
 	// Closed to others like the parent's other directories: one an earlier
-	// release created is closed now. Root's are 0700 and stay so.
-	if err := c.private(parent.fs, ctrl); err != nil {
+	// release created is closed now. Root's are 0700 and stay so. Never
+	// created: agent remove may have moved it away since the scan, and the
+	// removed agent must not come back.
+	if err := c.private(parent.fs, false, ctrl); err != nil {
 		return fail("control directory", err)
 	}
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
@@ -360,7 +362,7 @@ func (a *agent) seed() error {
 	for i, dir := range harnessDirs {
 		dirs[i] = filepath.Join(a.home, dir)
 	}
-	if err := a.private(a.fs, dirs...); err != nil {
+	if err := a.private(a.fs, true, dirs...); err != nil {
 		return err
 	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}, {"TASK.md", seed.TASK}} {
@@ -376,12 +378,12 @@ func (a *agent) seed() error {
 	return nil
 }
 
-// private closes paths of a's to others through helper (see
-// fsio.Client.Private). A path left alone, as it is not a real directory
-// helper's user owns, may be open to others: the service log names it once
-// per daemon run.
-func (a *agent) private(helper *fsio.Client, paths ...string) error {
-	skipped, err := helper.Private(paths...)
+// private closes paths of a's to others through helper, creating the missing
+// ones if create is set (see fsio.Client.Private). A path left alone, as it is
+// not a real directory helper's user owns, may be open to others: the service
+// log names it once per daemon run.
+func (a *agent) private(helper *fsio.Client, create bool, paths ...string) error {
+	skipped, err := helper.Private(create, paths...)
 	for _, path := range skipped {
 		if !a.d.unclosed[path] {
 			if a.d.unclosed == nil {

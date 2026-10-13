@@ -43,6 +43,8 @@ type request struct {
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
 	Mode  uint32   `json:"mode,omitempty"` // mkdir's and write's permission bits
+	// Create has private create the paths that are missing.
+	Create bool `json:"create,omitempty"`
 }
 
 type response struct {
@@ -128,7 +130,7 @@ func handle(req request) (response, error) {
 		}
 		return response{}, write(req.Path, req.Data, mode)
 	case "private":
-		skipped, err := private(req.Paths)
+		skipped, err := private(req.Paths, req.Create)
 		return response{Paths: skipped}, err
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
@@ -220,10 +222,11 @@ func write(path string, data []byte, mode os.FileMode) error {
 }
 
 // private makes each of paths a real directory without permissions for
-// others (see Client.Private) and returns those it left alone. The chmod
-// follows a link swapped in after the Lstat, but only with this user's
-// rights, which reach nothing it does not own.
-func private(paths []string) ([]string, error) {
+// others, creating those missing if create is set (see Client.Private), and
+// returns those it left alone. The chmod follows a link swapped in after the
+// Lstat, but only with this user's rights, which reach nothing it does not
+// own.
+func private(paths []string, create bool) ([]string, error) {
 	var skipped []string
 	below := func(path string) bool {
 		for _, s := range skipped {
@@ -238,8 +241,10 @@ func private(paths []string) ([]string, error) {
 			continue
 		}
 		// mkdir never follows a link in the last component.
-		if err := os.Mkdir(path, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
-			return skipped, err
+		if create {
+			if err := os.Mkdir(path, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
+				return skipped, err
+			}
 		}
 		info, err := os.Lstat(path)
 		if err != nil {

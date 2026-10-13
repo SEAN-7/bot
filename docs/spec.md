@@ -162,8 +162,8 @@ helper's user owns), `list` (directory entries with type, size and owner),
 `read` (path, byte limit; regular files only), `write` (atomic:
 dot-prefixed temporary file then rename, with the mode given), `private`
 (make each path a real directory closed to others: create a missing one
-0750, remove the permissions for others from an existing one the user
-owns, keeping the rest of its mode; never following a link, and leaving
+0750 if the request asks for it, else fail there; remove the permissions
+for others from an existing one the user owns, keeping the rest of its mode; never following a link, and leaving
 alone, and returning, what is not a directory the user owns, and anything
 below it), `rename`, `mkdir`,
 `remove` (recursive, never following symlinks), `unlink` (one entry, never a
@@ -267,7 +267,9 @@ agent user cannot read another user's process environment.
   already has one keeps it, and the parent's is renamed
   `config.json.ignored`); enables lingering; creates its journal directory;
   closes its control directory to others the same way, through the
-  parent's helper (root's are 0700 and stay so); and writes the `home`
+  parent's helper (root's are 0700 and stay so), but never creates it: if
+  `agent remove` moved it away since the scan, admission stops there and
+  the agent is not started; and writes the `home`
   symlink into the control directory. Every step goes through the helpers,
   and a failed step is retried at the next poll. A new agent whose
   starting `config.json` is larger than 1 MiB is not given a user: the
@@ -860,7 +862,8 @@ Using the replay plugin:
   spelled; not a link to another home, nor another user's), keeps their journals
   readable by the former parent only, and frees the users; an interrupted
   reclaim finishes on restart; a reused user cannot read its previous
-  holder's journals
+  holder's journals; a control directory removed while it is being
+  admitted is not recreated and its agent is not started
 - max_agents: with the pool exhausted, a new control directory is not
   admitted and the parent is told once; when the free users' homes hold
   other agents' evidence, the `ERROR` and the note say so instead; root's
