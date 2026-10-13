@@ -203,10 +203,6 @@ func (b *builder) home() (template.HTML, error) {
 	if err != nil {
 		return "", fmt.Errorf("README.md: %w", err)
 	}
-	lede, err := paragraph(phil, 1)
-	if err != nil {
-		return "", fmt.Errorf("bot/docs/philosophy.md: %w", err)
-	}
 	ideas, err := section(phil, "Three ideas")
 	if err != nil {
 		return "", fmt.Errorf("bot/docs/philosophy.md: %w", err)
@@ -222,8 +218,7 @@ func (b *builder) home() (template.HTML, error) {
 	var buf bytes.Buffer
 	err = tmpl.ExecuteTemplate(&buf, "home", struct {
 		Intro, Ideas template.HTML
-		Lede         string
-	}{template.HTML(introHTML), template.HTML(ideasHTML), text(lede)})
+	}{template.HTML(introHTML), template.HTML(ideasHTML)})
 	return template.HTML(buf.String()), err
 }
 
@@ -388,7 +383,7 @@ var tmpl = template.Must(template.New("").Parse(`
 <link rel="icon" href="{{.Up}}favicon.svg">
 </head><body class="{{.Class}}">
 <header class="top"><a class="mark" href="{{.Up}}">bot<span class="cur"></span></a>
-<nav><a href="{{.Up}}docs/">docs</a><a href="{{.Repo}}">github</a></nav></header>
+<nav><a href="{{.Up}}docs/"{{if .Nav}} class="here"{{end}}>docs</a><a href="{{.Repo}}">source</a></nav></header>
 {{with .Nav}}<aside class="side"><ul>
 {{- range .}}<li{{if .Here}} class="here"{{end}}><a href="{{.Href}}">{{.Name}}</a>
 {{- with .Heads}}<ul>{{range .}}<li><a href="#{{.ID}}">{{.Text}}</a></li>{{end}}</ul>{{end}}</li>{{end -}}
@@ -402,13 +397,11 @@ var tmpl = template.Must(template.New("").Parse(`
 {{- end}}
 
 {{- define "home" -}}
-<section class="hero">
-<h1>An always-on agent<br>with one tool: <em>the shell</em>.</h1>
+<h1><span class="dim">an always-on agent with one tool:</span> the shell.</h1>
 <div class="lede">{{.Intro}}</div>
-<pre class="term"><span class="p">$</span> sudo agent send main "Read your README, then tell me how you plan to keep notes."
-<span class="p">$</span> sudo agent messages main</pre>
-<p class="cta"><a href="docs/">Read the docs →</a></p>
-</section>
-<section class="ideas"><h2>{{.Lede}}</h2>{{.Ideas}}</section>
+<pre class="term"><span class="p">#</span> agent send main "Read your README, then tell me how you plan to keep notes."
+<span class="p">#</span> agent messages main
+<span class="p">#</span> <span class="cur"></span></pre>
+<section class="ideas">{{.Ideas}}</section>
 {{- end}}
 `))

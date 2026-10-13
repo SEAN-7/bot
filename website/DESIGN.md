@@ -93,10 +93,13 @@ ideas, version from the release notes); only the markup and styles change.
 
 ### Docs
 
-- Side navigation (left, ~220px): page names in `--dim`, the current page in
+- Side navigation (left margin, at least 220px): page names in `--dim`, the current page in
   `--fg` with a mint `▸`, and its h2s nested under a 1px `--line` rule.
   Collapses to a wrapped row above the article under 800px, as today.
-- Article: max width 760px. h1, h2, h3 in mono; h2 prefixed `## ` in
+- Article: max width 760px, centred on the page like the home column. The
+  page is a three-column grid, `minmax(220px, 1fr) minmax(0, 760px) 1fr`:
+  side navigation in the left margin, the article in the middle, the right
+  margin empty. h1, h2, h3 in mono; h2 prefixed `## ` in
   `--faint`. Prose in Instrument Sans `--prose`; `strong` in `--strong`.
   List markers in mint. Links `--fg` with a mint underline; hover turns the
   text mint.

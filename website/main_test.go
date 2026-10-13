@@ -123,4 +123,18 @@ func TestBuild(t *testing.T) {
 	if !strings.Contains(string(guide), "v1.2.3 · built from") {
 		t.Error("guide footer lacks the version")
 	}
+	if g := string(guide); !strings.Contains(g, `<link rel="stylesheet" href="../style.css">`) || !strings.Contains(g, `class="doc"`) {
+		t.Errorf("guide lacks the stylesheet or doc class:\n%s", g)
+	}
+	home, _ := os.ReadFile(filepath.Join(out, "index.html"))
+	h := string(home)
+	if !strings.Contains(h, `<span class="dim">an always-on agent with one tool:</span> the shell.`) {
+		t.Errorf("home lacks the headline:\n%s", h)
+	}
+	if strings.Count(h, `<span class="cur"></span>`) < 2 {
+		t.Error("home lacks the header and command cursors")
+	}
+	if !strings.Contains(h, ">source</a>") || strings.Contains(h, ">github</a>") {
+		t.Error("header should link the repository as source")
+	}
 }
