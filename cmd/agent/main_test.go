@@ -158,6 +158,8 @@ func TestReorder(t *testing.T) {
 		{[]string{"x", "--bogus"}, []string{"--bogus", "x"}},
 		{[]string{"--bogus", "x"}, []string{"--bogus", "x"}},
 		{[]string{"x", "--help", "y"}, []string{"--help", "x", "y"}},
+		{[]string{"x", "--", "y"}, []string{"--", "x", "y"}},
+		{[]string{"--model", "m", "x", "--", "--weird", "-h"}, []string{"--model", "m", "--", "x", "--weird", "-h"}},
 		{[]string{"x", "-sha256", "ab"}, []string{"-sha256", "ab", "x"}},
 	} {
 		if got := reorder(c.in); !reflect.DeepEqual(got, c.want) {
@@ -167,14 +169,32 @@ func TestReorder(t *testing.T) {
 }
 
 func TestProviderInstallHelpAndFlagErrors(t *testing.T) {
-	e, _ := testEnv(t, 0)
+	e, out := testEnv(t, 0)
 	var err error
 	stderr := captureStderr(t, func() { err = run([]string{"provider", "install", "--help"}, e) })
-	if err == nil || !strings.HasPrefix(err.Error(), "usage: agent provider install") || stderr != "" {
-		t.Fatalf("err %v, stderr %q", err, stderr)
+	if err != nil || !strings.HasPrefix(out.String(), "Usage: agent provider install") || stderr != "" {
+		t.Fatalf("err %v, stdout %q, stderr %q", err, out.String(), stderr)
 	}
 	stderr = captureStderr(t, func() { err = run([]string{"provider", "install", "--bogus", "x"}, e) })
 	if err == nil || stderr != "" {
 		t.Fatalf("err %v, stderr %q", err, stderr)
+	}
+}
+
+// A name after "--" is a positional argument, not a NAME in its place.
+func TestNewDoubleDash(t *testing.T) {
+	e, _ := testEnv(t, 0)
+	err := run([]string{"new", "x", "--model", "m", "--", "--weird"}, e)
+	if err == nil || !strings.Contains(err.Error(), "usage: agent new NAME") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(e.l.RootHome(), "agents")); err == nil {
+		t.Fatal("a usage error created agents/")
+	}
+	if err := run([]string{"new", "--model", "m", "--", "x"}, e); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(e.l.RootHome(), "agents", "x", "config.json")); err != nil {
+		t.Fatal(err)
 	}
 }

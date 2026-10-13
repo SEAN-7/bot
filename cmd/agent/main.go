@@ -131,7 +131,7 @@ func run(args []string, e env) error {
 		}
 		return err
 	case "provider":
-		return provider(ctx, l, args[1:])
+		return provider(ctx, e, args[1:])
 	case "version":
 		fmt.Fprintln(e.out, version.Version)
 		return nil
@@ -189,11 +189,12 @@ func runner(l layout.Layout) (*plugin.Runner, error) {
 	return &plugin.Runner{PluginDir: l.Plugins(), CredDir: l.Credentials(), User: cred, Timeout: 2 * time.Minute, Stderr: os.Stderr}, nil
 }
 
-func provider(ctx context.Context, l layout.Layout, args []string) error {
+func provider(ctx context.Context, e env, args []string) error {
+	l := e.l
 	if len(args) == 0 {
 		return errors.New("usage: agent provider install NAME|URL | agent provider describe")
 	}
-	root := os.Geteuid() == 0
+	root := e.root()
 	switch args[0] {
 	case "describe":
 		var r *plugin.Runner
@@ -208,15 +209,15 @@ func provider(ctx context.Context, l layout.Layout, args []string) error {
 		flags := flag.NewFlagSet("install", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
 		sha := flags.String("sha256", "", "expected SHA-256 when installing from a URL")
-		const usage = "usage: agent provider install NAME|URL [--sha256 HEX]"
+		const usage = "Usage: agent provider install NAME|URL [--sha256 HEX]"
 		if err := flags.Parse(reorder(args[1:])); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				return errors.New(usage)
+				_, err = fmt.Fprintln(e.out, usage)
 			}
 			return err
 		}
 		if flags.NArg() != 1 {
-			return errors.New(usage)
+			return errors.New(strings.ToLower(usage[:1]) + usage[1:])
 		}
 		if !root {
 			return errors.New("agent provider install needs root (sudo)")
@@ -240,8 +241,9 @@ func reorder(args []string) []string {
 		arg := args[i]
 		switch {
 		case arg == "--":
-			rest = append([]string{"--"}, args[i+1:]...)
-			return append(flags, rest...)
+			// Everything, before and after, is positional from here.
+			rest = append(rest, args[i+1:]...)
+			return append(append(flags, "--"), rest...)
 		case len(arg) > 1 && arg[0] == '-':
 			flags = append(flags, arg)
 			if name := strings.TrimLeft(arg, "-"); !strings.Contains(name, "=") && valueFlags[name] && i+1 < len(args) {
