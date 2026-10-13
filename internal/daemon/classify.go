@@ -35,14 +35,17 @@ func classify(data []byte, size int64, path string, images bool) (text bool, con
 		if size > imageMaxBytes {
 			return false, fmt.Sprintf(MsgImageTooLargeFmt, size, path), nil
 		}
-		pic, _, err := image.Decode(bytes.NewReader(data))
+		// Check the declared size first: Decode allocates it before reading pixels.
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			return false, fmt.Sprintf(MsgImageUndecodableFmt, err, path), nil
 		}
-		b := pic.Bounds()
-		w, h := b.Dx(), b.Dy()
+		w, h := cfg.Width, cfg.Height
 		if w > imageMaxEdge || h > imageMaxEdge {
 			return false, fmt.Sprintf(MsgImageTooWideFmt, w, h, path), nil
+		}
+		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+			return false, fmt.Sprintf(MsgImageUndecodableFmt, err, path), nil
 		}
 		if !images {
 			return false, fmt.Sprintf(MsgImageNoModelFmt, path), nil

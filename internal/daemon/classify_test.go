@@ -2,6 +2,8 @@ package daemon
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color/palette"
 	"image/gif"
@@ -17,6 +19,15 @@ func encodePNG(w, h int) []byte {
 		panic(err)
 	}
 	return b.Bytes()
+}
+
+// hugePNG is a small PNG whose header declares 100000x100000 px.
+func hugePNG() []byte {
+	b := encodePNG(4, 4)
+	binary.BigEndian.PutUint32(b[16:], 100000)
+	binary.BigEndian.PutUint32(b[20:], 100000)
+	binary.BigEndian.PutUint32(b[29:], crc32.ChecksumIEEE(b[12:29]))
+	return b
 }
 
 func encodeJPEG(w, h int) []byte {
@@ -56,6 +67,7 @@ func TestClassify(t *testing.T) {
 		{name: "too large", data: encodePNG(4, 4), size: 5<<20 + 1, images: true, want: []string{"is over the 5 MiB limit", path}},
 		{name: "too wide", data: encodePNG(2001, 10), images: true, want: []string{"2001x10 is over 2000 px", path}},
 		{name: "too tall", data: encodePNG(10, 2001), images: true, want: []string{"10x2001"}},
+		{name: "huge declared size", data: hugePNG(), images: true, want: []string{"100000x100000 is over 2000 px"}},
 		{name: "2000 px exactly", data: encodePNG(2000, 2000), images: true, media: "image/png", w: 2000, h: 2000},
 		{name: "half-written JPEG", data: encodeJPEG(64, 64)[:40], images: true, want: []string{"could not decode it", path}},
 		{name: "WebP", data: webp, images: true, want: []string{"image/webp is not supported", path}},
