@@ -239,9 +239,7 @@ agent user cannot read another user's process environment.
   while deciding (a file or helper that fails) is logged once and the
   decision made again at the next poll. A `config.json` that appears in an
   admitted agent's control directory is ignored: the agent's config is its
-  own. When the agent is next admitted (after a
-  daemon restart) it is renamed `config.json.ignored`, replacing an older
-  one, and the service log says so. A known agent the scan misses is
+  own, and stays where it is. A known agent the scan misses is
   kept unless its control directory is certainly gone.
 - **Admission.** The daemon takes the lowest free pool user and
   records the assignment in `pool.json`, then: prepares the home
@@ -258,8 +256,8 @@ agent user cannot read another user's process environment.
   writes the seed `README.md` and `TASK.md` where missing; moves the
   starting `config.json` from the control directory into the home (written
   through the agent's helper, removed through the parent's; a home that
-  already has one keeps it, and the parent's is renamed
-  `config.json.ignored`); enables lingering; creates its journal directory;
+  already has one keeps it, and the parent's stays in the control
+  directory, unread); enables lingering; creates its journal directory;
   and writes the `home` symlink into the control directory, through the
   parent's helper, but never creates the directory: if `agent remove`
   moved it away since the scan, admission stops there and the agent is not
@@ -871,8 +869,8 @@ Using the replay plugin:
   the control directory, which the agent cannot remove, and tells the
   parent about `config.json`; a starting or own `config.json` over 1 MiB is
   reported as too large; a `config.json` written into an admitted agent's
-  control directory is ignored, and renamed `config.json.ignored` when the
-  agent is admitted again, the home's config being the one used
+  control directory is ignored and left in place, also when the agent is
+  admitted again, the home's config being the one used
 - CLI: `agent new` rejects an invalid config before creating anything,
   reports the control directory's `ERROR`, defaults to the caller's config,
   requires `--model` from root, refuses an existing NAME, a name that starts

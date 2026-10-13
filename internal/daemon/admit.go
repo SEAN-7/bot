@@ -228,10 +228,8 @@ func (a *agent) seed() error {
 // the home, which the agent owns from then on: written through the agent's
 // helper, read and removed through its parent's. Only a regular file is a
 // starting config. A home that already holds one (a daemon restart) keeps
-// it, and a config.json the parent wrote since is renamed config.json.ignored
-// in the control directory, replacing an older one, so the parent loses
-// nothing. With neither, admission goes on: the first run reports the
-// missing config.
+// it, and a config.json the parent wrote since stays where it is, unread.
+// With neither, admission goes on: the first run reports the missing config.
 func (c *agent) adoptConfig() error {
 	from, to := filepath.Join(c.ctrl, "config.json"), filepath.Join(c.home, "config.json")
 	e, err := c.parent.fs.Stat(from)
@@ -245,14 +243,6 @@ func (c *agent) adoptConfig() error {
 	}
 	_, err = c.fs.Stat(to)
 	if err == nil {
-		ignored := from + ".ignored"
-		if err := c.parent.fs.Remove(ignored); err != nil {
-			return err
-		}
-		if err := c.parent.fs.Rename(from, ignored); err != nil {
-			return err
-		}
-		c.logf("kept its own config.json; the one in its control directory is now %s", ignored)
 		return nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return err

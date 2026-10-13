@@ -723,41 +723,6 @@ func TestRestartWithoutOwnConfigReports(t *testing.T) {
 	}
 }
 
-// TestRestartSetsAsideStrayConfig: a config.json the parent left in an
-// admitted agent's control directory is renamed config.json.ignored, replacing
-// an older one, when the agent is admitted again, and said so once in the
-// service log; the agent keeps its own. Anything else of that name is left
-// alone.
-func TestRestartSetsAsideStrayConfig(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := makeChild(t, h, "c", true)
-	home := h.childHome(ctrl)
-	stray, ignored := filepath.Join(ctrl, "config.json"), filepath.Join(ctrl, "config.json.ignored")
-	for _, text := range []string{`{"provider":"replay","model":"other"}`, `{"provider":"replay","model":"newer"}`} {
-		h.stop()
-		os.WriteFile(stray, []byte(text), 0o644)
-		h.start()
-		waitFor(t, "stray config set aside", func() bool { _, err := os.Lstat(stray); return os.IsNotExist(err) })
-		if got := fileText(t, ignored); got != text {
-			t.Fatalf("config.json.ignored %q", got)
-		}
-	}
-	if n := strings.Count(h.logs.String(), "config.json.ignored"); n != 2 {
-		t.Fatalf("logged %d times:\n%s", n, h.logs)
-	}
-	if data, _ := os.ReadFile(filepath.Join(home, "config.json")); string(data) != testConfig {
-		t.Fatalf("~/config.json %q", data)
-	}
-	h.stop()
-	os.MkdirAll(filepath.Join(stray, "keep"), 0o755)
-	h.start()
-	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 4 })
-	if _, err := os.Stat(filepath.Join(stray, "keep")); err != nil {
-		t.Fatalf("directory named config.json removed: %v", err)
-	}
-}
-
 // A root child held back by the limit is reported in its ERROR and the
 // service log; root has no inbox.
 func TestRootChildHoldBackLoggedOnly(t *testing.T) {
@@ -848,8 +813,8 @@ func writeAtomic(t *testing.T, path, text string) {
 }
 
 // After a restart, an agent's own ~/config.json wins over a stray
-// config.json in its control directory, which is set aside: the next run
-// uses the home's.
+// config.json in its control directory, which is left where it is: the next
+// run uses the home's.
 func TestRestartKeepsOwnConfigOverStray(t *testing.T) {
 	h := newHarness(t, doneFor(childMark))
 	h.start()
@@ -861,10 +826,7 @@ func TestRestartKeepsOwnConfigOverStray(t *testing.T) {
 	h.stop()
 	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(stray), 0o644)
 	h.start()
-	waitFor(t, "stray config set aside", func() bool { _, err := os.Lstat(filepath.Join(ctrl, "config.json")); return os.IsNotExist(err) })
-	if got := fileText(t, filepath.Join(ctrl, "config.json.ignored")); got != stray {
-		t.Fatalf("config.json.ignored %q", got)
-	}
+	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	h.drop(home, "task.md", "work")
 	h.waitEnds(childID("c"), 1)
 	reqs := h.requests()
@@ -873,5 +835,8 @@ func TestRestartKeepsOwnConfigOverStray(t *testing.T) {
 	}
 	if got := fileText(t, filepath.Join(home, "config.json")); got != own {
 		t.Fatalf("~/config.json %q", got)
+	}
+	if got := fileText(t, filepath.Join(ctrl, "config.json")); got != stray {
+		t.Fatalf("control directory config.json %q", got)
 	}
 }
