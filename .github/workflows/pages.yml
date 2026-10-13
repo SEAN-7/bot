@@ -3,7 +3,7 @@ name: pages
 on:
   push:
     branches: [main]
-    paths: ["README.md", "docs/**", "internal/notes/notes.md", "site/**", ".github/workflows/pages.yml"]
+    paths: ["README.md", "bot/docs/**", "bot/internal/notes/notes.md", "website/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -11,9 +11,10 @@ permissions:
   pages: write
   id-token: write
 
+# One deployment at a time; never cancel one that is running.
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -23,11 +24,13 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-go@v5
         with:
-          python-version: "3.12"
-      - run: pip install markdown-it-py==4.0.0
-      - run: python site/build.py _site
+          go-version-file: website/go.mod
+      - run: go run . -out ../_site
+        working-directory: website
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

@@ -5,7 +5,9 @@ making design or implementation changes. Keep the harness small: if the agent
 could build something as a script, it does not belong in the harness.
 
 The harness lives in `bot/`, the Go module root; the website lives in
-`website/`. Paths below are relative to `bot/`, and Go commands run there.
+`website/`, a separate Go module that builds the site from the docs. Paths
+below are relative to `bot/`, and Go commands run there (and in `website/`
+when changing the site).
 
 ## Workflow
 

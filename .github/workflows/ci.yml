@@ -31,3 +31,6 @@ jobs:
           sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
       - name: Reproducible release build
         run: sh scripts/release_test.sh
+      - name: Website
+        working-directory: website
+        run: go vet ./... && go test ./...
