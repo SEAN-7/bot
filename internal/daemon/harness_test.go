@@ -51,7 +51,7 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-const replayHeader = `{"models":[{"id":"replay-1","context_tokens":1000,"options":{"style":{"description":"s","values":["a","b"]}}}]}`
+const replayHeader = `{"models":[{"id":"replay-1","context_tokens":1000,"images":true,"options":{"style":{"description":"s","values":["a","b"]}}},{"id":"replay-noimg","context_tokens":1000}]}`
 
 type harness struct {
 	t        *testing.T

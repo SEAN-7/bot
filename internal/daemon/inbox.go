@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SEAN-7/bot/internal/proto"
 	"github.com/SEAN-7/bot/internal/shell"
 )
 
@@ -62,28 +63,35 @@ func (a *agent) pending() ([]string, error) {
 	return names, nil
 }
 
+// imageExt names a shown image's journal copy.
+var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
+
 // collectInbox reads, journals and moves every pending file into
-// inbox/processed/, returning the records to show the model.
-func (a *agent) collectInbox(j recorder) ([]inboxRecord, error) {
+// inbox/processed/, returning the records to show the model and, in record
+// order, the images shown with them. images is whether the model accepts them.
+func (a *agent) collectInbox(j recorder, images bool) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
 	names, err := a.pending()
 	if err != nil || len(names) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	processed := filepath.Join(a.home, "inbox", "processed")
 	if err := a.fs.Mkdir(processed, 0o750); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var records []inboxRecord
+	var shown []proto.Image
 	for _, name := range names {
 		path := filepath.Join(a.home, "inbox", name)
 		data, size, err := a.fs.Read(path, hashLimit)
+		readable := err == nil
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		} else if err != nil {
 			data = []byte(fmt.Sprintf("(could not read %s: %v)", name, err))
 		}
 		sum := sha256.Sum256(data)
+		hash := hex.EncodeToString(sum[:])
 		target := name
 		for i := 1; ; i++ {
 			if _, err := a.fs.Stat(filepath.Join(processed, target)); errors.Is(err, fs.ErrNotExist) {
@@ -92,18 +100,42 @@ func (a *agent) collectInbox(j recorder) ([]inboxRecord, error) {
 			target = fmt.Sprintf("%s-%d", name, i)
 		}
 		file := "inbox/processed/" + target
-		content, clipped := shell.Clip(strings.ToValidUTF8(string(data), "�"), d.cfg.InboxClip)
-		if clipped || size > int64(len(data)) {
-			content += "\n" + fmt.Sprintf(MsgInboxClipFmt, filepath.Join(a.home, file))
+		text, content, img := true, "", (*shownImage)(nil)
+		if readable {
+			text, content, img = classify(data, size, filepath.Join(a.home, file), images)
 		}
-		r := inboxRecord{File: file, From: a.label(name, hex.EncodeToString(sum[:])), Content: content}
-		j.Record("inbox", map[string]any{"file": r.File, "from": r.From, "size": size, "content": r.Content})
+		if text {
+			var clipped bool
+			content, clipped = shell.Clip(strings.ToValidUTF8(string(data), "�"), d.cfg.InboxClip)
+			if clipped || size > int64(len(data)) {
+				content += "\n" + fmt.Sprintf(MsgInboxClipFmt, filepath.Join(a.home, file))
+			}
+		}
+		var image map[string]any
+		if img != nil {
+			copyPath, err := j.Attach(imageExt[img.MediaType], img.Data)
+			if err != nil {
+				a.logf("journal copy of %s: %v", file, err)
+				content, img = fmt.Sprintf(MsgImageJournalFmt, err, filepath.Join(a.home, file)), nil
+			} else {
+				image = map[string]any{"media_type": img.MediaType, "width": img.Width, "height": img.Height, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
+			}
+		}
+		r := inboxRecord{File: file, From: a.label(name, hash), Content: content}
+		fields := map[string]any{"file": r.File, "from": r.From, "size": size, "content": r.Content}
+		if image != nil {
+			fields["image"] = image
+		}
+		j.Record("inbox", fields)
 		if err := a.fs.Rename(path, filepath.Join(processed, target)); err != nil {
-			return records, err
+			return records, shown, err
 		}
 		records = append(records, r)
+		if img != nil {
+			shown = append(shown, proto.Image{File: file, MediaType: img.MediaType, Data: img.Data})
+		}
 	}
-	return records, nil
+	return records, shown, nil
 }
 
 // label is the sender the daemon recorded when it delivered this file
