@@ -160,6 +160,8 @@ func TestForms(t *testing.T) {
 	}
 	var f struct {
 		Particles struct{ Small, Large int }
+		Scatter   []float64
+		Pointer   struct{ Reach float64 }
 		Home      string
 		Order     []string
 		Ambient   struct{ Sequence []string }
@@ -199,6 +201,9 @@ func TestForms(t *testing.T) {
 				t.Errorf("glyph %q: bad row %q", r, row)
 			}
 		}
+	}
+	if len(f.Scatter) != 3 || f.Scatter[0] <= 0 || f.Scatter[1] <= 0 || f.Scatter[2] <= 0 || f.Pointer.Reach <= 0 {
+		t.Errorf("scatter %v, pointer reach %v", f.Scatter, f.Pointer.Reach)
 	}
 	if f.Particles.Small <= 0 || f.Particles.Small >= f.Particles.Large {
 		t.Errorf("particles: small %d, large %d", f.Particles.Small, f.Particles.Large)

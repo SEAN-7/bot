@@ -7,6 +7,8 @@
   "colors": { "mint": "#5cf2a0", "light": "#c8ffe1", "lightAbove": 0.82 },
   "camera": { "distance": 3.4, "pitch": 0.2 },
   "stagger": 0.7,
+  "scatter": [3.3, 2.1, 2.2],
+  "pointer": { "reach": 90, "push": 9, "lean": [0.9, 0.5] },
   "home": "listen",
   "ambient": { "every": [18, 24], "hold": 4, "idleAfter": 60,
                "sequence": ["drift", "work", "spawn", "speak:hello"] },
@@ -19,9 +21,11 @@
     "work":   { "shape": { "type": "cube", "half": 0.62, "edges": 0.45 },
                 "spin": 0.9, "jitter": 0.012, "k": 40, "damping": 9 },
     "spawn":  { "shape": { "type": "bud", "parent": [-0.42, -0.05, 0, 0.78],
-                           "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2] },
+                           "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2],
+                           "thread": 0.04 },
                 "sway": 0.45, "k": 30, "damping": 8 },
-    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0 },
+    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0,
+                           "depth": 0.05 },
                 "flat": true, "k": 34, "damping": 9 }
   },
   "font": { "width": 5, "height": 7, "glyphs": {

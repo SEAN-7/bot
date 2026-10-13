@@ -11,11 +11,13 @@ spec fixes the shared definition both read, so the two cannot drift.
 
 ## Behaviour on the home page
 
-- **Arrival.** On load the particles start scattered and assemble into
-  listen, each leaving at a random moment within `stagger` seconds.
+- **Arrival.** On load the particles start scattered (a cloud scaled by
+  `scatter`) and assemble into listen, each leaving at a random moment
+  within `stagger` seconds.
 - **Listen** is the resting state: it turns, breathes, and leans toward the
-  pointer anywhere on the page. Particles within 90px of the pointer are
-  pushed away from it.
+  pointer anywhere on the page, by `pointer.lean` radians (yaw, pitch) per
+  canvas width or height of pointer offset, up to half a canvas. Particles within `pointer.reach` (90) px of the pointer are pushed away
+  from it with strength `pointer.push`.
 - **Ambient forms.** Every 18–24 seconds it takes one form from the ambient
   sequence (`drift`, `work`, `spawn`, `speak:hello`, in turn), holds it for 4
   seconds, and returns to listen.
@@ -58,6 +60,8 @@ physics step and the renderer.
   "colors": { "mint": "#5cf2a0", "light": "#c8ffe1", "lightAbove": 0.82 },
   "camera": { "distance": 3.4, "pitch": 0.2 },
   "stagger": 0.7,
+  "scatter": [3.3, 2.1, 2.2],
+  "pointer": { "reach": 90, "push": 9, "lean": [0.9, 0.5] },
   "home": "listen",
   "ambient": { "every": [18, 24], "hold": 4, "idleAfter": 60,
                "sequence": ["drift", "work", "spawn", "speak:hello"] },
@@ -70,9 +74,11 @@ physics step and the renderer.
     "work":   { "shape": { "type": "cube", "half": 0.62, "edges": 0.45 },
                 "spin": 0.9, "jitter": 0.012, "k": 40, "damping": 9 },
     "spawn":  { "shape": { "type": "bud", "parent": [-0.42, -0.05, 0, 0.78],
-                           "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2] },
+                           "child": [0.95, 0.3, 0, 0.34], "share": [0.72, 0.2],
+                           "thread": 0.04 },
                 "sway": 0.45, "k": 30, "damping": 8 },
-    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0 },
+    "speak":  { "shape": { "type": "word", "pixel": 0.13, "fit": 3.0,
+                           "depth": 0.05 },
                 "flat": true, "k": 34, "damping": 9 }
   },
   "font": { "width": 5, "height": 7, "glyphs": { "a": [".....", "....."] } }
@@ -87,8 +93,8 @@ font `a`–`z` plus `.`, `!`, `?` and space.)
 Both implementations use the same PRNG, mulberry32, seeded with `seed`, and
 consume it in the same order: the forms listed in `order`, each generated
 then shuffled (Fisher–Yates from the last index down), then the arrival
-scatter. A `speak` form is generated when it is first needed, from the PRNG's
-state at that moment. With the same particle count, the same seed gives the
+scatter (cloud points scaled by `scatter`). A `speak` form is generated
+when it is first needed, from the PRNG's state at that moment. With the same particle count, the same seed gives the
 same layout in both languages, so a later cross-language test can compare
 them point for point. `mascot.js` is the reference for the exact order of
 draws within each shape. Only layout uses this PRNG: timing, stagger and
@@ -107,10 +113,10 @@ All points are in model units, about one unit across, centred on the origin.
   edges in turn.
 - **bud**: a sphere for the parent and one for the child (`[x, y, z, r]`,
   with `share` of the points each), the rest on the thread between their
-  centres.
+  centres, each offset by up to ±`thread`/2 in every axis.
 - **word**: the text drawn with `font`; each lit pixel is a `pixel`-unit
   square, scaled down so the word is at most `fit` units wide; points are
-  dealt to lit pixels in turn, each placed randomly inside its square.
+  dealt to lit pixels in turn, each placed randomly inside its square and `depth` units deep.
 
 ### Motion
 

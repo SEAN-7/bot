@@ -9,17 +9,15 @@
   let F;
   try { F = JSON.parse(data.textContent); } catch (e) { return; }
 
-  const { ramp, dense, colors, camera, ambient } = F;
+  const { ramp, dense, colors, camera, ambient, pointer } = F;
   const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
   const N = innerWidth < F.particles.smallBelow ? F.particles.small : F.particles.large;
 
   // Page behaviour that is not part of a form, so not in forms.json.
   const SIZE = 0.36;            // model unit in canvas pixels, as a share of the canvas's shorter side
-  const SCATTER = [3.3, 2.1, 2.2]; // radii of the cloud the particles start in
-  const REACH = 90, PUSH = 9;   // pointer scatter: reach in px, strength
-  const LEAN = [0.9, 0.5];      // lean in radians per canvas width / height of pointer offset
 
-  // mulberry32, consumed in the order MASCOT.md § Determinism fixes.
+  // mulberry32, used only for layout, in the order MASCOT.md § Determinism fixes;
+  // timing, stagger and jitter use Math.random.
   const mulberry32 = a => () => {
     a = a + 0x6D2B79F5 | 0;
     let t = Math.imul(a ^ a >>> 15, 1 | a);
@@ -27,7 +25,7 @@
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
   const rand = mulberry32(F.seed);
-  const between = ([lo, hi]) => lo + rand() * (hi - lo);
+  const between = ([lo, hi]) => lo + Math.random() * (hi - lo);
   const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
   const shuffle = a => {
     for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(rand() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
@@ -61,15 +59,15 @@
     }
     return out;
   }
-  function bud(n, { parent: p, child: c, share }) {
+  function bud(n, { parent: p, child: c, share, thread }) {
     const out = fibonacci(Math.round(n * share[0]), p[3], p).concat(fibonacci(Math.round(n * share[1]), c[3], c));
     while (out.length < n) { // the thread between the two centres
       const t = rand();
-      out.push([0, 1, 2].map(k => p[k] + (c[k] - p[k]) * t + (rand() - 0.5) * 0.04));
+      out.push([0, 1, 2].map(k => p[k] + (c[k] - p[k]) * t + (rand() - 0.5) * thread));
     }
     return out;
   }
-  function word(n, { pixel, fit }, text) {
+  function word(n, { pixel, fit, depth }, text) {
     const { width: gw, height: gh, glyphs } = F.font, chars = [...text.toLowerCase()], lit = [];
     chars.forEach((ch, li) => (glyphs[ch] || []).forEach((row, y) => {
       [...row].forEach((c, x) => { if (c === '#') lit.push([li * (gw + 1) + x, y]); });
@@ -78,7 +76,7 @@
     const cols = chars.length * (gw + 1) - 1, s = Math.min(pixel, fit / cols), out = [];
     for (let i = 0; out.length < n; i++) {
       const [x, y] = lit[i % lit.length];
-      out.push([(x + rand() - cols / 2) * s, -(y + rand() - gh / 2) * s, (rand() - 0.5) * 0.05]);
+      out.push([(x + rand() - cols / 2) * s, -(y + rand() - gh / 2) * s, (rand() - 0.5) * depth]);
     }
     return out;
   }
@@ -100,16 +98,16 @@
   const px = new Float32Array(N), py = new Float32Array(N), pz = new Float32Array(N);
   const vx = new Float32Array(N), vy = new Float32Array(N), vz = new Float32Array(N);
   const sx = new Float32Array(N), sy = new Float32Array(N); // last drawn screen position
-  cloud(N, { radii: SCATTER }).forEach((p, i) => { px[i] = p[0]; py[i] = p[1]; pz[i] = p[2]; });
+  cloud(N, { radii: F.scatter }).forEach((p, i) => { px[i] = p[0]; py[i] = p[1]; pz[i] = p[2]; });
   const from = new Array(N).fill(null), switchAt = new Float32Array(N), depth = new Uint16Array(N).map((_, i) => i);
   let cur = formFor(F.home), t = 0;
-  for (let i = 0; i < N; i++) switchAt[i] = reduce ? 0 : rand() * F.stagger;
+  for (let i = 0; i < N; i++) switchAt[i] = reduce ? 0 : Math.random() * F.stagger;
   const formOf = i => t >= switchAt[i] ? cur : from[i];
   function go(key) {
     const next = formFor(key);
     for (let i = 0; i < N; i++) {
       if (t >= switchAt[i]) from[i] = cur;
-      switchAt[i] = t + rand() * F.stagger;
+      switchAt[i] = t + Math.random() * F.stagger;
     }
     cur = next;
   }
@@ -144,7 +142,7 @@
       y += c.wander * (0.16 * Math.sin(0.71 * t + 2.3 * phi) + 0.12 * Math.cos(0.5 * t + 1.7 * x));
       z += c.wander * 0.2 * Math.cos(0.45 * t + 1.7 * phi);
     }
-    if (c.jitter && !reduce) { x += (rand() - 0.5) * c.jitter; y += (rand() - 0.5) * c.jitter; z += (rand() - 0.5) * c.jitter; }
+    if (c.jitter && !reduce) { x += (Math.random() - 0.5) * c.jitter; y += (Math.random() - 0.5) * c.jitter; z += (Math.random() - 0.5) * c.jitter; }
     const yaw = c.flat ? 0 : s.angle + lean + (c.sway ? c.sway * Math.sin(0.6 * t) : 0);
     const pitch = c.flat ? 0 : camera.pitch + leanY;
     const cy = Math.cos(yaw), sn = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
@@ -153,18 +151,18 @@
   }
 
   function step(dt) {
+    if (!scale) return; // the canvas has no size yet
     t += dt;
     schedule();
     let tx = 0, ty = 0, r = null;
     if (ptr) {
       r = canvas.getBoundingClientRect();
-      tx = clamp((ptr.x - r.left - r.width / 2) / r.width, -0.5, 0.5) * LEAN[0];
-      ty = clamp((ptr.y - r.top - r.height / 2) / r.height, -0.5, 0.5) * LEAN[1];
+      tx = clamp((ptr.x - r.left - r.width / 2) / r.width, -0.5, 0.5) * pointer.lean[0];
+      ty = clamp((ptr.y - r.top - r.height / 2) / r.height, -0.5, 0.5) * pointer.lean[1];
     }
     lean += (tx - lean) * Math.min(1, dt * 3);
     leanY += (ty - leanY) * Math.min(1, dt * 3);
     for (const k in states) states[k].angle += (states[k].cfg.spin || 0) * dt;
-    const scale = SIZE * Math.min(w, h);
     for (let i = 0; i < N; i++) {
       const s = formOf(i);
       if (!s) continue; // not yet released from the scatter
@@ -175,8 +173,8 @@
       vz[i] += ((aim[2] - pz[i]) * k - vz[i] * d) * dt;
       if (r) {
         const dx = sx[i] - (ptr.x - r.left), dy = sy[i] - (ptr.y - r.top), dist = Math.hypot(dx, dy);
-        if (dist < REACH && dist > 0.01) {
-          const push = (1 - dist / REACH) * PUSH * dt * 60 / scale;
+        if (dist < pointer.reach && dist > 0.01) {
+          const push = (1 - dist / pointer.reach) * pointer.push * dt * 60 / scale;
           vx[i] += dx / dist * push; vy[i] -= dy / dist * push;
         }
       }
@@ -185,10 +183,10 @@
   }
 
   // Canvas size follows its CSS box (square), at up to twice the pixel ratio.
-  let w = 0, h = 0, ready = false;
+  let w = 0, h = 0, scale = 0, ready = false;
   function measure() {
     const r = canvas.getBoundingClientRect(), dpr = Math.min(2, devicePixelRatio || 1);
-    w = r.width; h = r.height;
+    w = r.width; h = r.height; scale = SIZE * Math.min(w, h);
     canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
@@ -197,7 +195,8 @@
 
   function draw() {
     ctx.clearRect(0, 0, w, h);
-    const scale = SIZE * Math.min(w, h), dist = camera.distance;
+    if (!scale) return;
+    const dist = camera.distance;
     depth.sort((a, b) => pz[b] - pz[a]); // far to near
     let font = '';
     for (const i of depth) {
