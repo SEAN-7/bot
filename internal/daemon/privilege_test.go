@@ -503,10 +503,10 @@ func TestPrivilegeControlDirsPrivate(t *testing.T) {
 }
 
 // TestPrivilegeHarnessDirsPrivate: a child that its parent lets through its
-// home (x on ~) cannot list or read the parent's inbox, collected messages,
-// saved outputs or spools, nor a sibling's control directory: admission
-// created those directories closed to others. The grandparent, in the
-// parent's group, reads them all.
+// home (x on ~) cannot list or read the parent's inbox, collected messages
+// or spools, nor a sibling's control directory: admission created those
+// directories closed to others. The grandparent, in the parent's group, reads
+// them all.
 func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h, _ := rootHarness(t)
 	h.start()
@@ -519,7 +519,6 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		filepath.Join(ctrlG, "config.json"):                  testConfig,
 		filepath.Join(ctrlS, "OWNER.md"):                     "sibling's orders\n",
 		filepath.Join(homeA, "inbox", "processed", "old.md"): "the owner's words\n",
-		filepath.Join(homeA, ".outputs", "out.txt"):          "saved output\n",
 		filepath.Join(homeA, "shared.txt"):                   "for everyone\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -535,7 +534,7 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		}
 	}
 	homeG := h.childHome(ctrlG)
-	for _, dir := range []string{"inbox", "inbox/processed", ".outputs", ".messages", ".messages/agents", "agents"} {
+	for _, dir := range []string{"inbox", "inbox/processed", ".messages", ".messages/agents", "agents"} {
 		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
 	}
 	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
@@ -544,7 +543,7 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	reads := func(home, key string) string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "cat %s/shared.txt; echo %sok=$?", home, key)
-		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/.outputs", "cat %s/.outputs/out.txt", "ls %s/.messages", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
+		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/.messages", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
 			fmt.Fprintf(&b, "; "+c+"; echo %s%d=$?", home, key, i+1)
 		}
 		return b.String()
@@ -556,10 +555,10 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h.waitEnds(childID("a/agents/g"), 1)
 	out := h.toolOutput("g1=")
 	exitCodes(t, out, true, "gok")
-	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5", "g6", "g7", "g8")
+	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5", "g6")
 	h.drop(h.mainHome, "go.md", "task-for-main")
 	h.waitEnds(h.mainID, 1)
-	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6", "m7", "m8")
+	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6")
 }
 
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops

@@ -103,8 +103,8 @@ install's main agent is `agent-1`; one upgraded from 0.3 holds the user its
 0.3 user was renamed to (`agent-16` by default, see Migration).
 
 In an agent's home, the harness uses `README.md`, `TASK.md`, `config.json`,
-`inbox/`, `inbox/processed/`, `agents/`, `.messages/`, `.outputs/` and the
-`journal` symlink.
+`inbox/`, `inbox/processed/`, `agents/`, `.messages/` and the `journal`
+symlink.
 
 An agent's control directory is `agents/NAME/` in its parent's home
 (`/etc/agent/agents/NAME/` for root's children) and belongs to the parent.
@@ -128,13 +128,12 @@ its home. An agent can tighten its own files' modes; its journals stay
 readable by its ancestors regardless. What an agent grants to let a child
 through its home (x on `~`, see Sharing) opens what others can read
 there, so the harness keeps its own parts of the home group-only: the
-directories `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
-`.messages/agents/` and `.outputs/` (0750, see Admission), the inbox
-notes, delivered messages and saved outputs it writes (0640), the control
-directories `agent new` creates (0750, `config.json` 0640) and the spools
+directories `inbox/`, `inbox/processed/`, `agents/`, `.messages/` and
+`.messages/agents/` (0750, see Admission), the inbox notes and delivered
+messages it writes (0640), the control directories `agent new` creates (0750, `config.json` 0640) and the spools
 `agent message` and `agent send` write (`.messages/` directories 0750,
 files 0640). A child never needs its control directory, and cannot read
-its parent's inbox or saved outputs, its siblings' `OWNER.md`, `ERROR` or
+its parent's inbox, its siblings' `OWNER.md`, `ERROR` or
 starting `config.json`, or messages in flight.
 Processes started before a membership change (an ancestor's user manager,
 for example) see the new group only after they restart; commands the
@@ -244,7 +243,7 @@ agent user cannot read another user's process environment.
   previous holder left in the home (reclaim normally leaves it empty); sets
   the members of the user's group to the agent's ancestors other than root;
   creates the harness's directories `inbox/`, `inbox/processed/`,
-  `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` where
+  `agents/`, `.messages/` and `.messages/agents/` where
   missing, 0750, closed to others (`private`: existing ones are kept as
   they are; a link, a file or another user's directory of that name is
   left alone, and the service log names it once per daemon run) and
@@ -404,9 +403,9 @@ sh tool).
   up, kill the process group with SIGKILL and say so, suggesting a longer
   wait or `systemd-run --user`. Combined stdout and stderr plus the exit
   status are returned.
-  Output over 16 KiB is clipped to its first and last 8 KiB, and the full text
-  is saved to `~/.outputs/<run>-<step>.txt` (through the helper, 0640) with
-  the path included in the result.
+  Output over 16 KiB is clipped to its first and last 8 KiB, with a marker
+  giving the bytes omitted and suggesting redirecting long output to a file.
+  The journal records exactly what the model was given.
 - A reply with no command ends the run (`reason: "done"`).
 
 **The sh tool** (verbatim; it is part of every agent's cached prefix, so it
@@ -822,7 +821,8 @@ the release.
 
 Using the replay plugin:
 - a basic run
-- output clipping
+- output clipping: the marker is added, nothing is saved, and the journal
+  holds the clipped text
 - command timeout, and the model's `wait`: it replaces the default, is
   capped at the maximum, and is passed back to the plugin unchanged
 - mid-run inbox delivery
@@ -844,10 +844,10 @@ Using the replay plugin:
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither; a child let through its parent's
   home cannot list or read the parent's `agents/`, inbox, collected
-  messages, saved outputs or spools, while its grandparent can; the
-  harness's directories are created 0750 at admission, a link, file or
-  other user's directory of that name is left alone and logged once, and
-  its inbox files and outputs are 0640
+  messages or spools, while its grandparent can; the harness's
+  directories are created 0750 at admission, a link, file or other user's
+  directory of that name is left alone and logged once, and its inbox
+  files are 0640
 - config: admission moves `config.json` into the home; an agent's edit makes
   its next run fresh with the new model; an invalid config writes `ERROR` in
   the control directory, which the agent cannot remove, and tells the

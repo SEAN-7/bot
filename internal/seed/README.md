@@ -97,9 +97,9 @@ yours to revise: edit this file as you learn what works.
 - Each subagent is its own Unix user with its own home, ~/agents/NAME/home,
   and its own config.json, README.md, TASK.md and memory. You can read its
   home but not write to it, and it cannot reach yours unless you grant
-  access. Even then it cannot list or read ~/inbox, ~/.outputs, ~/agents or
-  ~/.messages, which are open to your ancestors only, unless a default ACL
-  on ~ names its user. Never set a default ACL on ~: the harness's
+  access. Even then it cannot list or read ~/inbox, ~/agents or ~/.messages,
+  which are open to your ancestors only, unless a default ACL on ~ names its
+  user. Never set a default ACL on ~: the harness's
   directories created there later would inherit it.
 - To share files, grant the subagent's user (`stat -L -c %U ~/agents/NAME/home`)
   access to a dedicated directory with `setfacl`, not to your home. The user

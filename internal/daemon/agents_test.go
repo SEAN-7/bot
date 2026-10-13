@@ -225,7 +225,7 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 	}
 	// The harness's directories are its ancestors' to read (the home's
 	// group), not its children's, should it let them through its home.
-	for _, p := range []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents", ".outputs"} {
+	for _, p := range []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"} {
 		if info, err := os.Lstat(filepath.Join(home, p)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
 			t.Fatalf("%s: %v %v", p, info, err)
 		}
@@ -253,11 +253,11 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	sys := h.cfg.System.(*fakeSystem)
 	h.start()
 	h.stop()
-	outputs, spools := filepath.Join(h.mainHome, ".outputs"), filepath.Join(h.mainHome, ".messages", "agents")
+	processed, spools := filepath.Join(h.mainHome, "inbox", "processed"), filepath.Join(h.mainHome, ".messages", "agents")
 	outside := t.TempDir()
 	os.Chmod(outside, 0o755)
-	os.RemoveAll(outputs)
-	os.Symlink(outside, outputs)
+	os.RemoveAll(processed)
+	os.Symlink(outside, processed)
 	os.RemoveAll(spools)
 	os.WriteFile(spools, nil, 0o644)
 	sys.setFail("linger agent-1", errors.New("linger failed"))
@@ -265,13 +265,13 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	waitFor(t, "admission retried", func() bool { return strings.Count(sys.String(), "linger agent-1") >= 4 })
 	sys.setFail("linger agent-1", nil)
 	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
-	for _, p := range []string{outputs, spools} {
+	for _, p := range []string{processed, spools} {
 		if n := strings.Count(h.logs.String(), "main: not closed to others: "+p+" "); n != 1 {
 			t.Errorf("%s logged %d times:\n%s", p, n, h.logs)
 		}
 	}
-	if info, _ := os.Lstat(outputs); info.Mode()&fs.ModeSymlink == 0 {
-		t.Errorf(".outputs link replaced: %v", info.Mode())
+	if info, _ := os.Lstat(processed); info.Mode()&fs.ModeSymlink == 0 {
+		t.Errorf("inbox/processed link replaced: %v", info.Mode())
 	}
 	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
 		t.Errorf("followed a link: %v", info.Mode())

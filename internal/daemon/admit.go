@@ -184,12 +184,12 @@ func (d *daemon) repairHomeLink(c *agent) {
 
 // harnessDirs are the directories the harness keeps in a home, parents
 // first.
-var harnessDirs = []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents", ".outputs"}
+var harnessDirs = []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"}
 
 // seed creates the harness's directories and the seed files the home lacks,
 // through the agent's own helper. The directories are created open to the
 // home's group, the agent's ancestors, and closed to others: a child the
-// agent lets through its home never reads its inbox, outputs, spools or its
+// agent lets through its home never reads its inbox, spools or its
 // siblings' control directories. One left alone, as it is not a real
 // directory the agent owns, may be open to others: the service log names it
 // once per daemon run.

@@ -15,7 +15,7 @@ import (
 	"unicode/utf8"
 )
 
-// captureLimit bounds the output kept in memory and saved to ~/.outputs.
+// captureLimit bounds the output kept in memory.
 const captureLimit = 8 << 20
 
 type Options struct {

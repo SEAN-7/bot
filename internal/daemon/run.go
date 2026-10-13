@@ -179,7 +179,6 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		return "empty" // the files vanished after the wake-up; nothing to say
 	}
 	messages := []proto.Message{{Role: "user", Content: encodeRecords(records), Images: shown}}
-	runID := strings.TrimSuffix(filepath.Base(j.Path()), ".jsonl")
 	warned, warnNext := false, false
 	for n := 1; ; n++ {
 		resp, err := a.complete(ctx, cfg, system, messages)
@@ -232,8 +231,8 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		}
 		wait := commandWait(msg.Wait, d.cfg.CommandWait, d.cfg.MaxCommandWait)
 		result, runErr := a.command(ctx, *msg.Command, wait)
-		content, saved := a.toolContent(runID, n, result, runErr, wait)
-		j.Record("result", map[string]any{"call_id": callID, "wait": seconds(wait), "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content, "full_output": saved})
+		content := a.toolContent(result, runErr, wait)
+		j.Record("result", map[string]any{"call_id": callID, "wait": seconds(wait), "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content})
 		if ctx.Err() != nil {
 			return a.stopReason(ctx)
 		}
@@ -387,10 +386,10 @@ func seconds(d time.Duration) string {
 	return d.String()
 }
 
-// toolContent formats a command result, saving clipped output in full.
-func (a *agent) toolContent(runID string, n int, r shell.Result, err error, wait time.Duration) (string, string) {
+// toolContent formats a command result, clipping long output.
+func (a *agent) toolContent(r shell.Result, err error, wait time.Duration) string {
 	if err != nil {
-		return "could not run command: " + err.Error(), ""
+		return "could not run command: " + err.Error()
 	}
 	output, clipped := shell.Clip(r.Output, a.d.cfg.OutputClip)
 	var content string
@@ -399,17 +398,8 @@ func (a *agent) toolContent(runID string, n int, r shell.Result, err error, wait
 	} else {
 		content = fmt.Sprintf("exit status %d\n%s", r.ExitCode, output)
 	}
-	if !clipped {
-		return content, ""
+	if clipped {
+		content += "\n" + MsgOutputClipped
 	}
-	dir := filepath.Join(a.home, ".outputs")
-	path := filepath.Join(dir, fmt.Sprintf("%s-%d.txt", runID, n))
-	if err := a.fs.Mkdir(dir, 0o750); err == nil {
-		err = a.fs.Write(path, []byte(r.Output), 0o640)
-	}
-	if err != nil {
-		a.logf("save output: %v", err)
-		return content, ""
-	}
-	return content + "\n" + fmt.Sprintf(MsgOutputSavedFmt, path), path
+	return content
 }

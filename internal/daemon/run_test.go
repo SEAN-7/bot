@@ -64,16 +64,18 @@ func TestOutputClipping(t *testing.T) {
 	h := newHarness(t, step("head -c 40000 /dev/zero | tr '\\0' a", 100), done())
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")
-	h.waitEnds(h.mainID, 1)
+	records := h.waitEnds(h.mainID, 1)
 	tool := h.requests()[1].Messages[2].Content
-	if !strings.Contains(tool, "bytes clipped") || !strings.Contains(tool, "[full output: ") || len(tool) > 17000 {
+	if !strings.Contains(tool, "bytes clipped") || !strings.HasSuffix(tool, MsgOutputClipped) || len(tool) > 17000 {
 		t.Fatalf("tool content len %d: %.200q", len(tool), tool)
 	}
-	saved := tool[strings.Index(tool, "[full output: ")+len("[full output: "):]
-	saved = saved[:strings.Index(saved, "]")]
-	info, err := os.Stat(saved)
-	if err != nil || info.Size() != 40000 || info.Mode().Perm() != 0o640 || !strings.HasPrefix(saved, filepath.Join(h.mainHome, ".outputs")) {
-		t.Fatalf("saved %s: %v %v", saved, info, err)
+	if _, err := os.Stat(filepath.Join(h.mainHome, ".outputs")); !os.IsNotExist(err) {
+		t.Fatalf("clipped output saved: %v", err)
+	}
+	for _, r := range records {
+		if r["type"] == "result" && r["output"] != tool {
+			t.Fatalf("journal output differs from what the model saw: %.100q", r["output"])
+		}
 	}
 }
 
