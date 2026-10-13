@@ -110,7 +110,8 @@ func TestBuild(t *testing.T) {
 	if err := b.build(); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"index.html", "style.css", "favicon.svg", "docs/index.html", "docs/spec/index.html", "docs/philosophy/index.html", "docs/changelog/index.html"} {
+	for _, name := range []string{"index.html", "style.css", "favicon.svg",
+		"fonts/MartianMono.woff2", "fonts/InstrumentSans.woff2", "fonts/MartianMono-OFL.txt", "fonts/InstrumentSans-OFL.txt", "docs/index.html", "docs/spec/index.html", "docs/philosophy/index.html", "docs/changelog/index.html"} {
 		if _, err := os.Stat(filepath.Join(out, name)); err != nil {
 			t.Error(err)
 		}

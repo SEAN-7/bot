@@ -21,3 +21,7 @@ go run . -out /tmp/site -serve localhost:8000
 Pages are listed in `pages` in `main.go`; links between them are rewritten,
 other relative links point at the file on GitHub, and relative images are
 copied. No JavaScript.
+
+The look is specified in `DESIGN.md`. The site serves its own fonts from
+`fonts/`: Latin subsets of Martian Mono and Instrument Sans, both under the
+SIL Open Font License, with their licences beside them.

@@ -17,6 +17,7 @@ import (
 	"html"
 	"html/template"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -28,7 +29,7 @@ import (
 
 const repo = "https://github.com/SEAN-7/bot"
 
-//go:embed style.css favicon.svg
+//go:embed style.css favicon.svg fonts
 var static embed.FS
 
 type page struct{ src, out, name string }
@@ -139,11 +140,15 @@ func (b *builder) build() error {
 	if err := os.RemoveAll(b.out); err != nil {
 		return err
 	}
-	for _, name := range []string{"style.css", "favicon.svg"} {
-		data, _ := static.ReadFile(name)
-		if err := write(filepath.Join(b.out, name), data); err != nil {
+	err = fs.WalkDir(static, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
 			return err
 		}
+		data, _ := static.ReadFile(name)
+		return write(filepath.Join(b.out, filepath.FromSlash(name)), data)
+	})
+	if err != nil {
+		return err
 	}
 	for a := range b.assets {
 		data, err := os.ReadFile(filepath.Join(b.root, a))
