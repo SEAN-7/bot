@@ -956,42 +956,7 @@ real unprivileged users (a throwaway pool). They run under `sudo` in GitHub
 Actions and in a throwaway directory on the VM, never against the live
 agent.
 
-## Operator README
-
-It covers:
-- installation and upgrades, and that an installation older than 0.4.0
-  upgrades through v0.4.0 first
-- setting a spend limit on the provider key
-- sending the first message (`sudo agent send main "..."`)
-- writing `/etc/agent/agents/main/OWNER.md`: what it is for, that each edit
-  rebuilds the main agent's prompt cache once, and that precedence is a
-  convention
-- reading logs and conversations, including subagents'
-- creating and removing top-level agents of one's own (`sudo agent new`,
-  `sudo agent remove`)
-- stopping the service
-- what is and isn't protected: agents are isolated from their parents and
-  siblings but readable by their ancestors by default, and no agent has sudo
-- an example first message asking the agent to set up a Telegram channel for
-  itself from a bot token
-
 ## Migration
-
-### From the Node bot
-
-After the harness is built and tested:
-1. This repository's Node code is removed in one commit; history keeps it.
-   `AGENTS.md` and the docs are rewritten for the new design.
-2. On the VM, the Node bot is stopped and uninstalled with its own uninstaller,
-   which retains its data.
-3. A full root-only backup is kept in `/var/backups/`. The journal and chat
-   histories are exported to JSONL and, with its memory and notes, copied to
-   `/home/agent/old-bot/`; its LSPN collector project goes to
-   `/home/agent/lspn-collector/`. Both are ordinary files owned by the agent.
-   (Since 0.4.0 that home is the main agent's pool user's, linked from
-   `/home/agent`.)
-4. The new harness is installed and verified with read-only checks.
-   Synthetic messages are never sent to the live agent.
 
 ### To a recursive tree
 

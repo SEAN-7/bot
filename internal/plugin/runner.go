@@ -20,8 +20,8 @@ import (
 	"github.com/SEAN-7/bot/internal/proto"
 )
 
-// validName keeps an agent-controlled provider name inside the plugin directory.
-var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
+// ValidName keeps an agent-controlled provider name inside the plugin directory.
+var ValidName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 // Runner executes plugins as the provider user, passing credentials in the
 // environment. Neither the plugin nor the agent reads the credentials files.
@@ -42,7 +42,7 @@ func (r *Runner) Installed() ([]string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if e.Type().IsRegular() && validName.MatchString(e.Name()) {
+		if e.Type().IsRegular() && ValidName.MatchString(e.Name()) {
 			names = append(names, e.Name())
 		}
 	}
@@ -85,7 +85,7 @@ func IsContextOverflow(err error) bool {
 }
 
 func (r *Runner) run(ctx context.Context, provider string, req, resp any) error {
-	if !validName.MatchString(provider) {
+	if !ValidName.MatchString(provider) {
 		return fmt.Errorf("invalid provider name %q", provider)
 	}
 	env := []string{"PATH=/usr/bin:/bin", "HOME=/"}

@@ -17,16 +17,14 @@ import (
 	"sort"
 	"strings"
 	"syscall"
-	"time"
 )
 
 type Entry struct {
-	Name    string    `json:"name"`
-	Type    string    `json:"type"` // file, dir, symlink or other
-	Size    int64     `json:"size"`
-	ModTime time.Time `json:"mod_time"`
-	UID     int       `json:"uid"`
-	Mode    uint32    `json:"mode"` // permission bits only
+	Name string `json:"name"`
+	Type string `json:"type"` // file, dir, symlink or other
+	Size int64  `json:"size"`
+	UID  int    `json:"uid"`
+	Mode uint32 `json:"mode"` // permission bits only
 	// Dev and Ino identify the file: a directory removed and created again
 	// at the same path is a different one.
 	Dev uint64 `json:"dev"`
@@ -124,22 +122,14 @@ func handle(req request) (response, error) {
 		data, err := io.ReadAll(io.LimitReader(f, req.Limit))
 		return response{Data: data, Size: info.Size()}, err
 	case "write":
-		mode := os.FileMode(req.Mode).Perm()
-		if mode == 0 {
-			mode = 0o644 // a request without one
-		}
-		return response{}, write(req.Path, req.Data, mode)
+		return response{}, write(req.Path, req.Data, os.FileMode(req.Mode).Perm())
 	case "private":
 		skipped, err := private(req.Paths, req.Create)
 		return response{Paths: skipped}, err
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
 	case "mkdir":
-		mode := os.FileMode(req.Mode).Perm()
-		if mode == 0 {
-			mode = 0o755 // a request without one
-		}
-		return response{}, os.MkdirAll(req.Path, mode)
+		return response{}, os.MkdirAll(req.Path, os.FileMode(req.Mode).Perm())
 	case "remove":
 		return response{}, os.RemoveAll(req.Path)
 	case "unlink":
@@ -183,7 +173,7 @@ func entry(info fs.FileInfo) Entry {
 	case info.Mode()&fs.ModeSymlink != 0:
 		kind = "symlink"
 	}
-	e := Entry{Name: info.Name(), Type: kind, Size: info.Size(), ModTime: info.ModTime(), Mode: uint32(info.Mode().Perm())}
+	e := Entry{Name: info.Name(), Type: kind, Size: info.Size(), Mode: uint32(info.Mode().Perm())}
 	e.UID = owner(info)
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		e.Dev, e.Ino = uint64(st.Dev), uint64(st.Ino)

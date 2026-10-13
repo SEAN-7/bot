@@ -12,7 +12,6 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -22,8 +21,6 @@ import (
 	"github.com/SEAN-7/bot/internal/release"
 	"github.com/SEAN-7/bot/plugins"
 )
-
-var pluginName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,63}$`)
 
 type InstallOptions struct {
 	Layout        layout.Layout
@@ -96,7 +93,7 @@ func fetch(ctx context.Context, target, sha string, o InstallOptions) (string, [
 		name = strings.TrimPrefix(path.Base(target), "plugin-")
 		name = strings.TrimSuffix(strings.TrimSuffix(name, "-linux-amd64"), "-linux-arm64")
 		want = strings.ToLower(sha)
-		if pluginName.MatchString(name) {
+		if plugin.ValidName.MatchString(name) {
 			data, err = download(ctx, target)
 		}
 	} else {
@@ -115,7 +112,7 @@ func fetch(ctx context.Context, target, sha string, o InstallOptions) (string, [
 		}
 		data, err = o.Release.Asset(ctx, o.Repo, "v"+o.Version, "plugin-"+name+"-linux-"+o.Arch)
 	}
-	if !pluginName.MatchString(name) {
+	if !plugin.ValidName.MatchString(name) {
 		return "", nil, fmt.Errorf("invalid plugin name %q", name)
 	}
 	if err != nil {

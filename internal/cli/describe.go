@@ -98,7 +98,7 @@ func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool,
 				o := m.Options[opt]
 				var allowed string
 				if o.Type == "integer" {
-					allowed = fmt.Sprintf("integer %s-%s", bound(o.Min), bound(o.Max))
+					allowed = fmt.Sprintf("integer %s-%s", plugin.Bound(o.Min), plugin.Bound(o.Max))
 				} else {
 					var vals []string
 					for _, v := range o.Values {
@@ -111,11 +111,4 @@ func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool,
 		}
 	}
 	return nil
-}
-
-func bound(p *int) string {
-	if p == nil {
-		return "any"
-	}
-	return fmt.Sprint(*p)
 }

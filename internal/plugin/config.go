@@ -64,7 +64,7 @@ func Validate(c Config, installed []string, d proto.DescribeResponse) error {
 		if opt.Type == "integer" {
 			n, isNum := value.(float64)
 			if !isNum || n != math.Trunc(n) || (opt.Min != nil && n < float64(*opt.Min)) || (opt.Max != nil && n > float64(*opt.Max)) {
-				return fmt.Errorf("option %q: value %v out of range [%s, %s]", name, value, bound(opt.Min), bound(opt.Max))
+				return fmt.Errorf("option %q: value %v out of range [%s, %s]", name, value, Bound(opt.Min), Bound(opt.Max))
 			}
 			continue
 		}
@@ -81,7 +81,8 @@ func Validate(c Config, installed []string, d proto.DescribeResponse) error {
 	return nil
 }
 
-func bound(p *int) string {
+// Bound shows an option limit, or "any" when it has none.
+func Bound(p *int) string {
 	if p == nil {
 		return "any"
 	}
