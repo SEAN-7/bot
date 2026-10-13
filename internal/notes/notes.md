@@ -8,10 +8,13 @@ next wake. Write facts, not instructions.
 - Your inbox, collected messages, saved outputs, spools and subagents'
   control directories are closed to other users: ~/inbox,
   ~/inbox/processed, ~/.outputs, ~/.messages, ~/.messages/agents, ~/agents
-  and each ~/agents/NAME are 0750, and those an earlier release left open
-  to others lost those permissions. Your ancestors still read them through
-  your group; a subagent you let through your home cannot list or read
-  them. Inbox notes, delivered messages and saved outputs are written 0640.
+  and each ~/agents/NAME have no permissions for others (new ones are
+  created 0750), and those an earlier release left open to others lost
+  those permissions. Your ancestors still read them through your group; a
+  subagent you let through your home cannot list or read them, unless a
+  default ACL on ~ names its user: directories created in ~ inherit that
+  entry, and closing them to others leaves it. Inbox notes, delivered
+  messages and saved outputs are written 0640.
 - When no agent user is free because the free users' homes still belong to
   agents that have not been recovered, a subagent's ERROR and the note to
   you say "No free agent user" instead of "Agent limit reached".

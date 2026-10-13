@@ -30,9 +30,11 @@ func TestUsageDescribesNewTimeout(t *testing.T) {
 	}
 }
 
-// The help says which directories the harness keeps closed to others.
+// The help says which directories the harness keeps closed to others, what
+// x on ~ still exposes, and that a default ACL on ~ would reach them.
 func TestSharingHelpNamesClosedDirectories(t *testing.T) {
-	for _, want := range []string{"~/inbox, ~/agents, ~/.messages and ~/.outputs", "0750"} {
+	for _, want := range []string{"~/inbox, ~/agents, ~/.messages and\n~/.outputs closed to others",
+		"(README.md, TASK.md, config.json and any of yours)", "Set no\ndefault ACL on ~ itself"} {
 		if !strings.Contains(SharingHelp, want) {
 			t.Errorf("agent help lacks %q", want)
 		}

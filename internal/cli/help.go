@@ -42,11 +42,13 @@ USER below is the user that owns the subagent's home:
 The subagent needs x on every directory leading to the shared directory, and
 x on a directory lets USER reach everything inside it that others can read
 (new files are other-readable by default; in ~ that includes your README.md,
-TASK.md and notes). The harness keeps
-~/inbox, ~/agents, ~/.messages and ~/.outputs closed to others (0750), so x
-on ~ exposes only other-readable files you create yourself. So share a
-dedicated directory, and chmod o-rwx whatever on the way should stay private.
-For example:
+TASK.md and notes). The harness keeps ~/inbox, ~/agents, ~/.messages and
+~/.outputs closed to others, so x on ~ exposes only the other-readable files
+in ~ (README.md, TASK.md, config.json and any of yours). So share a dedicated
+directory, and chmod o-rwx whatever on the way should stay private. Set no
+default ACL on ~ itself: the harness's directories created there later would
+inherit USER's entry, which closing them to others does not remove. For
+example:
 
   mkdir -p ~/share && mkdir -m 700 ~/share/NAME
   setfacl -m u:USER:x ~ ~/share

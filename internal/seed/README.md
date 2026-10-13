@@ -89,7 +89,8 @@ yours to revise: edit this file as you learn what works.
   and its own config.json, README.md, TASK.md and memory. You can read its
   home but not write to it, and it cannot reach yours unless you grant
   access. Even then it cannot list or read ~/inbox, ~/.outputs, ~/agents or
-  ~/.messages, which are open to your ancestors only.
+  ~/.messages, which are open to your ancestors only, unless a default ACL
+  on ~ names its user (`agent help` explains).
 - Write standing instructions to ~/agents/NAME/OWNER.md. The subagent cannot
   change it and does not see yours, so repeat there whatever applies to it.
   Problems with it (it cannot start, its config.json is invalid, OWNER.md is

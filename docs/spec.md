@@ -350,6 +350,15 @@ agent user cannot read another user's process environment.
 - While a Stat or lookup error persists for a not-yet-running child's
   control directory (for example a parent setting it to mode 000), messages
   for that child wait and the error is logged once.
+- A failed free-home evidence check is not cached: while it keeps failing
+  (a user lookup or helper failure), admission and the check for a waiting
+  message start a helper for that home at every poll.
+- The harness closes its directories only to others. If an agent sets a
+  default ACL on `~` naming a child's user (`setfacl -d -m u:USER:...`),
+  the harness's directories created there later inherit that entry, and
+  closing them to others leaves it, so the child can list and read them.
+  `agent help` says to set default ACLs on the share directory only, never
+  on `~`.
 
 ## The loop (per agent)
 
@@ -478,7 +487,8 @@ Nothing reaches the human except from a top-level agent.
     while a failure prevents deciding so (logged once). Otherwise it is
     dropped, with a note in the sender's inbox (for root, the service log);
     deciding so uses the evidence Discovery remembers, so it starts no
-    helper at every poll.
+    helper at every poll once a home check has succeeded (see Known
+    limits).
 
   The delivery is recorded first, so the recipient can never collect an
   unrecorded file; then the inbox file is written through the recipient's
@@ -873,7 +883,8 @@ Using the replay plugin:
   logs left readable by an earlier release are tightened on start; a
   message for a child that can never be admitted (a `home` link to a home
   without its evidence, and nothing else) is dropped with a note, without
-  starting a helper at every poll, and one from root to no child is
+  starting a helper at every poll once the home is checked, and one from
+  root to no child is
   logged
 - release notes: an idle agent is not woken; a woken agent receives unseen
   sections once; a new agent and a development build receive none; a
