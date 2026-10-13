@@ -136,19 +136,19 @@
   // jittering, then turned by the form's angle and the lean.
   const aim = [0, 0, 0];
   function target(s, i) {
-    const c = s.cfg, T = t, phi = 1.618 * i;
+    const c = s.cfg, phi = 1.618 * i;
     let [x, y, z] = s.pts[i];
-    if (c.breathe) { const b = 1 + c.breathe * Math.sin(2.1 * T); x *= b; y *= b; z *= b; }
+    if (c.breathe) { const b = 1 + c.breathe * Math.sin(2.1 * t); x *= b; y *= b; z *= b; }
     if (c.wander && !reduce) {
-      x += c.wander * (0.22 * Math.sin(0.55 * T + 3.1 * phi) + 0.18 * Math.sin(0.37 * T + 2 * y));
-      y += c.wander * (0.16 * Math.sin(0.71 * T + 2.3 * phi) + 0.12 * Math.cos(0.5 * T + 1.7 * x));
-      z += c.wander * 0.2 * Math.cos(0.45 * T + 1.7 * phi);
+      x += c.wander * (0.22 * Math.sin(0.55 * t + 3.1 * phi) + 0.18 * Math.sin(0.37 * t + 2 * y));
+      y += c.wander * (0.16 * Math.sin(0.71 * t + 2.3 * phi) + 0.12 * Math.cos(0.5 * t + 1.7 * x));
+      z += c.wander * 0.2 * Math.cos(0.45 * t + 1.7 * phi);
     }
     if (c.jitter && !reduce) { x += (rand() - 0.5) * c.jitter; y += (rand() - 0.5) * c.jitter; z += (rand() - 0.5) * c.jitter; }
-    const yaw = c.flat ? 0 : s.angle + lean + (c.sway ? c.sway * Math.sin(0.6 * T) : 0);
+    const yaw = c.flat ? 0 : s.angle + lean + (c.sway ? c.sway * Math.sin(0.6 * t) : 0);
     const pitch = c.flat ? 0 : camera.pitch + leanY;
-    const cy = Math.cos(yaw), sy_ = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
-    const x1 = cy * x + sy_ * z, z1 = -sy_ * x + cy * z;
+    const cy = Math.cos(yaw), sn = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const x1 = cy * x + sn * z, z1 = -sn * x + cy * z;
     aim[0] = x1; aim[1] = cp * y - sp * z1; aim[2] = sp * y + cp * z1;
   }
 
