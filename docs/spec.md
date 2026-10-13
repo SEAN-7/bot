@@ -399,7 +399,7 @@ a dot.
 sh tool).
 - A reply with a command: run it for up to `wait` seconds. The model's
   `wait` is rounded down and kept within 1–600; a missing `wait`, or one that
-  is neither a number nor a string holding one, means 120. When the time is
+  is not a JSON number (a string, for example), means 120. When the time is
   up, kill the process group with SIGKILL and say so, suggesting a longer
   wait or `systemd-run --user`. Combined stdout and stderr plus the exit
   status are returned.
@@ -824,7 +824,8 @@ Using the replay plugin:
 - output clipping: the marker is added, nothing is saved, and the journal
   holds the clipped text
 - command timeout, and the model's `wait`: it replaces the default, is
-  capped at the maximum, and is passed back to the plugin unchanged
+  capped at the maximum, falls back to the default when it is not a number,
+  and is passed back to the plugin unchanged
 - mid-run inbox delivery
 - the 80% warning
 - the 95% reset, and the first-call guard

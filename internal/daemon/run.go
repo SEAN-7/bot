@@ -11,7 +11,6 @@ import (
 	"math"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -337,31 +336,16 @@ func (a *agent) clearError(prefix string) {
 	}
 }
 
-// commandWait interprets the model's wait argument: seconds as a JSON number
-// or a string holding one, rounded down and kept between 1s and limit.
-// Anything else, including no argument, means def.
+// commandWait interprets the model's wait argument: seconds as a JSON number,
+// rounded down and kept between 1s and limit. Anything else, including no
+// argument, means def.
 func commandWait(raw json.RawMessage, def, limit time.Duration) time.Duration {
-	var v any
-	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+	var v *float64
+	if json.Unmarshal(raw, &v) != nil || v == nil {
 		return def
 	}
-	var secs float64
-	switch v := v.(type) {
-	case float64:
-		secs = v
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err != nil {
-			return def
-		}
-		secs = f
-	default:
-		return def
-	}
-	if math.IsNaN(secs) {
-		return def
-	}
-	if secs = math.Max(math.Floor(secs), 1); secs >= limit.Seconds() {
+	secs := math.Max(math.Floor(*v), 1)
+	if secs >= limit.Seconds() {
 		return limit
 	}
 	return time.Duration(secs) * time.Second
