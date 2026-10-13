@@ -216,14 +216,19 @@ agent user cannot read another user's process environment.
   loop, no inbox, no journal and no owner. An agent's id is its path from
   root: `main`, `main/agents/research`, `main/agents/research/agents/scraper`.
   The id keys journals, pool assignments and delivery records.
-- Startup: require root; refuse to start when `pool.json` holds an agent
+- Startup: require root; refuse to start when `pool.json` is missing but
+  `/var/log/agent` holds anything other than regular files (an agent's
+  journal directory, or a link that may lead to one), since `pool.json` is
+  the only record of which user each agent holds and without it a live
+  agent's home could be cleared or handed to another agent: the error says
+  to restore `/var/lib/agent/pool.json` from a backup, or move the journals
+  somewhere only root can read (a fresh install has neither, and starts);
+  refuse to start when `pool.json` holds an agent
   id that is an absolute path, as releases before 0.4.0 wrote, since the
   daemon would take those agents for removed and wipe their homes (such a
   tree upgrades with the v0.4.0 `install.sh` first); resolve the provider
   user and the pool users (missing ones are logged, and agents are limited to
-  the rest); start root's helper; tighten the journals of agents that hold
-  no user (they get the journal modes and the group of their nearest
-  ancestor that holds one, root's for a top-level agent); then poll about
+  the rest); start root's helper; then poll about
   once a second. Each poll first finishes any reclaim left in progress (see
   Reclaim), then walks the tree, then collects messages.
 - **Discovery.** The tree is walked breadth-first from root, each node's
@@ -233,34 +238,24 @@ agent user cannot read another user's process environment.
   `/etc/agent/agents/`). One the daemon does not run yet is admitted, in
   this order:
   1. with its own user, when `pool.json` records one for its id (a daemon
-     restart; a missing `home` link is restored);
-  2. with the user its `home` link names, when that user is free and its
-     home holds this agent's evidence: its `journal` link points at this
-     agent's journal directory, whose group is that user's, which only the
-     daemon sets. This recovers a lost `pool.json`, keeping the home;
-  3. with a fresh user, when it holds a regular `config.json`. A free user
-     whose home holds another agent's evidence is never handed out, so a
-     lost `pool.json` cannot wipe a live home.
+     restart; the home is kept, and a missing `home` link is restored);
+  2. with a fresh user, when it holds a regular `config.json`.
 
   Otherwise it is left alone (it may still be being written). A failure
   while deciding (a file or helper that fails) is logged once and the
-  decision made again at the next poll. The evidence found in a free
-  user's home is remembered until the pool or a journal directory's group
-  changes, so a control directory that stays unadmitted does not start a
-  helper at every poll. A `config.json` that appears in an admitted
-  agent's control directory is ignored: the
-  agent's config is its own. When the agent is next admitted (after a
+  decision made again at the next poll. A `config.json` that appears in an
+  admitted agent's control directory is ignored: the agent's config is its
+  own. When the agent is next admitted (after a
   daemon restart) it is renamed `config.json.ignored`, replacing an older
   one, and the service log says so. A known agent the scan misses is
   kept unless its control directory is certainly gone.
-- **Admission.** The daemon takes the lowest free usable pool user and
+- **Admission.** The daemon takes the lowest free pool user and
   records the assignment in `pool.json`, then: prepares the home
   (`/home/agent-N`, 2750, setgid to the user's group); starts the user's
-  helper; when its entry records no release notes seen (a new agent, or
-  one recovered by its home's evidence), records the running version; for
-  a user new to this agent whose home does not hold this agent's evidence,
-  clears what a previous holder left in the home; sets the members of the
-  user's group to the agent's ancestors other than root; makes the harness's directories `inbox/`, `inbox/processed/`,
+  helper; when its entry records no release notes seen (a new agent),
+  records the running version; for a user new to this agent, clears what a
+  previous holder left in the home (reclaim normally leaves it empty); sets
+  the members of the user's group to the agent's ancestors other than root; makes the harness's directories `inbox/`, `inbox/processed/`,
   `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` real
   directories closed to others (`private`: missing ones are created 0750,
   and existing ones, such as an earlier release's 0755 ones, lose their
@@ -289,11 +284,8 @@ agent user cannot read another user's process environment.
 - **max_agents.** When no pool user can be given to a new control
   directory, it is not admitted. The daemon writes the reason to its `ERROR`
   and the service log, and notifies the parent's inbox once per reason
-  (root's children: the service log only): the agent limit, when
-  `max_agents` users (or every pool user there is) are assigned, or no
-  free agent user, when every free user's home holds another agent's
-  evidence (see Discovery). A free user's home that cannot be checked is
-  not reported so: the error is logged once and admission retried.
+  (root's children: the service log only): the agent limit, reached when
+  `max_agents` users (or every pool user there is) are assigned.
   Admission removes that `ERROR`.
 - One goroutine loop per agent, one run at a time per agent.
 - **Graceful stop.** On SIGTERM the daemon starts no new runs and delivers no
@@ -335,8 +327,8 @@ agent user cannot read another user's process environment.
   to the running version, the daemon first writes them to its inbox as one
   `<time>-harness-update.md`, then records the running version; the run
   collects the file with the rest. Nobody is woken for notes alone. An
-  assignment without `notes` (a newly assigned agent, one recovered after
-  a lost `pool.json`, or one from before notes were recorded) records the
+  assignment without `notes` (a newly assigned agent, or one from before
+  notes were recorded) records the
   running version at admission, with nothing to catch up on, and gets the
   notes of later releases; development builds deliver nothing.
   `/var/lib/agent/version` only records the installed version, for
@@ -345,20 +337,13 @@ agent user cannot read another user's process environment.
 
 ### Known limits
 
-- After a lost `pool.json`, an agent that cannot be recovered (no pool
-  record, no `home` link with evidence, no `config.json`) is left alone. If
-  it stays unrecovered across a second daemon restart, its journal group has
-  moved to its ancestor's, so its home no longer counts as evidence and its
-  user may be handed to a new agent, which clears that home.
-- The free-home evidence check is cached until the pool or a journal
-  group changes. A journal link recreated by an unrecovered agent's own
-  leftover processes in between is not seen until then.
+- Starting again after moving the journals aside, no agent holds a user:
+  the existing control directories are left alone, having no
+  `config.json`, and a user given to a new agent has its home cleared, but
+  its former holder's processes, crontab and lingering are not stopped.
 - While a Stat or lookup error persists for a not-yet-running child's
   control directory (for example a parent setting it to mode 000), messages
   for that child wait and the error is logged once.
-- A failed free-home evidence check is not cached: while it keeps failing
-  (a user lookup or helper failure), admission and the check for a waiting
-  message start a helper for that home at every poll.
 - The harness closes its directories only to others. If an agent sets a
   default ACL on `~` naming a child's user (`setfacl -d -m u:USER:...`),
   the harness's directories created there later inherit that entry, and
@@ -514,13 +499,10 @@ Nothing reaches the human except from a top-level agent.
     `<UTC timestamp>-owner.md`, recorded with sender `owner`, and appended
     to the child's conversation log. A message for a child that is not
     running waits while its control directory may still be admitted, as
-    Discovery decides: it holds a user, a `home` link to a free user's home
-    that holds its evidence, or a regular `config.json`; it also waits
-    while a failure prevents deciding so (logged once). Otherwise it is
-    dropped, with a note in the sender's inbox (for root, the service log);
-    deciding so uses the evidence Discovery remembers, so it starts no
-    helper at every poll once a home check has succeeded (see Known
-    limits).
+    Discovery decides: it holds a user or a regular `config.json`; it also
+    waits while a failure prevents deciding so (logged once; see Known
+    limits). Otherwise it is dropped, with a note in the sender's inbox
+    (for root, the service log).
 
   The delivery is recorded first, so the recipient can never collect an
   unrecorded file; then the inbox file is written through the recipient's
@@ -890,10 +872,7 @@ Using the replay plugin:
   parent's inbox as `agents/NAME` and its conversation log, and a top-level
   agent's reaches its log alone; a spool file not owned by the sender is
   ignored, and root's spool is private
-- discovery: a restart keeps every agent's home; after a lost `pool.json`
-  agents are recovered by their home's evidence, and a new agent never gets
-  a user whose home holds another agent's evidence; a control directory
-  left unadmitted does not check a free user's home at every poll
+- discovery: a restart keeps every agent's home
 - isolation: an agent cannot write its parent's or a sibling's home, its
   control directory or its OWNER.md; its parent can read its home and
   journals; a sibling can read neither; a child let through its parent's
@@ -926,29 +905,25 @@ Using the replay plugin:
   holder's journals; a control directory removed while it is being
   admitted is not recreated and its agent is not started
 - max_agents: with the pool exhausted, a new control directory is not
-  admitted and the parent is told once; when the free users' homes hold
-  other agents' evidence, the `ERROR` and the note say so instead; root's
-  children are reported in the service log, and no inbox is created for
-  root
-- messages: an agent cannot write its conversation log, and journals and
-  logs left readable by an earlier release are tightened on start; a
-  message for a child that can never be admitted (a `home` link to a home
-  without its evidence, and nothing else) is dropped with a note, without
-  starting a helper at every poll once the home is checked, and one from
-  root to no child is
-  logged
+  admitted and the parent is told once; root's children are reported in
+  the service log, and no inbox is created for root
+- messages: an agent cannot write its conversation log; a message for a
+  child that can never be admitted (a `home` link and nothing else) is
+  dropped with a note, one for a child whose control directory cannot be
+  read waits, and one from root to no child is logged
 - release notes: an idle agent is not woken; a woken agent receives unseen
-  sections once; a new agent and a development build receive none; a
-  recovered agent receives the next release's
+  sections once; a new agent and a development build receive none
 - OWNER.md: its content follows the system prompt in the first segment for
   a top-level agent and for a deeper one; a parent's OWNER.md does not reach
   its child; a missing or empty file leaves the segment identical to the
   system prompt; a symlink, a wrong owner or a group-writable file stops
   runs with `ERROR` and leaves the inbox intact; an edit makes the next run
   start fresh instead of continuing
-- startup: a `pool.json` with an absolute agent id stops the daemon before
-  it changes anything; a user named `agent` or a leftover migration marker
-  does not
+- startup: a missing `pool.json` with an agent's journal directory (or a
+  link) in the journal root, and a `pool.json` with an absolute agent id,
+  stop the daemon before it changes anything; with neither `pool.json` nor
+  journals it starts; a user named `agent` or a leftover migration marker
+  does not stop it
 
 Paths, user names and timings are configurable so the loop can be tested in
 a temporary root. Tests that depend on privilege separation need root and

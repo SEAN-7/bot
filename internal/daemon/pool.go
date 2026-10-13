@@ -31,7 +31,6 @@ type pool struct {
 	path   string
 	users  []string // assignment order
 	byUser map[string]poolEntry
-	gen    int // counts the changes made
 }
 
 func loadPool(path string, users []string) (*pool, error) {
@@ -82,20 +81,10 @@ func (p *pool) hasDescendants(agentID string) bool {
 	return false
 }
 
-// isFree reports whether user holds no entry.
-func (p *pool) isFree(user string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, taken := p.byUser[user]
-	return !taken
-}
-
-// assign returns agentID's user, giving it the first free one usable accepts
-// (any, if usable is nil) if it has none. It returns "" when no free user is
-// usable, limit entries already exist, or the agent's user is being
-// reclaimed: a reclaiming user is never handed out. usable runs with the pool
-// locked and must not use it.
-func (p *pool) assign(agentID string, limit int, usable func(user string) bool) (string, error) {
+// assign returns agentID's user, giving it the first free one if it has
+// none. It returns "" when limit entries already exist, or the agent's user
+// is being reclaimed: a reclaiming user is never handed out.
+func (p *pool) assign(agentID string, limit int) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, e := range p.byUser {
@@ -110,7 +99,7 @@ func (p *pool) assign(agentID string, limit int, usable func(user string) bool) 
 		return "", nil
 	}
 	for _, u := range p.users {
-		if _, taken := p.byUser[u]; !taken && (usable == nil || usable(u)) {
+		if _, taken := p.byUser[u]; !taken {
 			next := p.with(u, poolEntry{User: u, Agent: agentID, State: poolActive})
 			if err := p.commit(next); err != nil {
 				return "", err
@@ -189,15 +178,7 @@ func (p *pool) commit(next map[string]poolEntry) error {
 		return err
 	}
 	p.byUser = next
-	p.gen++
 	return nil
-}
-
-// generation changes whenever the pool does.
-func (p *pool) generation() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.gen
 }
 
 // save writes the entries with replaceFile, so a crash never leaves a torn

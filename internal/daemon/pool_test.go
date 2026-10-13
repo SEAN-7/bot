@@ -16,13 +16,13 @@ func TestPoolAssignLowestFreeAndPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	u1, _ := p.assign("/h/agents/a", 2, nil)
-	u2, _ := p.assign("/h/agents/b", 2, nil)
-	u3, _ := p.assign("/h/agents/c", 2, nil)
+	u1, _ := p.assign("/h/agents/a", 2)
+	u2, _ := p.assign("/h/agents/b", 2)
+	u3, _ := p.assign("/h/agents/c", 2)
 	if u1 != "agent-1" || u2 != "agent-2" || u3 != "" {
 		t.Fatal(u1, u2, u3)
 	}
-	if again, _ := p.assign("/h/agents/a", 2, nil); again != "agent-1" {
+	if again, _ := p.assign("/h/agents/a", 2); again != "agent-1" {
 		t.Fatal(again)
 	}
 	if p.userOf("/h/agents/b") != "agent-2" || p.userOf("/h/agents/c") != "" {
@@ -45,25 +45,25 @@ func TestPoolAssignLowestFreeAndPersist(t *testing.T) {
 
 func TestPoolLimit(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	if u, _ := p.assign("/h/agents/a", 1, nil); u != "agent-1" {
+	if u, _ := p.assign("/h/agents/a", 1); u != "agent-1" {
 		t.Fatal(u)
 	}
-	if u, err := p.assign("/h/agents/b", 1, nil); u != "" || err != nil {
+	if u, err := p.assign("/h/agents/b", 1); u != "" || err != nil {
 		t.Fatal(u, err)
 	}
 }
 
 func TestPoolFreeReuses(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	p.assign("/h/agents/a", 2, nil)
-	p.assign("/h/agents/b", 2, nil)
+	p.assign("/h/agents/a", 2)
+	p.assign("/h/agents/b", 2)
 	if err := p.free("agent-1"); err != nil {
 		t.Fatal(err)
 	}
 	if p.userOf("/h/agents/a") != "" {
 		t.Fatal("freed user still assigned")
 	}
-	if u, _ := p.assign("/h/agents/c", 2, nil); u != "agent-1" {
+	if u, _ := p.assign("/h/agents/c", 2); u != "agent-1" {
 		t.Fatal(u)
 	}
 }
@@ -81,13 +81,13 @@ func TestPoolSaveFailureLeavesMemoryUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _ := loadPool(filepath.Join(dir, "pool.json"), []string{"agent-1", "agent-2"})
-	if u, err := p.assign("/h/agents/a", 2, nil); u != "agent-1" || err != nil {
+	if u, err := p.assign("/h/agents/a", 2); u != "agent-1" || err != nil {
 		t.Fatal(u, err)
 	}
 	if err := os.RemoveAll(dir); err != nil { // saves now fail
 		t.Fatal(err)
 	}
-	if u, err := p.assign("/h/agents/b", 2, nil); u != "" || err == nil {
+	if u, err := p.assign("/h/agents/b", 2); u != "" || err == nil {
 		t.Fatalf("assign: %q %v", u, err)
 	}
 	if p.userOf("/h/agents/b") != "" || len(p.entries()) != 1 {
@@ -106,48 +106,31 @@ func TestPoolSaveFailureLeavesMemoryUnchanged(t *testing.T) {
 	if err := os.Mkdir(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if u, err := p.assign("/h/agents/b", 2, nil); u != "agent-2" || err != nil {
+	if u, err := p.assign("/h/agents/b", 2); u != "agent-2" || err != nil {
 		t.Fatal(u, err)
 	}
 }
 
 func TestPoolReclaimingUserIsNeverHandedOut(t *testing.T) {
 	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	p.assign("/h/agents/a", 2, nil)
+	p.assign("/h/agents/a", 2)
 	p.mark("agent-1", poolReclaiming)
-	if u, err := p.assign("/h/agents/a", 2, nil); u != "" || err != nil {
+	if u, err := p.assign("/h/agents/a", 2); u != "" || err != nil {
 		t.Fatalf("same agent: %q %v", u, err)
 	}
 	if p.userOf("/h/agents/a") != "agent-1" {
 		t.Fatal("userOf must still name the reclaiming user")
 	}
 	// A new agent skips the reclaiming user.
-	if u, _ := p.assign("/h/agents/b", 2, nil); u != "agent-2" {
+	if u, _ := p.assign("/h/agents/b", 2); u != "agent-2" {
 		t.Fatal(u)
 	}
 	// The reclaiming entry still counts toward the limit.
 	q, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2"})
-	q.assign("/h/agents/a", 1, nil)
+	q.assign("/h/agents/a", 1)
 	q.mark("agent-1", poolReclaiming)
-	if u, _ := q.assign("/h/agents/b", 1, nil); u != "" {
+	if u, _ := q.assign("/h/agents/b", 1); u != "" {
 		t.Fatal(u)
-	}
-}
-
-func TestPoolAssignSkipsUnusable(t *testing.T) {
-	p, _ := loadPool(filepath.Join(t.TempDir(), "pool.json"), []string{"agent-1", "agent-2", "agent-3"})
-	usable := func(u string) bool { return u != "agent-1" }
-	if u, err := p.assign("a", 3, usable); u != "agent-2" || err != nil {
-		t.Fatalf("got %q %v", u, err)
-	}
-	if u, _ := p.assign("a", 3, func(string) bool { return false }); u != "agent-2" {
-		t.Fatalf("held user not returned: %q", u)
-	}
-	if u, _ := p.assign("b", 3, func(u string) bool { return u == "agent-2" }); u != "" {
-		t.Fatalf("taken or unusable user handed out: %q", u)
-	}
-	if p.isFree("agent-2") || !p.isFree("agent-1") {
-		t.Fatal(p.sorted())
 	}
 }
 
@@ -155,7 +138,7 @@ func TestPoolSetNotesPersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pool.json")
 	users := []string{"agent-1", "agent-2"}
 	p, _ := loadPool(path, users)
-	p.assign("a", 2, nil)
+	p.assign("a", 2)
 	if err := p.setNotes("agent-1", "0.4.0"); err != nil {
 		t.Fatal(err)
 	}
@@ -197,6 +180,52 @@ func TestDaemonRefusesPre040Pool(t *testing.T) {
 	}
 	if sys := h.cfg.System.(*fakeSystem); sys.String() != "" {
 		t.Fatalf("changed before refusing: %s", sys)
+	}
+}
+
+// Without pool.json the daemon would take every agent for new and hand out
+// its user, so it never starts on a journal root that holds an agent's
+// journal directory, or a link that may lead to one. It refuses before
+// changing anything.
+func TestDaemonRefusesLostPool(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		make func(path string) error
+	}{
+		{"directory", func(path string) error { return os.Mkdir(path, 0o751) }},
+		{"link", func(path string) error { return os.Symlink(t.TempDir(), path) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			if err := tc.make(h.cfg.JournalDir(h.mainID)); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := Run(ctx, h.cfg)
+			if err == nil || !strings.Contains(err.Error(), h.cfg.PoolFile()+" is missing") || !strings.Contains(err.Error(), "restore") {
+				t.Fatalf("Run: %v", err)
+			}
+			if _, err := os.Lstat(h.cfg.PoolFile()); !os.IsNotExist(err) {
+				t.Fatalf("pool.json created: %v", err)
+			}
+			if sys := h.cfg.System.(*fakeSystem); sys.String() != "" {
+				t.Fatalf("changed before refusing: %s", sys)
+			}
+		})
+	}
+}
+
+// A fresh install has neither pool.json nor journals, and starts; a regular
+// file in the journal root is not an agent's journals.
+func TestDaemonStartsFresh(t *testing.T) {
+	h := newHarness(t, done())
+	if err := os.WriteFile(filepath.Join(h.cfg.Log, "notes.txt"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	if !strings.Contains(poolJSON(h), `"agent":"main"`) {
+		t.Fatalf("pool.json %s", poolJSON(h))
 	}
 }
 

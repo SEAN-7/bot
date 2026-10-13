@@ -93,7 +93,6 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 			if err != nil {
 				return err
 			}
-			d.forgetGroups(d.cfg.JournalDir(agentID))
 			return journal.SecureTree(d.cfg.JournalDir(agentID), gid)
 		}},
 		{"pool", func() error { return d.pool.free(user) }},

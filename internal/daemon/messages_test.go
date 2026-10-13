@@ -120,14 +120,11 @@ func TestInboxFilesClosedToOthers(t *testing.T) {
 }
 
 // A message for a child whose control directory can never be admitted (it
-// holds only a home link naming a free user whose home is not its own) is
-// dropped with a note, like one for a child that does not exist. Deciding
-// so starts no helper at every poll.
+// holds no user and no config.json, only a home link naming a free user) is
+// dropped with a note, like one for a child that does not exist.
 func TestDownMessageToUnadmissibleChildDropped(t *testing.T) {
 	h := newHarness(t, done())
-	checks := countLookups(h, "agent-3")
 	h.start()
-	start := checks.Load()
 	ctrl := makeChild(t, h, "x", false)
 	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
 	spooled := h.spoolDown(h.mainHome, "x", "anyone there?")
@@ -137,29 +134,24 @@ func TestDownMessageToUnadmissibleChildDropped(t *testing.T) {
 	if notes := noteTexts(h.mainHome, "-undelivered.md"); len(notes) != 1 || notes[0] != want {
 		t.Fatalf("notes %q", notes)
 	}
-	stableAt(t, h, checks, start+1)
 }
 
 // A failure while deciding whether a child that is not running may be
-// admitted (here its free home's evidence cannot be checked) is no answer:
-// the message waits, the error is logged once and no note is sent. Once the
-// check answers that the directory can never be admitted, the message is
-// dropped with the note.
+// admitted (here its config.json cannot be looked up, as its parent closed
+// its control directory) is no answer: the message waits, the error is
+// logged once and no note is sent. Once the lookup answers that there is no
+// config.json, the message is dropped with the note.
 func TestDownMessageWaitsOnAdmissionError(t *testing.T) {
+	skipIfRoot(t)
 	h := newHarness(t, done())
-	var failing atomic.Bool
-	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
-		if name == "agent-3" && failing.Load() {
-			return nil, errors.New("lookup failed")
-		}
-		return nil, nil
-	}
 	h.start()
-	failing.Store(true)
 	ctrl := makeChild(t, h, "x", false)
-	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
+	if err := os.Chmod(ctrl, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ctrl, 0o755) })
 	spooled := h.spoolDown(h.mainHome, "x", "anyone there?")
-	waitFor(t, "error logged", func() bool { return strings.Contains(h.logs.String(), "lookup failed") })
+	waitFor(t, "error logged", func() bool { return strings.Contains(h.logs.String(), "permission denied") })
 	time.Sleep(30 * h.cfg.Poll)
 	if _, err := os.Stat(spooled); err != nil {
 		t.Fatalf("message dropped on a transient error: %v", err)
@@ -167,10 +159,10 @@ func TestDownMessageWaitsOnAdmissionError(t *testing.T) {
 	if n := countNotes(h.mainHome, "-undelivered.md"); n != 0 {
 		t.Fatalf("%d undelivered notes on a transient error", n)
 	}
-	if n := strings.Count(h.logs.String(), "lookup failed"); n != 1 {
+	if n := strings.Count(h.logs.String(), "x: not started: admission"); n != 1 {
 		t.Fatalf("error logged %d times:\n%s", n, h.logs)
 	}
-	failing.Store(false)
+	os.Chmod(ctrl, 0o755)
 	waitFor(t, "spool file dropped", func() bool { _, err := os.Stat(spooled); return os.IsNotExist(err) })
 	waitFor(t, "undelivered note", func() bool { return countNotes(h.mainHome, "-undelivered.md") == 1 })
 }
@@ -399,34 +391,6 @@ func TestUnremovableMainMessageLoggedOnce(t *testing.T) {
 	if n != 1 {
 		t.Fatalf("message logged %d times", n)
 	}
-}
-
-// An upgrade leaves the journals of agents removed under earlier releases
-// world-readable; the daemon tightens them on start, before any agent runs,
-// for root's removed children as for main's.
-func TestStartTightensOldLogs(t *testing.T) {
-	h := newHarness(t)
-	writePool(t, h, `[{"user":"agent-1","agent":"main","state":"active"}]`)
-	var runs []string
-	for _, id := range []string{childID("old"), "gone"} {
-		dir := h.cfg.JournalDir(id)
-		run := filepath.Join(dir, "20250101T000000.000000000Z.jsonl")
-		os.MkdirAll(filepath.Join(dir, "agents", "older"), 0o755)
-		os.WriteFile(run, []byte("{}\n"), 0o644)
-		os.Chmod(run, 0o644)
-		runs = append(runs, run)
-	}
-	h.start()
-	waitFor(t, "modes tightened", func() bool {
-		for _, run := range runs {
-			r, err1 := os.Stat(run)
-			o, err2 := os.Stat(filepath.Join(filepath.Dir(run), "agents", "older"))
-			if err1 != nil || err2 != nil || r.Mode().Perm() != 0o640 || o.Mode().Perm() != 0o751 {
-				return false
-			}
-		}
-		return true
-	})
 }
 
 // deliveryRecords counts the delivery records naming a file ending in suffix.

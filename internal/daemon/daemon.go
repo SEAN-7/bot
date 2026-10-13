@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
-	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
@@ -115,17 +114,6 @@ type daemon struct {
 	// unremoved holds spool files delivered but not yet removed, so they are
 	// not delivered again while they stay; only the poll goroutine touches it.
 	unremoved map[spoolKey]bool
-	// journalGids holds the group each journal directory had before
-	// secureUnheldJournals changed it, by path: admission's evidence that a
-	// home is its agent's own, which a lost pool.json would otherwise erase.
-	journalGids map[string]int
-	// homes holds, by free pool user, the journal directory its home was
-	// found to be evidence for ("" for none), so a control directory that
-	// stays unadmitted does not start a helper at every poll. It is good
-	// while the pool and the journal directories' groups stay as they were:
-	// for pool generation homesGen. Only the poll goroutine touches it.
-	homes    map[string]string
-	homesGen int
 	// retries holds spool files whose delivery failed: the inbox name they
 	// keep for every retry, so one delivery record serves them all, and the
 	// error already logged; only the poll goroutine touches it.
@@ -149,6 +137,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	if err := poolLost(cfg); err != nil {
+		return err
+	}
 	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
 		return err
 	}
@@ -163,7 +154,6 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer d.closeHelpers()
-	d.secureUnheldJournals(d.root.id)
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
@@ -185,80 +175,25 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-// secureUnheldJournals tightens, before any agent runs, the journals of the
-// children of id ("" for root) that hold no user: removed, perhaps under an
-// earlier release that left them readable by every user. They go to the
-// group of their nearest ancestor that holds one, root's for a top-level
-// agent. Root's children's journal directories are the log root's; a held
-// agent's journals are set when it is admitted or reclaimed. These paths are
-// outside every agent home, so root opens them.
-func (d *daemon) secureUnheldJournals(id string) {
-	agents := d.cfg.Log
-	if id != "" {
-		agents = filepath.Join(d.cfg.JournalDir(id), "agents")
+// poolLost refuses to start without pool.json once the journal root holds
+// anything but regular files (an agent's journal directory, or a link that
+// may lead to one): agents have been admitted. pool.json is the only record
+// of the user each holds; without it every agent would look new and its user
+// free, so a live agent's home could be cleared or handed to another.
+func poolLost(cfg Config) error {
+	if _, err := os.Stat(cfg.PoolFile()); !errors.Is(err, fs.ErrNotExist) {
+		return nil // loadPool reports any other error
 	}
-	items, err := os.ReadDir(agents)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			d.cfg.Logger.Printf("journal permissions: %v", err)
-		}
-		return
+	entries, err := os.ReadDir(cfg.Log)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
 	}
-	for _, item := range items {
-		if !item.IsDir() {
-			continue // not a journal directory; links are never followed
-		}
-		child := joinID(id, item.Name())
-		if _, held := d.pool.entryOf(child); held {
-			d.secureUnheldJournals(child)
-			continue
-		}
-		gid, err := d.ancestorGid(child)
-		if err == nil {
-			d.rememberGroups(d.cfg.JournalDir(child))
-			err = journal.SecureTree(d.cfg.JournalDir(child), gid)
-		}
-		if err != nil {
-			d.cfg.Logger.Printf("%s: journal permissions: %v", child, err)
+	for _, e := range entries {
+		if !e.Type().IsRegular() {
+			return fmt.Errorf("not starting: %s is missing but %s holds agent journals; restore it from a backup, or move the journals somewhere only root can read", cfg.PoolFile(), cfg.Log)
 		}
 	}
-}
-
-// rememberGroups records the group of every directory under dir that has
-// none recorded yet, before secureUnheldJournals hands dir to another group.
-// After a lost pool.json every agent looks unheld, and ownsHome still needs
-// the group the daemon gave its journal directory, until admission or
-// reclaim sets it again (secureJournal, forgetGroups).
-func (d *daemon) rememberGroups(dir string) {
-	if d.journalGids == nil {
-		d.journalGids = map[string]int{}
-	}
-	filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
-		if err != nil || !e.IsDir() {
-			return nil
-		}
-		info, err := e.Info()
-		if err != nil {
-			return nil
-		}
-		if st, ok := info.Sys().(*syscall.Stat_t); ok {
-			if _, seen := d.journalGids[path]; !seen {
-				d.journalGids[path] = int(st.Gid)
-			}
-		}
-		return nil
-	})
-}
-
-// forgetGroups drops the groups remembered on start for dir and everything
-// under it, once the daemon gives that tree to another group.
-func (d *daemon) forgetGroups(dir string) {
-	d.homes = nil
-	for path := range d.journalGids {
-		if path == dir || strings.HasPrefix(path, dir+"/") {
-			delete(d.journalGids, path)
-		}
-	}
+	return nil
 }
 
 // poolUsers returns the configured pool users, or the max_agents pool users,

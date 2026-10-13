@@ -4,10 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
@@ -16,7 +14,7 @@ import (
 
 // heldBackPrefixes begin the ERRORs that say why an agent was not admitted
 // (see notStarted), which admission clears, including those an earlier
-// daemon wrote.
+// daemon wrote (only 0.4.1 wrote "No free agent user").
 var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix + MsgConfigTooLarge}
 
 // errConfigTooLarge: a starting config.json over configLimit.
@@ -37,14 +35,15 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return nil
 	}
 	held := d.pool.userOf(id)
-	usable, keep, err := d.admission(parent, ctrl, id, held)
+	ok, err := d.admission(parent, ctrl, held)
 	if err != nil {
 		d.admitFailed(ctrl, id, "admission", err)
 		return nil
 	}
-	if usable == nil {
+	if !ok {
 		return nil // it may still be being written
 	}
+	keep := held != ""
 	if !keep {
 		// A new agent's config.json is adopted: one too large to adopt
 		// takes no user.
@@ -54,30 +53,20 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 	}
 	limit := min(len(d.pool.users), d.settings.MaxAgents)
-	var checkErr error // a free home that could not be checked
-	user, err := d.pool.assign(id, limit, func(u string) bool {
-		ok, err := usable(u)
-		if err != nil {
-			checkErr = err
-		}
-		return ok
-	})
+	user, err := d.pool.assign(id, limit)
 	if err != nil {
 		d.admitFailed(ctrl, id, "pool", err)
 		return nil
 	}
 	if user == "" {
-		if checkErr != nil {
-			// Not "no free user": that home may be free to use.
-			d.admitFailed(ctrl, id, "admission", checkErr)
-		} else if held == "" {
-			d.holdBack(parent, ctrl, id, limit)
+		if held == "" {
+			d.holdBack(parent, ctrl, id)
 		}
 		return nil // held: its user is being reclaimed
 	}
 	c := &agent{d: d, id: id, name: id, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	// A user new to this agent may hold a previous agent's files; a user it
-	// already held, or recovered by its evidence, keeps them.
+	// already held keeps them.
 	fresh, cleared := !keep, false
 	fail := func(step string, err error) *agent {
 		d.admitFailed(ctrl, id, step, err)
@@ -102,17 +91,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err != nil {
 		return fail("file helper", err)
 	}
-	if fresh && c.ownsHome() {
-		// pool.json lost this assignment, but the home's journal link
-		// shows it is this agent's own: keep it.
-		c.logf("keeping %s: its journal link is this agent's", c.home)
-		fresh = false
-	}
 	if e, _ := d.pool.entryOf(id); e.Notes == "" {
 		if _, ok := parseVersion(d.cfg.Version); ok {
 			// A new agent's seed README describes this version; an entry
-			// without notes (recovered, or from before they existed) does
-			// not know what it saw. Nothing to catch up on, either way.
+			// without notes (from before they existed) does not know what
+			// it saw. Nothing to catch up on, either way.
 			if err := d.pool.setNotes(user, d.cfg.Version); err != nil {
 				return fail("notes", err)
 			}
@@ -143,7 +126,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := d.cfg.System.EnableLinger(user); err != nil {
 		return fail("linger", err)
 	}
-	if err := d.secureJournal(id, c.gid()); err != nil {
+	if err := journal.Secure(d.cfg.JournalDir(id), c.gid()); err != nil {
 		return fail("journal", err)
 	}
 	// Closed to others like the parent's other directories: one an earlier
@@ -165,168 +148,23 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	return c
 }
 
-// admission decides how the agent id at ctrl, which the daemon does not run,
-// is admitted: which free users it may be given (usable, which fails when a
-// home cannot be checked) and whether its home is kept. A nil usable means
-// ctrl is not an agent yet. An error means there is no answer yet (a file
-// or helper failed): the caller retries at the next poll. In order:
-//  1. it holds a user in pool.json (a daemon restart): that user, kept;
-//  2. its home link names a free user whose home holds this agent's
-//     evidence (recovery after a lost pool.json): that user, kept;
-//  3. it holds a regular config.json: a fresh user, never one whose home
-//     holds another agent's evidence, so a lost pool.json cannot wipe a
-//     live home.
-func (d *daemon) admission(parent *agent, ctrl, id, held string) (usable func(string) (bool, error), keep bool, err error) {
-	own := d.cfg.JournalDir(id)
-	if gen := d.pool.generation(); d.homes == nil || gen != d.homesGen {
-		d.homes, d.homesGen = map[string]string{}, gen
-	}
+// admission decides whether the agent at ctrl, which the daemon does not
+// run, is admitted (false: it is not an agent yet). held is the user it holds
+// in pool.json. An error means there is no answer yet (a file or helper
+// failed): the caller retries at the next poll. It is admitted when:
+//  1. it holds a user (a daemon restart): that user, keeping the home;
+//  2. it holds a regular config.json: a fresh user.
+func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 	if held != "" {
-		return func(string) (bool, error) { return false, nil }, true, nil // assign returns the held user
-	}
-	u, err := d.linkedUser(parent, ctrl)
-	if err != nil {
-		return nil, false, err
-	}
-	if u != "" && d.pool.isFree(u) {
-		dir, err := d.homeEvidence(u)
-		if err != nil {
-			return nil, false, err
-		}
-		if dir == own {
-			return func(c string) (bool, error) { return c == u, nil }, true, nil
-		}
+		return true, nil
 	}
 	e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json"))
 	if errors.Is(err, fs.ErrNotExist) {
-		return nil, false, nil
+		return false, nil
 	} else if err != nil {
-		return nil, false, err
+		return false, err
 	}
-	if e.Type != "file" {
-		return nil, false, nil
-	}
-	return func(u string) (bool, error) {
-		dir, err := d.homeEvidence(u)
-		return err == nil && (dir == "" || dir == own), err
-	}, false, nil
-}
-
-// linkedUser is the pool user whose home the home link in ctrl names, or "".
-func (d *daemon) linkedUser(parent *agent, ctrl string) (string, error) {
-	e, err := parent.fs.Stat(filepath.Join(ctrl, "home"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	if e.Type != "symlink" {
-		return "", nil
-	}
-	for _, u := range d.pool.users {
-		if d.cfg.PoolHome(u) == e.Target {
-			return u, nil
-		}
-	}
-	return "", nil
-}
-
-// homeEvidence returns the journal directory that user's home is evidence
-// for (see evidence), looking through a helper running as user: the daemon
-// never opens a home as root. A result is kept until the pool or a journal
-// directory's group changes (see daemon.homes): a free user's home was
-// cleared before it was freed, or is a lost pool.json's unrecovered agent's,
-// and the daemon writes into neither. An error is not kept. It never locks
-// the pool, so assign's usable can call it.
-func (d *daemon) homeEvidence(user string) (string, error) {
-	if dir, ok := d.homes[user]; ok {
-		return dir, nil
-	}
-	dir, err := d.checkHome(user)
-	if err != nil {
-		return "", fmt.Errorf("check %s's home: %w", user, err)
-	}
-	if d.homes != nil {
-		d.homes[user] = dir
-	}
-	return dir, nil
-}
-
-func (d *daemon) checkHome(user string) (string, error) {
-	cred, err := d.cfg.LookupUser(user)
-	if err != nil {
-		return "", err
-	}
-	helper, err := fsio.Start(d.cfg.Self, cred)
-	if err != nil {
-		return "", err
-	}
-	defer helper.Close()
-	gid := -1
-	if cred != nil {
-		gid = int(cred.Gid)
-	}
-	return d.evidence(helper, d.cfg.PoolHome(user), gid)
-}
-
-// evidence returns the journal directory home's journal link points at, if
-// that directory carries group gid, the home user's: only a run of the agent
-// whose journals are there creates the link, and only the daemon sets the
-// group, so the home is that agent's. The link lives in a home a previous
-// holder controlled, so the group is what counts: the one the directory had
-// on start, if secureUnheldJournals has changed it since and nothing has set
-// it again. helper runs as the home's user. "" when there is no evidence.
-func (d *daemon) evidence(helper *fsio.Client, home string, gid int) (string, error) {
-	e, err := helper.Stat(filepath.Join(home, "journal"))
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", nil
-	} else if err != nil {
-		return "", err
-	}
-	dir := e.Target
-	if e.Type != "symlink" || filepath.Clean(dir) != dir || !strings.HasPrefix(dir, filepath.Clean(d.cfg.Log)+"/") {
-		return "", nil
-	}
-	if prior, ok := d.journalGids[dir]; ok {
-		if gid < 0 || prior == gid {
-			return dir, nil
-		}
-		return "", nil
-	}
-	if journalOwnedBy(dir, gid) {
-		return dir, nil
-	}
-	return "", nil
-}
-
-// secureJournal creates id's journal directory and gives it to group gid, as
-// admission does. The group remembered on start is then out of date, so
-// ownsHome reads the group from the directory from here on.
-func (d *daemon) secureJournal(id string, gid int) error {
-	dir := d.cfg.JournalDir(id)
-	// Before Secure, which may change the group and then fail.
-	delete(d.journalGids, dir)
-	d.homes = nil
-	return journal.Secure(dir, gid)
-}
-
-// ownsHome reports whether a's home holds evidence (see evidence) that it is
-// a's own.
-func (a *agent) ownsHome() bool {
-	dir, err := a.d.evidence(a.fs, a.home, a.gid())
-	return err == nil && dir == a.d.cfg.JournalDir(a.id)
-}
-
-// journalOwnedBy reports whether dir is a real directory with group gid. It
-// runs as root on the root-owned journal tree. Without a credential (gid < 0:
-// every agent runs as the one current user) there is no group to check.
-func journalOwnedBy(dir string, gid int) bool {
-	info, err := os.Lstat(dir)
-	if err != nil || !info.IsDir() {
-		return false
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	return ok && (gid < 0 || int(st.Gid) == gid)
+	return e.Type == "file", nil
 }
 
 // repairHomeLink puts back the home link in an agent's control directory
@@ -454,16 +292,11 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 	}
 }
 
-// holdBack reports an agent no pool user is given to: limit entries
-// already exist (max_agents, or the pool users there are), or every free
-// user's home holds another agent's evidence.
-func (d *daemon) holdBack(parent *agent, ctrl, name string, limit int) {
-	if len(d.pool.entries()) >= limit {
-		n := d.settings.MaxAgents
-		d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
-		return
-	}
-	d.notStarted(parent, ctrl, name, MsgNoFreeUser, fmt.Sprintf(MsgNoFreeUserParentFmt, name))
+// holdBack reports an agent no pool user is given to: as many entries as
+// max_agents, or as the pool users there are, already exist.
+func (d *daemon) holdBack(parent *agent, ctrl, name string) {
+	n := d.settings.MaxAgents
+	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
 }
 
 // configTooLarge reports a starting config.json over configLimit.

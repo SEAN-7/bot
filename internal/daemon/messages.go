@@ -21,8 +21,6 @@ const (
 	MsgSubagentFmt         = "Subagent %s did not start: %s"
 	MsgLimitFmt            = "Agent limit reached (max_agents=%d); this agent was not started."
 	MsgLimitParentFmt      = "Subagent %s was not started: agent limit reached (max_agents=%d)."
-	MsgNoFreeUser          = "No free agent user: the free users' homes belong to agents that have not been recovered; this agent was not started."
-	MsgNoFreeUserParentFmt = "Subagent %s was not started: no free agent user (their homes belong to agents that have not been recovered)."
 	MsgConfigTooLarge      = "larger than 1 MiB" // after MsgConfigPrefix
 	MsgUndeliveredFmt      = "Message to %s dropped: there is no subagent by that name."
 	MsgImageShownFmt       = "[%s %dx%d, %d bytes, shown below]"
