@@ -29,7 +29,7 @@ import (
 
 const repo = "https://github.com/SEAN-7/bot"
 
-//go:embed style.css favicon.svg fonts
+//go:embed style.css favicon.svg fonts mascot
 var static embed.FS
 
 type page struct{ src, out, name string }

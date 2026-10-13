@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,5 +137,59 @@ func TestBuild(t *testing.T) {
 	}
 	if !strings.Contains(h, ">source</a>") || strings.Contains(h, ">github</a>") {
 		t.Error("header should link the repository as source")
+	}
+}
+
+// TestForms checks the mascot's shared definition, which the web renderer
+// and a later terminal version both read.
+func TestForms(t *testing.T) {
+	data, err := static.ReadFile("mascot/forms.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var f struct {
+		Particles struct{ Small, Large int }
+		Home      string
+		Order     []string
+		Ambient   struct{ Sequence []string }
+		Forms     map[string]struct {
+			Shape      struct{ Type string }
+			K, Damping float64
+		}
+		Font struct{ Glyphs map[string][]string }
+	}
+	if err := json.Unmarshal(data, &f); err != nil {
+		t.Fatal(err)
+	}
+	names := append([]string{f.Home}, f.Order...)
+	for _, s := range f.Ambient.Sequence {
+		name, _, _ := strings.Cut(s, ":")
+		names = append(names, name)
+	}
+	for _, n := range names {
+		if _, ok := f.Forms[n]; !ok {
+			t.Errorf("form %q is used but not defined", n)
+		}
+	}
+	shapes := map[string]bool{"sphere": true, "cloud": true, "cube": true, "bud": true, "word": true}
+	for n, form := range f.Forms {
+		if !shapes[form.Shape.Type] || form.K <= 0 || form.Damping <= 0 {
+			t.Errorf("form %q: shape %q, k %v, damping %v", n, form.Shape.Type, form.K, form.Damping)
+		}
+	}
+	for _, r := range "abcdefghijklmnopqrstuvwxyz.!? " {
+		rows, ok := f.Font.Glyphs[string(r)]
+		if !ok || len(rows) != 7 {
+			t.Errorf("glyph %q: %d rows", r, len(rows))
+			continue
+		}
+		for _, row := range rows {
+			if len(row) != 5 || strings.Trim(row, ".#") != "" {
+				t.Errorf("glyph %q: bad row %q", r, row)
+			}
+		}
+	}
+	if f.Particles.Small <= 0 || f.Particles.Small >= f.Particles.Large {
+		t.Errorf("particles: small %d, large %d", f.Particles.Small, f.Particles.Large)
 	}
 }
