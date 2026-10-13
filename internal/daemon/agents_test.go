@@ -597,7 +597,7 @@ func TestAdmissionMovesConfigIntoHome(t *testing.T) {
 }
 
 // TestChildChangesOwnConfig: an agent edits its own ~/config.json; the next
-// run uses it and starts fresh.
+// run uses it.
 func TestChildChangesOwnConfig(t *testing.T) {
 	h := newHarness(t, done(), done())
 	h.start()

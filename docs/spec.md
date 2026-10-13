@@ -52,9 +52,6 @@ be a script the agent writes, it stays out of the harness.
   systemd's default kill behaviour, so stopping it stops everything it
   started. Lingering gives each agent user a persistent user manager; the
   daemon sets `XDG_RUNTIME_DIR` so `systemd-run --user` works from commands.
-- **Quick follow-ups continue the conversation.** A message within 4 minutes
-  of a run ending continues it with a warm cache; the agent can force a fresh
-  start with `~/.reset`.
 - **No daily heartbeat.** The agent wakes on messages and on wake-ups it
   schedules itself.
 - **Provider failures are visible but never touch the inbox.** Retries back
@@ -106,8 +103,8 @@ install's main agent is `agent-1`; one upgraded from 0.3 holds the user its
 0.3 user was renamed to (`agent-16` by default, see Migration).
 
 In an agent's home, the harness uses `README.md`, `TASK.md`, `config.json`,
-`inbox/`, `inbox/processed/`, `agents/`, `.messages/`, `.outputs/`,
-`.reset` and the `journal` symlink.
+`inbox/`, `inbox/processed/`, `agents/`, `.messages/`, `.outputs/` and the
+`journal` symlink.
 
 An agent's control directory is `agents/NAME/` in its parent's home
 (`/etc/agent/agents/NAME/` for root's children) and belongs to the parent.
@@ -425,17 +422,9 @@ The harness does nothing else for long or interactive commands: an agent
 starts what should outlive its wait with `systemd-run --user` (output in
 `journalctl --user`) and drives interactive programs through `tmux`.
 
-**Continuation.** A run that ends with a reply without a command keeps its
-conversation in memory. The next run continues it (the new inbox records are
-appended, and the system sections, call numbering and 80% warning state carry
-over unchanged, so the provider's cached prefix stays identical) when all of
-these hold: it starts within 4 minutes of that run ending (shorter than the
-provider's 5-minute cache, so the cache is always warm), the configuration is
-unchanged, `OWNER.md` is unchanged, and `~/.reset` does not exist. Otherwise
-it starts fresh. The daemon deletes `~/.reset` when it starts a run. Each run
-still has its own journal; a continued run's `start` record names the run it
-continues. A daemon restart, interruption, error or context reset always
-starts fresh.
+Every run starts fresh: it builds its system segments and its first user
+message from the files as they are when it starts, and keeps nothing in
+memory from an earlier run. Each run has its own journal.
 
 **Context size.** After each call, context used = input + cache read + cache
 write + output tokens from the plugin's usage, compared with the model's
@@ -593,9 +582,8 @@ revise; OWNER.md is the one thing in context the agent cannot change.
   An empty or missing file leaves the first segment byte-identical to the
   system prompt alone, so agents without one keep their cached prefix.
   Creating or editing the file changes that agent's prefix once.
-- **Continuation.** A run continues a warm conversation only if OWNER.md's
-  content is identical to what that conversation was built with; otherwise it
-  starts fresh, so an edit takes effect on the agent's next run.
+- **Edits.** Each run reads OWNER.md as it starts, so an edit takes effect on
+  the agent's next run.
 - **Precedence is a convention.** The harness guarantees the file is present,
   unaltered and clearly attributed; whether the model follows it is up to the
   model. Limits that must hold (credentials, spend, privileges) are enforced
@@ -897,8 +885,8 @@ Using the replay plugin:
   a top-level agent and for a deeper one; a parent's OWNER.md does not reach
   its child; a missing or empty file leaves the segment identical to the
   system prompt; a symlink, a wrong owner or a group-writable file stops
-  runs with `ERROR` and leaves the inbox intact; an edit makes the next run
-  start fresh instead of continuing
+  runs with `ERROR` and leaves the inbox intact; an edit takes effect on the
+  next run
 - startup: a missing `pool.json` with an agent's journal directory (or a
   link) in the journal root stops the daemon before it changes anything;
   with neither `pool.json` nor journals it starts

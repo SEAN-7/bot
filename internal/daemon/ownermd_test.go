@@ -222,23 +222,21 @@ func TestUnsafeOwnerStopsRun(t *testing.T) {
 	}
 }
 
-func TestOwnerEditStartsFresh(t *testing.T) {
-	h := newHarness(t, textStep("one", 100), textStep("two", 100), textStep("three", 100))
+func TestOwnerEditTakesEffectNextRun(t *testing.T) {
+	h := newHarness(t, textStep("one", 100), textStep("two", 100))
 	os.WriteFile(h.mainOwner(), []byte("First rules."), 0o644)
 	h.start()
 	h.drop(h.mainHome, "a.md", "first")
 	h.waitEnds(h.mainID, 1)
-	h.drop(h.mainHome, "b.md", "second")
-	h.waitEnds(h.mainID, 2)
-	if n := len(h.requests()[1].Messages); n != 3 {
-		t.Fatalf("unchanged OWNER.md did not continue: %d messages", n)
+	if want := SystemPrompt + ownerSegment("First rules."); h.requests()[0].System[0].Text != want {
+		t.Fatalf("first segment %q, want %q", h.requests()[0].System[0].Text, want)
 	}
 	os.WriteFile(h.mainOwner(), []byte("Second rules."), 0o644)
-	h.drop(h.mainHome, "c.md", "third")
-	h.waitEnds(h.mainID, 3)
-	req := h.requests()[2]
-	if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Content, "third") {
-		t.Fatalf("edited OWNER.md continued the conversation: %+v", req.Messages)
+	h.drop(h.mainHome, "b.md", "second")
+	h.waitEnds(h.mainID, 2)
+	req := h.requests()[1]
+	if len(req.Messages) != 1 || !strings.Contains(req.Messages[0].Content, "second") {
+		t.Fatalf("second run is not fresh: %+v", req.Messages)
 	}
 	if want := SystemPrompt + ownerSegment("Second rules."); req.System[0].Text != want {
 		t.Fatalf("first segment %q, want %q", req.System[0].Text, want)

@@ -4,14 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"reflect"
 	"syscall"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
-	"github.com/SEAN-7/bot/internal/plugin"
-	"github.com/SEAN-7/bot/internal/proto"
 )
 
 // agent is one node of the tree: root, or an agent admitted from a control
@@ -32,8 +29,6 @@ type agent struct {
 	failedConfig string // hash of a config.json already reported invalid
 	failedOwner  string // the OWNER.md error already logged
 	linkErr      string // the home link error already logged; poll goroutine only
-
-	conv *conversation // the last run's conversation, if it ended normally
 }
 
 // fileID identifies a file by device and inode.
@@ -85,39 +80,6 @@ func (a *agent) userName() string {
 // hide its errors.
 func (a *agent) errorFile() (*fsio.Client, string) {
 	return a.parent.fs, filepath.Join(a.ctrl, "ERROR")
-}
-
-// conversation is what a follow-up needs to continue a run: the frozen system
-// sections and messages, so the provider's cached prefix stays identical.
-type conversation struct {
-	cfg      plugin.Config
-	owner    string // the OWNER.md content the system sections were built with
-	system   []proto.Segment
-	messages []proto.Message
-	calls    int // call ids used so far
-	warned   bool
-	ended    time.Time
-	journal  string
-}
-
-// takeConversation returns the previous conversation if this run may
-// continue it: it ended normally within ContinueWindow, the configuration and
-// OWNER.md are unchanged, and the agent has not asked for a fresh start with
-// ~/.reset.
-func (a *agent) takeConversation(cfg plugin.Config, owner string) *conversation {
-	c := a.conv
-	a.conv = nil
-	reset := filepath.Join(a.home, ".reset")
-	if _, err := a.fs.Stat(reset); err == nil {
-		if err := a.fs.Remove(reset); err != nil {
-			a.logf("remove ~/.reset: %v", err)
-		}
-		return nil
-	}
-	if c == nil || time.Since(c.ended) > a.d.cfg.ContinueWindow || !reflect.DeepEqual(c.cfg, cfg) || c.owner != owner {
-		return nil
-	}
-	return c
 }
 
 // loop wakes whenever the inbox holds a deliverable file, one run at a time.

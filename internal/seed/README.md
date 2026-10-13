@@ -22,10 +22,7 @@ yours to revise: edit this file as you learn what works.
   at each milestone, so a reset or interruption loses nothing important.
 - When your context fills up, the harness ends the run and you start fresh
   from TASK.md.
-- A message that arrives within about four minutes of a run ending continues
-  that conversation; later ones start fresh. `touch ~/.reset` before stopping
-  makes the next run start fresh regardless. ~/journal records each model
-  call's token usage.
+- Every run starts fresh. ~/journal records each model call's token usage.
 - ~/config.json chooses your model and options, and it is yours to change
   (`agent provider describe` lists what is available). Your next run starts
   fresh with the new config; an invalid one stops your runs until it is

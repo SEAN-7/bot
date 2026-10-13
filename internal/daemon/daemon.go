@@ -42,10 +42,6 @@ type Config struct {
 	RetryMax       time.Duration
 	ErrorAfter     int
 	DrainTimeout   time.Duration // how long a stop waits for active runs
-	// ContinueWindow: a message arriving this soon after a run ended normally
-	// continues that conversation. Shorter than the provider's 5-minute cache,
-	// so a continued conversation always finds it warm.
-	ContinueWindow time.Duration
 	Version        string // this harness version; "dev" builds deliver no release notes
 	ReleaseNotes   string // agent-facing notes, "## X.Y.Z" sections
 	OutputClip     int
@@ -70,7 +66,6 @@ func DefaultConfig(self string) Config {
 		RetryMax:       10 * time.Minute,
 		ErrorAfter:     3,
 		DrainTimeout:   15 * time.Minute,
-		ContinueWindow: 4 * time.Minute,
 		Version:        version.Version,
 		ReleaseNotes:   notes.Text,
 		OutputClip:     16 << 10,

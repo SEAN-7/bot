@@ -171,3 +171,17 @@ func TestStaleProviderErrorCleared(t *testing.T) {
 		t.Fatal("provider ERROR from before a restart survived a successful call")
 	}
 }
+
+func textStep(text string, tokens int) string {
+	return `{"text":"` + text + `","usage":{"input_tokens":` + itoa(tokens) + `}}`
+}
+
+func itoa(n int) string {
+	s := ""
+	for {
+		s = string(rune('0'+n%10)) + s
+		if n /= 10; n == 0 {
+			return s
+		}
+	}
+}
