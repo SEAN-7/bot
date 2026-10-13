@@ -140,6 +140,41 @@ func TestDownMessageToUnadmissibleChildDropped(t *testing.T) {
 	stableAt(t, h, checks, start+1)
 }
 
+// A failure while deciding whether a child that is not running may be
+// admitted (here its free home's evidence cannot be checked) is no answer:
+// the message waits, the error is logged once and no note is sent. Once the
+// check answers that the directory can never be admitted, the message is
+// dropped with the note.
+func TestDownMessageWaitsOnAdmissionError(t *testing.T) {
+	h := newHarness(t, done())
+	var failing atomic.Bool
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		if name == "agent-3" && failing.Load() {
+			return nil, errors.New("lookup failed")
+		}
+		return nil, nil
+	}
+	h.start()
+	failing.Store(true)
+	ctrl := makeChild(t, h, "x", false)
+	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
+	spooled := h.spoolDown(h.mainHome, "x", "anyone there?")
+	waitFor(t, "error logged", func() bool { return strings.Contains(h.logs.String(), "lookup failed") })
+	time.Sleep(30 * h.cfg.Poll)
+	if _, err := os.Stat(spooled); err != nil {
+		t.Fatalf("message dropped on a transient error: %v", err)
+	}
+	if n := countNotes(h.mainHome, "-undelivered.md"); n != 0 {
+		t.Fatalf("%d undelivered notes on a transient error", n)
+	}
+	if n := strings.Count(h.logs.String(), "lookup failed"); n != 1 {
+		t.Fatalf("error logged %d times:\n%s", n, h.logs)
+	}
+	failing.Store(false)
+	waitFor(t, "spool file dropped", func() bool { _, err := os.Stat(spooled); return os.IsNotExist(err) })
+	waitFor(t, "undelivered note", func() bool { return countNotes(h.mainHome, "-undelivered.md") == 1 })
+}
+
 // Root has no inbox: a message from root to no child is dropped and the
 // service log says so.
 func TestRootUndeliveredLoggedOnly(t *testing.T) {

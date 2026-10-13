@@ -37,7 +37,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return nil
 	}
 	held := d.pool.userOf(id)
-	usable, keep := d.admission(parent, ctrl, id, held)
+	usable, keep, err := d.admission(parent, ctrl, id, held)
+	if err != nil {
+		d.admitFailed(ctrl, id, "admission", err)
+		return nil
+	}
 	if usable == nil {
 		return nil // it may still be being written
 	}
@@ -50,13 +54,23 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 	}
 	limit := min(len(d.pool.users), d.settings.MaxAgents)
-	user, err := d.pool.assign(id, limit, usable)
+	var checkErr error // a free home that could not be checked
+	user, err := d.pool.assign(id, limit, func(u string) bool {
+		ok, err := usable(u)
+		if err != nil {
+			checkErr = err
+		}
+		return ok
+	})
 	if err != nil {
 		d.admitFailed(ctrl, id, "pool", err)
 		return nil
 	}
 	if user == "" {
-		if held == "" {
+		if checkErr != nil {
+			// Not "no free user": that home may be free to use.
+			d.admitFailed(ctrl, id, "admission", checkErr)
+		} else if held == "" {
 			d.holdBack(parent, ctrl, id, limit)
 		}
 		return nil // held: its user is being reclaimed
@@ -134,7 +148,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	}
 	// Closed to others like the parent's other directories: one an earlier
 	// release created is closed now. Root's are 0700 and stay so.
-	if err := parent.fs.Private(ctrl); err != nil {
+	if err := c.private(parent.fs, ctrl); err != nil {
 		return fail("control directory", err)
 	}
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
@@ -150,48 +164,69 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 }
 
 // admission decides how the agent id at ctrl, which the daemon does not run,
-// is admitted: which free users it may be given (usable) and whether its
-// home is kept. A nil usable means ctrl is not an agent yet. In order:
+// is admitted: which free users it may be given (usable, which fails when a
+// home cannot be checked) and whether its home is kept. A nil usable means
+// ctrl is not an agent yet. An error means there is no answer yet (a file
+// or helper failed): the caller retries at the next poll. In order:
 //  1. it holds a user in pool.json (a daemon restart): that user, kept;
 //  2. its home link names a free user whose home holds this agent's
 //     evidence (recovery after a lost pool.json): that user, kept;
 //  3. it holds a regular config.json: a fresh user, never one whose home
 //     holds another agent's evidence, so a lost pool.json cannot wipe a
 //     live home.
-func (d *daemon) admission(parent *agent, ctrl, id, held string) (usable func(string) bool, keep bool) {
+func (d *daemon) admission(parent *agent, ctrl, id, held string) (usable func(string) (bool, error), keep bool, err error) {
 	own := d.cfg.JournalDir(id)
 	if gen := d.pool.generation(); d.homes == nil || gen != d.homesGen {
 		d.homes, d.homesGen = map[string]string{}, gen
 	}
 	if held != "" {
-		return func(string) bool { return false }, true // assign returns the held user
+		return func(string) (bool, error) { return false, nil }, true, nil // assign returns the held user
 	}
-	if u := d.linkedUser(parent, ctrl); u != "" && d.pool.isFree(u) {
-		if dir, err := d.homeEvidence(u); err == nil && dir == own {
-			return func(c string) bool { return c == u }, true
+	u, err := d.linkedUser(parent, ctrl)
+	if err != nil {
+		return nil, false, err
+	}
+	if u != "" && d.pool.isFree(u) {
+		dir, err := d.homeEvidence(u)
+		if err != nil {
+			return nil, false, err
+		}
+		if dir == own {
+			return func(c string) (bool, error) { return c == u, nil }, true, nil
 		}
 	}
-	if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Type == "file" {
-		return func(u string) bool {
-			dir, err := d.homeEvidence(u)
-			return err == nil && (dir == "" || dir == own)
-		}, false
+	e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, false, nil
+	} else if err != nil {
+		return nil, false, err
 	}
-	return nil, false
+	if e.Type != "file" {
+		return nil, false, nil
+	}
+	return func(u string) (bool, error) {
+		dir, err := d.homeEvidence(u)
+		return err == nil && (dir == "" || dir == own), err
+	}, false, nil
 }
 
 // linkedUser is the pool user whose home the home link in ctrl names, or "".
-func (d *daemon) linkedUser(parent *agent, ctrl string) string {
+func (d *daemon) linkedUser(parent *agent, ctrl string) (string, error) {
 	e, err := parent.fs.Stat(filepath.Join(ctrl, "home"))
-	if err != nil || e.Type != "symlink" {
-		return ""
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	if e.Type != "symlink" {
+		return "", nil
 	}
 	for _, u := range d.pool.users {
 		if d.cfg.PoolHome(u) == e.Target {
-			return u
+			return u, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // homeEvidence returns the journal directory that user's home is evidence
@@ -206,10 +241,13 @@ func (d *daemon) homeEvidence(user string) (string, error) {
 		return dir, nil
 	}
 	dir, err := d.checkHome(user)
-	if err == nil && d.homes != nil {
+	if err != nil {
+		return "", fmt.Errorf("check %s's home: %w", user, err)
+	}
+	if d.homes != nil {
 		d.homes[user] = dir
 	}
-	return dir, err
+	return dir, nil
 }
 
 func (d *daemon) checkHome(user string) (string, error) {
@@ -322,7 +360,7 @@ func (a *agent) seed() error {
 	for i, dir := range harnessDirs {
 		dirs[i] = filepath.Join(a.home, dir)
 	}
-	if err := a.fs.Private(dirs...); err != nil {
+	if err := a.private(a.fs, dirs...); err != nil {
 		return err
 	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}, {"TASK.md", seed.TASK}} {
@@ -336,6 +374,24 @@ func (a *agent) seed() error {
 		}
 	}
 	return nil
+}
+
+// private closes paths of a's to others through helper (see
+// fsio.Client.Private). A path left alone, as it is not a real directory
+// helper's user owns, may be open to others: the service log names it once
+// per daemon run.
+func (a *agent) private(helper *fsio.Client, paths ...string) error {
+	skipped, err := helper.Private(paths...)
+	for _, path := range skipped {
+		if !a.d.unclosed[path] {
+			if a.d.unclosed == nil {
+				a.d.unclosed = map[string]bool{}
+			}
+			a.d.unclosed[path] = true
+			a.logf("not closed to others: %s is a link, a file or another user's", path)
+		}
+	}
+	return err
 }
 
 // adoptConfig moves the starting config.json from the control directory into

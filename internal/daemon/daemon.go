@@ -107,6 +107,9 @@ type daemon struct {
 	heldBack    map[string]string // control directories not admitted, with the reason already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
+	// unclosed holds the harness directories already logged as left alone
+	// by private; only the poll goroutine touches it.
+	unclosed map[string]bool
 	// spoolIgnored holds the spool entries already logged as not an agent's
 	// message; only the poll goroutine touches it.
 	spoolIgnored map[string]bool

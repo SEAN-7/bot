@@ -164,7 +164,8 @@ dot-prefixed temporary file then rename, with the mode given), `private`
 (make each path a real directory closed to others: create a missing one
 0750, remove the permissions for others from an existing one the user
 owns, keeping the rest of its mode; never following a link, and leaving
-alone what is not a directory and anything below it), `rename`, `mkdir`,
+alone, and returning, what is not a directory the user owns, and anything
+below it), `rename`, `mkdir`,
 `remove` (recursive, never following symlinks), `unlink` (one entry, never a
 directory's contents), `symlink` (create or replace), `clear` (empty a
 directory, never following symlinks), `purge_owned` (the user's files in
@@ -235,11 +236,13 @@ agent user cannot read another user's process environment.
      whose home holds another agent's evidence is never handed out, so a
      lost `pool.json` cannot wipe a live home.
 
-  Otherwise it is left alone (it may still be being written), and the
-  evidence found in a free user's home is remembered until the pool or a
-  journal directory's group changes, so a control directory that stays
-  unadmitted does not start a helper at every poll. A `config.json` that
-  appears in an admitted agent's control directory is ignored: the
+  Otherwise it is left alone (it may still be being written). A failure
+  while deciding (a file or helper that fails) is logged once and the
+  decision made again at the next poll. The evidence found in a free
+  user's home is remembered until the pool or a journal directory's group
+  changes, so a control directory that stays unadmitted does not start a
+  helper at every poll. A `config.json` that appears in an admitted
+  agent's control directory is ignored: the
   agent's config is its own. When the agent is next admitted (after a
   daemon restart) it is renamed `config.json.ignored`, replacing an older
   one, and the service log says so. A known agent the scan misses is
@@ -255,7 +258,9 @@ agent user cannot read another user's process environment.
   `agents/`, `.messages/`, `.messages/agents/` and `.outputs/` real
   directories closed to others (`private`: missing ones are created 0750,
   and existing ones, such as an earlier release's 0755 ones, lose their
-  permissions for others; a link or a file of that name is left alone) and
+  permissions for others; a link, a file or another user's directory of
+  that name is left alone, and the service log names it once per daemon
+  run) and
   writes the seed `README.md` and `TASK.md` where missing; moves the
   starting `config.json` from the control directory into the home (written
   through the agent's helper, removed through the parent's; a home that
@@ -279,7 +284,9 @@ agent user cannot read another user's process environment.
   (root's children: the service log only): the agent limit, when
   `max_agents` users (or every pool user there is) are assigned, or no
   free agent user, when every free user's home holds another agent's
-  evidence (see Discovery). Admission removes that `ERROR`.
+  evidence (see Discovery). A free user's home that cannot be checked is
+  not reported so: the error is logged once and admission retried.
+  Admission removes that `ERROR`.
 - One goroutine loop per agent, one run at a time per agent.
 - **Graceful stop.** On SIGTERM the daemon starts no new runs and delivers no
   new inbox files; active runs finish, up to 15 minutes, before it exits.
@@ -450,7 +457,8 @@ Nothing reaches the human except from a top-level agent.
     to the child's conversation log. A message for a child that is not
     running waits while its control directory may still be admitted, as
     Discovery decides: it holds a user, a `home` link to a free user's home
-    that holds its evidence, or a regular `config.json`. Otherwise it is
+    that holds its evidence, or a regular `config.json`; it also waits
+    while a failure prevents deciding so (logged once). Otherwise it is
     dropped, with a note in the sender's inbox (for root, the service log);
     deciding so uses the evidence Discovery remembers, so it starts no
     helper at every poll.

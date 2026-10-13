@@ -90,7 +90,7 @@ func TestWriteMode(t *testing.T) {
 // Private makes each path a real directory closed to others: a missing one
 // is created 0750, an existing one loses only its permissions for others.
 // It never follows a link, leaves anything that is not a directory alone,
-// and skips what lies below one it left alone.
+// and skips what lies below one it left alone. It returns what it left alone.
 func TestPrivate(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	path := func(p string) string { return filepath.Join(dir, p) }
@@ -104,10 +104,13 @@ func TestPrivate(t *testing.T) {
 	os.Chmod(outside, 0o755)
 	os.Symlink(outside, path("linked"))
 	os.WriteFile(path("file"), []byte("x"), 0o644)
-	err := c.Private(path("new"), path("new/sub"), path("open"), path("group"), path("closed"),
+	skipped, err := c.Private(path("new"), path("new/sub"), path("open"), path("group"), path("closed"),
 		path("linked"), path("linked/sub"), path("file"), path("file/sub"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if want := []string{path("linked"), path("file")}; !reflect.DeepEqual(skipped, want) {
+		t.Errorf("skipped %q, want %q", skipped, want)
 	}
 	for p, want := range map[string]os.FileMode{"new": 0o750, "new/sub": 0o750, "open": 0o750, "group": 0o770, "closed": 0o700} {
 		if info, err := os.Lstat(path(p)); err != nil || !info.IsDir() || info.Mode().Perm() != want {
@@ -136,7 +139,7 @@ func TestPrivateKeepsSetgid(t *testing.T) {
 	if info, _ := os.Stat(path); info.Mode()&fs.ModeSetgid == 0 {
 		t.Skip("cannot set setgid here")
 	}
-	if err := c.Private(path); err != nil {
+	if _, err := c.Private(path); err != nil {
 		t.Fatal(err)
 	}
 	if info, _ := os.Stat(path); info.Mode()&(fs.ModeSetgid|fs.ModePerm) != fs.ModeSetgid|0o750 {
@@ -415,6 +418,28 @@ func TestScanSkipsOtherUsersDirs(t *testing.T) {
 	}
 	if got, err := c.Scan(home); err != nil || len(got) != 0 {
 		t.Fatalf("got %v %v", got, err)
+	}
+}
+
+// Private leaves a directory another user owns alone and returns it. Only
+// root can make one, so the test needs root.
+func TestPrivateSkipsOtherUsersDirs(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("needs root to give a directory to another user")
+	}
+	c, dir := start(t), t.TempDir()
+	theirs := filepath.Join(dir, "theirs")
+	os.Mkdir(theirs, 0o755)
+	os.Chmod(theirs, 0o755)
+	if err := os.Lchown(theirs, 1, 1); err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := c.Private(theirs, filepath.Join(theirs, "sub"))
+	if err != nil || !reflect.DeepEqual(skipped, []string{theirs}) {
+		t.Fatalf("skipped %q, %v", skipped, err)
+	}
+	if info, _ := os.Stat(theirs); info.Mode().Perm() != 0o755 {
+		t.Fatalf("another user's directory changed: %v", info.Mode())
 	}
 }
 

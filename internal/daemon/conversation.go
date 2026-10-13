@@ -245,23 +245,27 @@ func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 // childWaits reports whether a message for a's child name, which is not
 // running, should wait: its control directory may yet be admitted (see
 // admission), as it holds a user, a home link to a free user's home that
-// holds its evidence, or a config.json. Any other child never starts, and
-// its messages are dropped. It shares admission's record of the free homes'
+// holds its evidence, or a config.json, or that could not be decided (a
+// failure, logged once and retried). Any other child never starts, and its
+// messages are dropped. It shares admission's record of the free homes'
 // evidence, so a waiting child starts no helper at every poll.
 func (a *agent) childWaits(uid int, name string) bool {
-	ctrl := filepath.Join(a.home, "agents", name)
+	ctrl, id := filepath.Join(a.home, "agents", name), joinID(a.id, name)
 	e, err := a.fs.Stat(ctrl)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false
 	} else if err != nil {
-		a.logf("messages for %s: %v", name, err)
+		a.d.admitFailed(ctrl, id, "control directory", err)
 		return true
 	}
 	if e.Type != "dir" || e.UID != uid {
 		return false
 	}
-	id := joinID(a.id, name)
-	usable, _ := a.d.admission(a, ctrl, id, a.d.pool.userOf(id))
+	usable, _, err := a.d.admission(a, ctrl, id, a.d.pool.userOf(id))
+	if err != nil {
+		a.d.admitFailed(ctrl, id, "admission", err)
+		return true
+	}
 	return usable != nil
 }
 

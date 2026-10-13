@@ -259,6 +259,31 @@ func TestRestartTightensHarnessDirs(t *testing.T) {
 	}
 }
 
+// A harness directory left alone because it is not a real directory the
+// agent owns (a link, a file) is named in the service log once per daemon
+// run, so a directory left open is visible, also when admission is retried.
+func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
+	h := newHarness(t)
+	sys := h.cfg.System.(*fakeSystem)
+	h.start()
+	h.stop()
+	outputs, spools := filepath.Join(h.mainHome, ".outputs"), filepath.Join(h.mainHome, ".messages", "agents")
+	os.RemoveAll(outputs)
+	os.Symlink(t.TempDir(), outputs)
+	os.RemoveAll(spools)
+	os.WriteFile(spools, nil, 0o644)
+	sys.setFail("linger agent-1", errors.New("linger failed"))
+	h.run()
+	waitFor(t, "admission retried", func() bool { return strings.Count(sys.String(), "linger agent-1") >= 4 })
+	sys.setFail("linger agent-1", nil)
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
+	for _, p := range []string{outputs, spools} {
+		if n := strings.Count(h.logs.String(), "main: not closed to others: "+p+" "); n != 1 {
+			t.Errorf("%s logged %d times:\n%s", p, n, h.logs)
+		}
+	}
+}
+
 func TestConfigErrorGoesToControlDir(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
@@ -1074,6 +1099,40 @@ func TestNoFreeUserReported(t *testing.T) {
 	waitFor(t, "ERROR cleared", func() bool { _, err := os.Lstat(errorFile); return os.IsNotExist(err) })
 }
 
+// A free user's home whose evidence cannot be checked (a transient failure)
+// is not one holding another agent's evidence: the agent is not reported as
+// having no free user. The error is logged once and admission retried,
+// which succeeds once the check does.
+func TestEvidenceErrorNotNoFreeUser(t *testing.T) {
+	h := newHarness(t)
+	h.cfg.PoolUsers = []string{"agent-1", "agent-2"}
+	var failing atomic.Bool
+	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
+		if name == "agent-2" && failing.Load() {
+			return nil, errors.New("lookup failed")
+		}
+		return nil, nil
+	}
+	h.start()
+	failing.Store(true)
+	b := makeChild(t, h, "b", true)
+	waitFor(t, "error logged", func() bool { return strings.Contains(h.logs.String(), "lookup failed") })
+	time.Sleep(30 * h.cfg.Poll)
+	if _, err := os.Lstat(filepath.Join(b, "ERROR")); !os.IsNotExist(err) {
+		t.Fatalf("ERROR written on a transient error: %v", err)
+	}
+	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 0 {
+		t.Fatalf("%d parent notes on a transient error", n)
+	}
+	if n := strings.Count(h.logs.String(), "lookup failed"); n != 1 {
+		t.Fatalf("error logged %d times:\n%s", n, h.logs)
+	}
+	failing.Store(false)
+	if home := h.childHome(b); home != h.cfg.PoolHome("agent-2") {
+		t.Fatalf("b got %s", home)
+	}
+}
+
 // A root child held back by the limit is reported in its ERROR and the
 // service log; root has no inbox.
 func TestRootChildHoldBackLoggedOnly(t *testing.T) {
@@ -1192,7 +1251,8 @@ func TestRestartKeepsOwnConfigOverStray(t *testing.T) {
 	}
 }
 
-// A home link that is a real directory or a regular file names no user.
+// A home link that is a real directory or a regular file names no user,
+// nor does a missing one; a home link that cannot be read is an error.
 func TestLinkedUserNeedsLink(t *testing.T) {
 	h := newHarness(t)
 	d := &daemon{cfg: h.cfg}
@@ -1204,19 +1264,30 @@ func TestLinkedUserNeedsLink(t *testing.T) {
 	ctrl := filepath.Join(h.mainHome, "agents", "c")
 	os.MkdirAll(ctrl, 0o755)
 	home := filepath.Join(ctrl, "home")
+	if u, err := d.linkedUser(main, ctrl); u != "" || err != nil {
+		t.Fatalf("no link names %q, %v", u, err)
+	}
 	os.Symlink(h.cfg.PoolHome("agent-3"), home)
-	if u := d.linkedUser(main, ctrl); u != "agent-3" {
-		t.Fatalf("link names %q", u)
+	if u, err := d.linkedUser(main, ctrl); u != "agent-3" || err != nil {
+		t.Fatalf("link names %q, %v", u, err)
+	}
+	if os.Getuid() != 0 {
+		os.Chmod(ctrl, 0)
+		_, err := d.linkedUser(main, ctrl)
+		os.Chmod(ctrl, 0o755)
+		if err == nil {
+			t.Fatal("unreadable link: no error")
+		}
 	}
 	os.Remove(home)
 	os.Mkdir(home, 0o755)
-	if u := d.linkedUser(main, ctrl); u != "" {
-		t.Fatalf("directory names %q", u)
+	if u, err := d.linkedUser(main, ctrl); u != "" || err != nil {
+		t.Fatalf("directory names %q, %v", u, err)
 	}
 	os.Remove(home)
 	os.WriteFile(home, []byte(h.cfg.PoolHome("agent-3")), 0o644)
-	if u := d.linkedUser(main, ctrl); u != "" {
-		t.Fatalf("file names %q", u)
+	if u, err := d.linkedUser(main, ctrl); u != "" || err != nil {
+		t.Fatalf("file names %q, %v", u, err)
 	}
 }
 
