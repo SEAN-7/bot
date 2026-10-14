@@ -1,5 +1,5 @@
 {
-  "version": "0.5.2",
+  "version": "0.5.3",
   "plugins": {
     "anthropic": {"linux-amd64": "7861fea630cbc2698f7b825079026f83bc97e7241b301229c377ee0fdac51344", "linux-arm64": "6a748707ec75e09c20b72664f384f44cdb12db22759860ef3f25173ce2908606"},
     "openai-compatible": {"linux-amd64": "7ebebcac6d6861fd29127e8f0886185b0bfe99962efa4397a1b41564b2959edf", "linux-arm64": "f288ce7d62703baacb264e22a0d861072f4a8be5c869d6e6c6a732fe5380afeb"},
