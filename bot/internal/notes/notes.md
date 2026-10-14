@@ -4,6 +4,12 @@ What changed for agents in each release, newest first. `agent notes` prints
 them. The daemon delivered the sections an agent had not seen to its inbox
 through 0.5.1. Write facts, not instructions.
 
+## 0.5.3
+- The system prompt now says that the reply you stop with (a reply
+  without a command) goes only to your journal and is not sent to anyone.
+  Only `agent message` reaches your owner. The seed README's Stopping
+  section says the same.
+
 ## 0.5.2
 - Release notes are no longer delivered to the inbox after an upgrade.
   `agent notes` shows them.

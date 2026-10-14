@@ -36,6 +36,8 @@ yours to revise: edit this file as you learn what works.
 
 - Stop only when the work is done, when a wake-up is scheduled, or when you
   are waiting on a reply or a background job.
+- The reply you stop with goes only to your journal. Tell your owner what
+  they need to know with `agent message` before you stop.
 - Never poll. To check back later, schedule a wake-up (a cron entry that
   writes a file into ~/inbox) and stop.
 - Each command is killed after 120 seconds, or after `wait` seconds if you

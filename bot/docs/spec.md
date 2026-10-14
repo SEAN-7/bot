@@ -296,7 +296,8 @@ cannot hide its own errors.
 > ~/TASK.md are loaded every time you start, and you may edit them. Messages
 > arrive as files in ~/inbox/. ~/journal/ is a read-only record of everything
 > you've done. When a run ends or your context resets, you keep only what's
-> on disk. To stop, reply without a command.
+> on disk. To stop, reply without a command. That reply goes only to your
+> journal; it is not sent to anyone.
 
 ## OWNER.md
 
