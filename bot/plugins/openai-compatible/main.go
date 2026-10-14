@@ -97,7 +97,7 @@ func intp(n int) *int { return &n }
 var settings = []proto.Setting{
 	{Name: "OPENAI_BASE_URL", Description: "Base URL of the OpenAI-compatible API, up to and including /v1 (default " + defaultBaseURL + "). Requests go to <base>/chat/completions."},
 	{Name: "OPENAI_API_KEY", Description: "API key, sent as a Bearer token. Leave empty for servers that need none.", Secret: true},
-	{Name: "OPENAI_MODELS", Description: "Comma-separated id=context_tokens pairs, for example gpt-5=400000,llama3=8192. Compatible endpoints do not report context sizes."},
+	{Name: "OPENAI_MODELS", Description: "Comma-separated model ids, each optionally with its context size in tokens, for example gpt-5=400000,llama3. Compatible endpoints do not report context sizes; a size given here is shown to agents choosing a model."},
 }
 
 func modelOptions() map[string]proto.Option {
@@ -137,14 +137,17 @@ func parseModels(s string) ([]proto.Model, error) {
 		if pair == "" {
 			continue
 		}
-		id, size, ok := strings.Cut(pair, "=")
+		id, size, sized := strings.Cut(pair, "=")
 		id, size = strings.TrimSpace(id), strings.TrimSpace(size)
-		if !ok || id == "" {
-			return nil, fmt.Errorf("OPENAI_MODELS: %q is not id=context_tokens", pair)
+		if id == "" {
+			return nil, fmt.Errorf("OPENAI_MODELS: %q has no model id", pair)
 		}
-		n, err := strconv.Atoi(size)
-		if err != nil || n <= 0 {
-			return nil, fmt.Errorf("OPENAI_MODELS: context_tokens for %q must be a positive integer, got %q", id, size)
+		n := 0
+		if sized {
+			var err error
+			if n, err = strconv.Atoi(size); err != nil || n <= 0 {
+				return nil, fmt.Errorf("OPENAI_MODELS: context_tokens for %q must be a positive integer, got %q", id, size)
+			}
 		}
 		if seen[id] {
 			return nil, fmt.Errorf("OPENAI_MODELS: model %q listed twice", id)

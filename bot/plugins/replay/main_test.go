@@ -102,7 +102,7 @@ func TestExhaustedEndsRun(t *testing.T) {
 func TestUsageAndText(t *testing.T) {
 	setup(t, `{"text":"hi","usage":{"input_tokens":5,"output_tokens":2}}`)
 	r := call(t, plain)
-	if r.Text != "hi" || r.Usage.Total() != 7 {
+	if r.Text != "hi" || r.Usage != (proto.Usage{InputTokens: 5, OutputTokens: 2}) {
 		t.Fatalf("got %+v", r)
 	}
 }

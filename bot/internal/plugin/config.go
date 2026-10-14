@@ -109,16 +109,6 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// ContextTokens returns the model's context size, or 0 if unknown.
-func ContextTokens(d proto.DescribeResponse, model string) int {
-	for _, m := range d.Models {
-		if m.ID == model {
-			return m.ContextTokens
-		}
-	}
-	return 0
-}
-
 // ImageTypes lists the image media types the model accepts, none if unknown.
 func ImageTypes(d proto.DescribeResponse, model string) []string {
 	for _, m := range d.Models {

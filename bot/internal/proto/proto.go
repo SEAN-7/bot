@@ -51,11 +51,6 @@ type Usage struct {
 	CacheWriteTokens int `json:"cache_write_tokens"`
 }
 
-// Total is the context consumed by a call: everything sent plus the reply.
-func (u Usage) Total() int {
-	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
-}
-
 // Error reports a failed call. Kind lets the daemon tell failures that a
 // retry cannot fix from transient ones.
 type Error struct {
@@ -105,11 +100,12 @@ type Option struct {
 	Max         *int   `json:"max,omitempty"`
 }
 
-// Model is one model a plugin offers. ImageTypes lists the image media types
-// it accepts; none means it takes text only.
+// Model is one model a plugin offers. ContextTokens, when known, is shown to
+// agents choosing a model; the daemon does not use it. ImageTypes lists the
+// image media types it accepts; none means it takes text only.
 type Model struct {
 	ID            string            `json:"id"`
-	ContextTokens int               `json:"context_tokens"`
+	ContextTokens int               `json:"context_tokens,omitempty"`
 	ImageTypes    []string          `json:"image_types,omitempty"`
 	Options       map[string]Option `json:"options,omitempty"`
 }

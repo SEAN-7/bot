@@ -9,6 +9,9 @@ agent, whose one tool is the shell, builds everything else as files.
 
 - **No `max_steps`.** Context resets bound each run; the provider spend
   limit bounds money.
+- **No context policy.** A run ends for context only when the provider
+  rejects it as too long. The agent sees its usage in its journal and
+  decides when to start fresh sooner.
 - **Root is the top of one tree.** The human, as root, uses the same
   commands an agent uses for its children. `main`, created by a fresh
   install, is otherwise an ordinary child of root.
@@ -245,14 +248,12 @@ ends the run (`reason: "done"`).
   (integer: "Seconds to wait for the command before killing it. Default 120,
   maximum 600.").
 
-**Context size.** Used = input + cache read + cache write + output tokens,
-against the model's `context_tokens`.
-- At 80%, once per run, append: "Context is 80% full. Save your state to
-  TASK.md and notes now."
-- At 95%, end the run (`reason: "context"`) and write to the inbox:
-  "Context reset. Continue from TASK.md. Previous journal: <path>".
-- If a run's first call is already at 95%, write `ERROR` instead and wait
-  for new input, so resets cannot loop.
+**Context size.** The harness does not measure it. When the provider
+reports `context_overflow`, end the run (`reason: "context"`) and write to
+the inbox: "Context reset. Continue from TASK.md. Previous journal: <path>".
+If that happens on a run's first call, write `ERROR` instead and wait for
+new input, so resets cannot loop. Each call's usage is in the journal; when
+to start fresh sooner is the agent's choice.
 
 **Provider failures.** Retry the call with delays doubling from 2 seconds
 to 10 minutes. After 3 consecutive failures write the error to `ERROR` and
@@ -361,8 +362,10 @@ service log. Every message carries `"protocol": 1`.
 credentials) returns:
 - `settings`: `{name, description, secret}` for each environment variable
   it needs; the installer prompts for them.
-- `models`: `{id, context_tokens, image_types, options}`. `image_types`
-  lists accepted image media types (a 0.5.0 boolean `images` is ignored).
+- `models`: `{id, context_tokens, image_types, options}`. `context_tokens`
+  is the context window where known, for agents choosing a model.
+  `image_types` lists accepted image media types (a 0.5.0 boolean `images`
+  is ignored).
   `options` maps names to `{description, values}` or
   `{description, type: "integer", min, max}`.
 
@@ -383,7 +386,7 @@ run with a reset, or triggers the first-call guard. The daemon assigns
 requests (reasoning blocks, signatures). A plugin returns at most one
 command and disables parallel tool calls.
 
-The daemon interprets only `context_tokens`, `image_types` and `usage`.
+The daemon interprets only `image_types`; `usage` is journaled, not interpreted.
 
 ## Plugins
 
@@ -399,8 +402,8 @@ accepts only a file matching the index.
   HTTP 413 is `context_overflow`. Exposes the models' reasoning settings as
   options, taken from the current Anthropic documentation.
 - **openai-compatible**: Chat Completions with function calling.
-  `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODELS` (`id=context_tokens`
-  pairs).
+  `OPENAI_BASE_URL`, `OPENAI_API_KEY` and `OPENAI_MODELS` (model ids, each
+  optionally `id=context_tokens`).
 - **replay**: scripted replies for tests. `REPLAY_SCRIPT` (JSONL responses
   after a header describing models) and optional `REPLAY_LOG`.
 

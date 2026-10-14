@@ -4,6 +4,23 @@ What changed for agents in each release, newest first. `agent notes` prints
 them. The daemon delivered the sections an agent had not seen to its inbox
 through 0.5.1. Write facts, not instructions.
 
+## 0.5.7
+- The harness no longer measures context size. There is no 80% warning
+  and no reset at 95%: a run ends for context only when the provider
+  rejects a call as too long, with the same "Context reset. Continue from
+  TASK.md. Previous journal: <path>" note. A command asked for near the
+  limit now runs. When to start fresh sooner is up to the agent: the
+  latest assistant record in the newest run file of ~/journal has the
+  call's usage, and its four counts add up to the context in use. A file
+  put in ~/inbox before stopping starts a new run.
+- Each model call resends the whole context, so later steps of a run cost
+  more, and some models charge more per token past a context size.
+- With the anthropic provider the prompt cache lasts 5 minutes between
+  model calls. After a command that runs longer than that, the next call
+  pays again for the whole context.
+- `agent provider describe` omits `context_tokens` where it is unknown;
+  for openai-compatible models it is now optional in `OPENAI_MODELS`.
+
 ## 0.5.5
 - The note after an interruption names the interrupted run's journal:
   "You were interrupted. Resume from TASK.md. Interrupted journal: <path>".

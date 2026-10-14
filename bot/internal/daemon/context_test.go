@@ -8,59 +8,39 @@ import (
 	"time"
 )
 
-func TestWarningAt80(t *testing.T) {
-	h := newHarness(t, step("true", 800), step("true", 850), done())
+// The harness does not watch context size: a run near the model's limit
+// keeps going, and its commands run, until the provider reports an overflow.
+func TestNoHarnessContextLimit(t *testing.T) {
+	h := newHarness(t, step("true", 800), step("touch ran", 990), done())
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")
-	h.waitEnds(h.mainID, 1)
-	reqs := h.requests()
-	msgs := reqs[1].Messages
-	if last := msgs[len(msgs)-1]; last.Role != "user" || !strings.Contains(last.Content, MsgWarn80) {
-		t.Fatalf("no warning after 80%%: %+v", msgs)
-	}
-	count := 0
-	for _, m := range reqs[2].Messages {
-		count += strings.Count(m.Content, MsgWarn80)
-	}
-	if count != 1 {
-		t.Fatalf("warning appeared %d times", count)
-	}
-}
-
-func TestResetAt95(t *testing.T) {
-	h := newHarness(t, step("true", 100), step("touch ran", 960), done())
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	first := h.waitEnds(h.mainID, 1)
-	if end := lastEnd(first); end != "context" {
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
 		t.Fatalf("end %s", end)
 	}
-	second := h.waitEnds(h.mainID, 2)
-	runs := h.runs(h.mainID)
-	want := "Context reset. Continue from TASK.md. Previous journal: " + runs[0]
-	found := false
-	for _, r := range second {
-		if r["type"] == "inbox" && strings.Contains(r["content"].(string), want) && strings.HasSuffix(r["file"].(string), "-reset.md") {
-			found = true
+	if _, err := os.Stat(filepath.Join(h.mainHome, "ran")); err != nil {
+		t.Fatal("command issued near the context limit was not run")
+	}
+	for _, req := range h.requests() {
+		for _, m := range req.Messages {
+			if m.Role == "user" && strings.Contains(m.Content, "Context is") {
+				t.Fatalf("harness added a context message: %q", m.Content)
+			}
 		}
 	}
-	if !found {
-		t.Fatalf("second run did not receive %q: %v", want, second)
-	}
-	if _, err := os.Stat(filepath.Join(h.mainHome, "ran")); err == nil {
-		t.Fatal("command issued at 95% was run")
+	if names := inboxNames(h.mainHome); len(names) != 0 || len(h.runs(h.mainID)) != 1 {
+		t.Fatalf("reset without an overflow: %v", names)
 	}
 }
 
 func TestFirstCallGuard(t *testing.T) {
-	h := newHarness(t, step("true", 990))
+	h := newHarness(t, overflow)
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")
 	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "context-guard" {
 		t.Fatalf("end %s", end)
 	}
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
-	if !fileContains(errorFile, "over 95%") {
+	if !fileContains(errorFile, "over the model's limit") {
 		t.Fatal("ERROR not written")
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -111,19 +91,6 @@ func TestProviderErrorFileWritten(t *testing.T) {
 	}
 }
 
-func TestNoResetWhenStopping(t *testing.T) {
-	h := newHarness(t, step("true", 100), `{"text":"finished","usage":{"input_tokens":970}}`)
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
-		t.Fatalf("end %s", end)
-	}
-	time.Sleep(200 * time.Millisecond)
-	if names := inboxNames(h.mainHome); len(names) != 0 || len(h.runs(h.mainID)) != 1 {
-		t.Fatalf("reset note written for a run that chose to stop: %v", names)
-	}
-}
-
 const overflow = `{"error":"prompt is too long","error_kind":"context_overflow"}`
 
 func TestOverflowMidRunResets(t *testing.T) {
@@ -141,22 +108,6 @@ func TestOverflowMidRunResets(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no reset note in the next run")
-	}
-}
-
-func TestOverflowFirstCallGuards(t *testing.T) {
-	h := newHarness(t, overflow, done())
-	h.start()
-	h.drop(h.mainHome, "huge.md", "too much")
-	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "context-guard" {
-		t.Fatalf("end %s", end)
-	}
-	if !fileContains(filepath.Join(h.mainCtrl, "ERROR"), "over the model's limit") {
-		t.Fatal("no ERROR for an oversized first call")
-	}
-	time.Sleep(200 * time.Millisecond)
-	if n := len(h.requests()); n != 1 {
-		t.Fatalf("overflow retried: %d requests", n)
 	}
 }
 

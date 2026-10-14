@@ -52,7 +52,7 @@ func TestDescribeReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.Models[0].ID != "replay-1" || ContextTokens(d, "replay-1") != 1000 || ContextTokens(d, "x") != 0 {
+	if d.Models[0].ID != "replay-1" || d.Models[0].ContextTokens != 1000 {
 		t.Fatalf("got %+v", d)
 	}
 }

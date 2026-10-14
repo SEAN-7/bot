@@ -137,7 +137,7 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal: %v", err)
 		return
 	}
-	if reason := a.steps(ctx, j, cfg, plugin.ContextTokens(describe, cfg.Model), plugin.ImageTypes(describe, cfg.Model), owner); reason != "" {
+	if reason := a.steps(ctx, j, cfg, plugin.ImageTypes(describe, cfg.Model), owner); reason != "" {
 		j.End(reason)
 	} else {
 		j.Close() // daemon shutdown: left unclean so recovery resumes the agent
@@ -162,9 +162,9 @@ func (a *agent) readSegment(name string) string {
 	return strings.ToValidUTF8(string(data), "�")
 }
 
-func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, contextTokens int, imageTypes []string, owner string) string {
+func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, imageTypes []string, owner string) string {
 	d := a.d
-	j.Record("start", map[string]any{"agent": a.id, "config": cfg, "context_tokens": contextTokens})
+	j.Record("start", map[string]any{"agent": a.id, "config": cfg})
 	if err := a.fs.Symlink(d.cfg.JournalDir(a.id), filepath.Join(a.home, "journal")); err != nil {
 		a.logf("journal link: %v", err)
 	}
@@ -179,7 +179,6 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		return "empty" // the files vanished after the wake-up; nothing to say
 	}
 	messages := []proto.Message{{Role: "user", Content: encodeRecords(records), Images: shown}}
-	warned, warnNext := false, false
 	for n := 1; ; n++ {
 		resp, err := a.complete(ctx, cfg, system, messages)
 		if plugin.IsContextOverflow(err) {
@@ -204,23 +203,6 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		}
 		messages = append(messages, msg)
 		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "wait": msg.Wait, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
-		if used := resp.Usage.Total(); contextTokens > 0 && msg.Command != nil {
-			switch {
-			case used*100 >= 95*contextTokens && n == 1:
-				// The run is already too big: a reset note would loop forever.
-				text := fmt.Sprintf(MsgGuardFmt, used, contextTokens)
-				a.logf("%s", text)
-				a.setError(text)
-				return "context-guard"
-			case used*100 >= 95*contextTokens:
-				if err := d.writeNote(a, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
-					a.logf("reset note: %v", err)
-				}
-				return "context"
-			case used*100 >= 80*contextTokens && !warned:
-				warned, warnNext = true, true
-			}
-		}
 		if n == 1 {
 			// A successful call settles errors left by earlier runs or a restart.
 			a.clearError(errGuardPrefix)
@@ -244,15 +226,8 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 				a.logf("inbox: %v", err)
 			}
 		}
-		var parts []string
-		if warnNext {
-			parts, warnNext = append(parts, MsgWarn80), false
-		}
 		if len(more) > 0 {
-			parts = append(parts, encodeRecords(more))
-		}
-		if len(parts) > 0 {
-			messages = append(messages, proto.Message{Role: "user", Content: strings.Join(parts, "\n"), Images: moreImages})
+			messages = append(messages, proto.Message{Role: "user", Content: encodeRecords(more), Images: moreImages})
 		}
 	}
 }
@@ -307,7 +282,7 @@ func (a *agent) retry(ctx context.Context, call func() error) error {
 
 const (
 	errProviderPrefix = "Provider failing since"
-	errGuardPrefix    = "Context is over"
+	errGuardPrefix    = "Context is over" // MsgOverflowGuardFmt
 )
 
 // setError writes the agent's ERROR in its control directory, where its

@@ -9,12 +9,6 @@ import (
 	"testing"
 )
 
-func TestUsageTotal(t *testing.T) {
-	if got := (Usage{1, 2, 3, 4}).Total(); got != 10 {
-		t.Fatalf("got %d", got)
-	}
-}
-
 func TestShToolSchema(t *testing.T) {
 	tool := ShTool()
 	if tool.Name != "sh" {

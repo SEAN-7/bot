@@ -20,9 +20,16 @@ yours to revise: edit this file as you learn what works.
 
 - Keep TASK.md current: the goal, progress so far, and the next step. Update it
   at each milestone, so a reset or interruption loses nothing important.
-- When your context fills up, the harness ends the run and you start fresh
-  from TASK.md.
 - Every run starts fresh. ~/journal records each model call's token usage.
+- Each model call resends your whole context, so every step of a run costs
+  more than the one before, and some models charge more per token past a
+  context size. The four token counts in the latest call's usage add up to
+  the context in use:
+  `jq -c 'select(.type=="assistant").usage' "$(ls ~/journal/*Z.jsonl | tail -1)" | tail -1`.
+  To start fresh sooner, save your state, put a note in ~/inbox (see
+  Messages) and stop: the note starts a new run.
+- If your context grows past the model's limit, the harness ends the run
+  and you start fresh from TASK.md. Whatever was not on disk is lost.
 - The harness is upgraded from time to time. At the start of a run, compare
   `agent version` with the version you last recorded (for example in
   ~/.notes-version); if it differs, read the newer sections of `agent notes`
@@ -42,6 +49,10 @@ yours to revise: edit this file as you learn what works.
   writes a file into ~/inbox) and stop.
 - Each command is killed after 120 seconds, or after `wait` seconds if you
   give one (up to 600). Raise it for a command you expect to be slow.
+- With the anthropic provider, the prompt cache lasts 5 minutes between
+  model calls. A command that runs longer makes the next call pay again for
+  your whole context, so wait for slow work in the background (below), not
+  with sleep.
 - Run longer jobs, and anything meant to keep running such as servers, in
   the background with systemd-run --user (for example
   `systemd-run --user --unit=myjob ./job.sh`); such jobs keep running across

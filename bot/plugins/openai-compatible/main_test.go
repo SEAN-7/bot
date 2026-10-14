@@ -102,12 +102,12 @@ func messagesOf(t *testing.T, body map[string]any) []map[string]any {
 }
 
 func TestDescribeFromSetting(t *testing.T) {
-	d := testHandler(map[string]string{"OPENAI_MODELS": "a=8000,b=128000"}).Describe()
+	d := testHandler(map[string]string{"OPENAI_MODELS": "a=8000,b"}).Describe()
 	if d.Error != nil {
 		t.Fatalf("unexpected error: %v", d.Error.Message)
 	}
 	if len(d.Models) != 2 || d.Models[0].ID != "a" || d.Models[0].ContextTokens != 8000 ||
-		d.Models[1].ID != "b" || d.Models[1].ContextTokens != 128000 {
+		d.Models[1].ID != "b" || d.Models[1].ContextTokens != 0 {
 		t.Fatalf("models = %+v", d.Models)
 	}
 	for _, m := range d.Models {
@@ -152,7 +152,7 @@ func TestDescribeFromSetting(t *testing.T) {
 }
 
 func TestBadModelsSetting(t *testing.T) {
-	for _, s := range []string{"a=notanumber", "a", "=100", "a=0", "a=-5", "a=10,a=20"} {
+	for _, s := range []string{"a=notanumber", "a=", "=100", "a=0", "a=-5", "a=10,a=20", "a,a"} {
 		d := testHandler(map[string]string{"OPENAI_MODELS": s}).Describe()
 		if d.Error == nil {
 			t.Errorf("OPENAI_MODELS %q: expected an error, got %+v", s, d.Models)
