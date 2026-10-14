@@ -45,7 +45,8 @@ yours to revise: edit this file as you learn what works.
 - Run longer jobs, and anything meant to keep running such as servers, in
   the background with systemd-run --user (for example
   `systemd-run --user --unit=myjob ./job.sh`); such jobs keep running across
-  harness restarts. Read their output with `journalctl --user -u myjob`, and
+  harness restarts. Anything else a command starts, with & or nohup or
+  setsid, is killed when the command finishes. Read their output with `journalctl --user -u myjob`, and
   have them write a file to your inbox when they finish. Python and some
   other programs hold back output that is not going to a terminal; set
   PYTHONUNBUFFERED=1 or use `stdbuf -oL` to see it promptly.

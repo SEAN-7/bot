@@ -19,7 +19,8 @@ The harness provides a few guarantees; the agent provides all policy.
 
 - Commands run as the agent's own unprivileged user, with a time limit the
   agent chooses per command (up to 10 minutes) that kills the whole process
-  group.
+  group. What a command leaves running ends with it, and the agent is told;
+  long-running work goes in the agent's own systemd.
 - Every agent has one owner: the human (root) for a top-level agent such as
   the main agent, its parent for a subagent. Messages between them are
   labelled with their sender; nothing an agent writes can carry another's

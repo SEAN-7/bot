@@ -21,8 +21,10 @@ agent, whose one tool is the shell, builds everything else as files.
   `config.json`; it moves into the agent's home at admission. A parent
   stops a child only by removing it.
 - **Long-running jobs use the agent user's own systemd** (lingering, with
-  `XDG_RUNTIME_DIR` set). There is no harness heartbeat: agents schedule
-  their own wake-ups.
+  `XDG_RUNTIME_DIR` set). What a command leaves running in the daemon's
+  service is killed when it finishes, since the next restart would kill it
+  unannounced. There is no harness heartbeat: agents schedule their own
+  wake-ups.
 - **Provider failures never touch the inbox.** They go to `ERROR` and the
   service log.
 - **The repository is private.** Installs authenticate with a
@@ -100,6 +102,11 @@ in their own process group, stdin `/dev/null`, umask 022, with `/bin/bash -c`
 home, `USER`/`LOGNAME`, `PATH=$HOME/bin:/usr/local/bin:/usr/bin:/bin`,
 `XDG_RUNTIME_DIR=/run/user/<uid>`,
 `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/<uid>/bus`, `TERM=dumb`.
+When a command finishes, every live process in the daemon's own cgroup whose
+real or effective uid is the agent's, other than its file helper, is killed
+(read from `/proc`, repeating while new ones appear). Processes started with
+`systemd-run --user`, or by cron, are in other cgroups and untouched. An
+agent run without changing identity (tests) is not swept.
 
 **Sharing** is explicit: a file's owner grants access with `setfacl`. Since
 users are reused, a parent removes a child's grants and files before
@@ -221,6 +228,9 @@ a JSON number means 120), then its process group is killed and the result
 says so, suggesting a longer wait or `systemd-run --user`. The result is
 combined stdout and stderr plus exit status; over 16 KiB it is clipped to
 the first and last 8 KiB, with a marker suggesting redirecting to a file.
+Processes the command left running are then killed (see Shell commands),
+and the result ends with a note counting and naming them, suggesting
+`systemd-run --user`.
 The journal records exactly what the model got. A reply with no command
 ends the run (`reason: "done"`).
 

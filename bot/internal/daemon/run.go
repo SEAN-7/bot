@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io/fs"
 	"math"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/journal"
@@ -228,8 +230,8 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			return "done"
 		}
 		wait := commandWait(msg.Wait, d.cfg.CommandWait, d.cfg.MaxCommandWait)
-		result, runErr := a.command(ctx, *msg.Command, wait)
-		content := a.toolContent(result, runErr, wait)
+		result, killed, runErr := a.command(ctx, *msg.Command, wait)
+		content := a.toolContent(result, runErr, wait, killed)
 		j.Record("result", map[string]any{"call_id": callID, "wait": seconds(wait), "exit_code": result.ExitCode, "timed_out": result.TimedOut, "output": content})
 		if ctx.Err() != nil {
 			return a.stopReason(ctx)
@@ -351,15 +353,32 @@ func commandWait(raw json.RawMessage, def, limit time.Duration) time.Duration {
 }
 
 // command runs one model command in the agent's home as its user, looked up
-// now so that current group memberships apply.
-func (a *agent) command(ctx context.Context, command string, wait time.Duration) (shell.Result, error) {
+// now so that current group memberships apply, then kills whatever it left
+// running and returns those processes' names.
+func (a *agent) command(ctx context.Context, command string, wait time.Duration) (shell.Result, []string, error) {
 	cred, err := a.cred()
 	if err != nil {
-		return shell.Result{}, fmt.Errorf("look up user %s: %w", a.userName(), err)
+		return shell.Result{}, nil, fmt.Errorf("look up user %s: %w", a.userName(), err)
 	}
-	return shell.Run(ctx, command, shell.Options{
+	result, err := shell.Run(ctx, command, shell.Options{
 		Dir: a.home, Home: a.home, Env: shell.Env(a.home, a.userName(), credUID(cred)), User: cred, Timeout: wait,
 	})
+	return result, a.endStrays(cred), err
+}
+
+// endStrays kills what the last command left running in the daemon's
+// service. An agent run without changing identity (in tests) shares the
+// daemon's uid, so its processes cannot be told apart from the daemon's
+// own; they are left alone.
+func (a *agent) endStrays(cred *syscall.Credential) []string {
+	if cred == nil || int(cred.Uid) == os.Getuid() {
+		return nil
+	}
+	names, err := killStrays("/proc", int(cred.Uid), a.fs.Pid)
+	if err != nil {
+		a.logf("processes left by a command: %v", err)
+	}
+	return names
 }
 
 func seconds(d time.Duration) string {
@@ -370,7 +389,7 @@ func seconds(d time.Duration) string {
 }
 
 // toolContent formats a command result, clipping long output.
-func (a *agent) toolContent(r shell.Result, err error, wait time.Duration) string {
+func (a *agent) toolContent(r shell.Result, err error, wait time.Duration, killed []string) string {
 	if err != nil {
 		return "could not run command: " + err.Error()
 	}
@@ -383,6 +402,9 @@ func (a *agent) toolContent(r shell.Result, err error, wait time.Duration) strin
 	}
 	if clipped {
 		content += "\n" + MsgOutputClipped
+	}
+	if note := strayNote(killed); note != "" {
+		content += "\n" + note
 	}
 	return content
 }

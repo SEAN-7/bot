@@ -345,6 +345,28 @@ func TestPrivilegeCommandsRunAsAgent(t *testing.T) {
 	}
 }
 
+// TestPrivilegeCommandLeftoversKilled: what a command leaves running, in its
+// process group or detached with setsid, ends when it finishes and the result
+// says so; the agent's file helper is spared.
+func TestPrivilegeCommandLeftoversKilled(t *testing.T) {
+	h, user := rootHarness(t,
+		step("sleep 300 </dev/null >/dev/null 2>&1 & setsid sleep 301 </dev/null >/dev/null 2>&1 & sleep 1; echo started", 100),
+		step("pgrep -u $(id -u) -x sleep; echo sleeps=$?", 100),
+		done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	h.waitEnds(h.mainID, 1)
+	if tool := h.toolOutput("started"); !strings.Contains(tool, "Killed 2 processes this command left running (sleep ×2)") {
+		t.Fatalf("tool %q", tool)
+	}
+	if tool := h.toolOutput("sleeps="); !strings.Contains(tool, "sleeps=1") || strings.Contains(tool, "Killed") {
+		t.Fatalf("leftovers survived into the next command: %q", tool)
+	}
+	if code := exitCode(t, "pgrep", "-u", user, "-f", "_fsio"); code != 0 {
+		t.Fatalf("file helper killed: pgrep exited %d", code)
+	}
+}
+
 func TestPrivilegeHelperNotDumpable(t *testing.T) {
 	h, _ := rootHarness(t, step("cat /proc/$(pgrep -f 'daemon.test _fsio' | head -n 1)/environ >/dev/null; echo environ-rc=$?", 100), done())
 	h.start()
@@ -567,7 +589,7 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	h, _ := rootHarness(t)
 	mine := filepath.Join(h.cfg.TmpDirs[0], "mine")
-	h.setScript(matchStep("task-for-c", "setsid sleep 300 </dev/null >/dev/null 2>&1 & echo '* * * * * true' | crontab -; echo cron=$?; touch "+mine+"; echo tmp=$?", 100))
+	h.setScript(matchStep("task-for-c", "echo '* * * * * true' | crontab -; echo cron=$?; touch "+mine+"; echo tmp=$?", 100))
 	h.start()
 	if got := groupMembers(t, h.cfg.PoolUsers[0]); got != "" {
 		t.Fatalf("main's group %s members %q, want none: root needs no membership", h.cfg.PoolUsers[0], got)
@@ -587,7 +609,15 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	h.drop(home, "task.md", "task-for-c")
 	h.waitEnds(childID("c"), 1)
 	exitCodes(t, h.toolOutput("cron="), true, "cron", "tmp")
-	// The run can end before the backgrounded setsid has exec'd sleep.
+	// A command's own leftovers end with it, so the process reclaim must kill
+	// is started outside one, as cron or systemd-run --user would.
+	uid, gid := lookupIDs(t, user)
+	sleeper := exec.Command("setsid", "sleep", "300")
+	sleeper.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+	if err := sleeper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	go sleeper.Wait()
 	waitFor(t, "the detached sleep", func() bool { return exitCode(t, "pgrep", "-u", user, "sleep") == 0 })
 	if code := exitCode(t, "crontab", "-l", "-u", user); code != 0 {
 		t.Fatalf("no crontab installed: %d", code)

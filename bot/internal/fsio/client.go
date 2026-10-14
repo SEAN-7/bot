@@ -29,6 +29,7 @@ type Client struct {
 	stdin io.WriteCloser
 	dec   *json.Decoder
 	dead  bool
+	pid   atomic.Int64 // the current helper's, readable while a call is in flight
 }
 
 // Start launches `self _fsio` with the given credential (nil: current user).
@@ -58,8 +59,12 @@ func (c *Client) spawn() error {
 		return err
 	}
 	c.cmd, c.stdin, c.dec, c.dead = cmd, stdin, json.NewDecoder(bufio.NewReader(stdout)), false
+	c.pid.Store(int64(cmd.Process.Pid))
 	return nil
 }
+
+// Pid is the process id of the current helper.
+func (c *Client) Pid() int { return int(c.pid.Load()) }
 
 func (c *Client) Close() error {
 	c.mu.Lock()

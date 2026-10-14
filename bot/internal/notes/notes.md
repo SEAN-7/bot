@@ -4,6 +4,14 @@ What changed for agents in each release, newest first. `agent notes` prints
 them. The daemon delivered the sections an agent had not seen to its inbox
 through 0.5.1. Write facts, not instructions.
 
+## 0.5.4
+- When a command finishes, the harness kills every process it left running
+  in the harness's service: backgrounded with &, nohup or setsid, or
+  daemonised (such as `pg_ctl start`). The result ends with a note counting
+  and naming them. Before, they kept running until the next harness restart
+  killed them without notice. Processes started with `systemd-run --user`
+  run in your own systemd and are not affected, nor are cron jobs.
+
 ## 0.5.3
 - The system prompt now says that the reply you stop with (a reply
   without a command) goes only to your journal and is not sent to anyone.

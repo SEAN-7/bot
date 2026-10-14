@@ -14,6 +14,7 @@ const (
 	MsgWarn80              = "Context is 80% full. Save your state to TASK.md and notes now."
 	MsgTimeoutFmt          = "Command timed out after %s; its process group was killed. Give it a longer wait (up to %s), or run it in the background with systemd-run --user."
 	MsgOutputClipped       = "[output clipped; redirect long output to a file to read all of it]"
+	MsgStraysFmt           = "Killed %d %s this command left running (%s). A command's processes end with it; start anything that should keep running with systemd-run --user."
 	MsgInboxClipFmt        = "[file clipped; full file: %s]"
 	MsgGuardFmt            = "Context is over 95%% full at the start of a run (%d of %d tokens); not starting. Reduce README.md, TASK.md or inbox files."
 	MsgOverflowGuardFmt    = "Context is over the model's limit at the start of a run; not starting. Reduce README.md, TASK.md or inbox files. Provider: %v"
