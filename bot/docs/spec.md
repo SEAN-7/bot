@@ -27,8 +27,8 @@ agent, whose one tool is the shell, builds everything else as files.
   wake-ups.
 - **Provider failures never touch the inbox.** They go to `ERROR` and the
   service log.
-- **The repository is private.** Installs authenticate with a
-  `GITHUB_TOKEN` that is never stored.
+- **The repository is public.** Installs download release assets without
+  credentials and trust only the checksums pinned in `install.sh`.
 - **Conversations are pull, not push.** The daemon logs both directions in
   a root-owned log; alerts are something the agent builds.
 - **The harness presents files; it does not convert them.** A file reaches
@@ -446,14 +446,13 @@ them.
 ## Install
 
 ```sh
-printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
+curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo sh
 ```
 
 `install.sh` takes no options and pins its version and the `agent` binary's
 checksums (which pin the plugins'). It:
-1. Installs `acl` if `setfacl` is missing, downloads the binary through the
-   GitHub API into a root-only temporary directory and verifies it. The
-   token reaches curl on stdin only.
+1. Installs `acl` if `setfacl` is missing, downloads the binary from the
+   release into a root-only temporary directory and verifies it.
 2. Treats a machine with `/var/lib/agent/version` or `/etc/agent/agents/main`
    as an upgrade, and refuses, before changing anything, one older than
    0.4.1 (upgrade with the v0.4.1 `install.sh` first).

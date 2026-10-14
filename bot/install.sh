@@ -1,12 +1,7 @@
 #!/bin/sh
 # Install or upgrade the agent harness on a Linux VM.
 #
-#   printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-#     curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh |
-#     sudo --preserve-env=GITHUB_TOKEN sh
-#
-# The token is used only for downloads, is never written to disk and never
-# appears in command arguments.
+#   curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo sh
 set -eu
 
 REPO=SEAN-7/bot
@@ -46,7 +41,6 @@ main() {
 	}
 
 	[ "$(id -u)" = 0 ] || die "run as root (sudo)"
-	[ -n "${GITHUB_TOKEN:-}" ] || die "set GITHUB_TOKEN to a token with read access to $REPO"
 	[ "$VERSION" != dev ] || die "this install.sh is not from a release; use the one at a release tag"
 	for tool in curl sha256sum useradd gpasswd pkill pgrep systemctl loginctl crontab; do
 		command -v "$tool" >/dev/null 2>&1 || die "missing required tool: $tool"
@@ -85,18 +79,9 @@ main() {
 	*) die "unsupported architecture $(uname -m)" ;;
 	esac
 
-	api() { # the token reaches curl on stdin (printf is a shell builtin), never in argv
-		printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" |
-			curl -fsSL -K - -H "X-GitHub-Api-Version: 2022-11-28" "$@"
-	}
-
-	# download NAME DEST: fetch an asset of this release through the GitHub API.
+	# download NAME DEST: fetch an asset of this release.
 	download() {
-		id=$(api -H "Accept: application/vnd.github+json" "https://api.github.com/repos/$REPO/releases/tags/v$VERSION" |
-			tr -d '\n' | grep -o '"url": *"[^"]*/releases/assets/[0-9]*"[^{}]*"name": *"'"$1"'"' |
-			grep -o 'assets/[0-9]*' | head -n 1 | cut -d/ -f2) || true
-		[ -n "$id" ] || { printf 'install: release v%s has no asset %s\n' "$VERSION" "$1" >&2; return 1; }
-		api -H "Accept: application/octet-stream" -o "$2" "https://api.github.com/repos/$REPO/releases/assets/$id"
+		curl -fsSL -o "$2" "https://github.com/$REPO/releases/download/v$VERSION/$1"
 	}
 
 	# plugin NAME: download provider plugin NAME from this release and install

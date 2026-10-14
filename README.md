@@ -8,26 +8,25 @@ privilege separation, journals, crash recovery and context resets. See
 
 ## Install
 
-You need a Linux VM with systemd (Ubuntu or Debian), root, a provider API
-key, and a fine-grained GitHub token with read-only **Contents** access to
-this repository. On the VM, with the release you want for `vX.Y.Z`:
+You need a Linux VM with systemd (Ubuntu or Debian), root and a provider
+API key. On the VM, with the release you want for `vX.Y.Z`:
 
 ```bash
-export GITHUB_TOKEN=github_pat_...
-printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo --preserve-env=GITHUB_TOKEN sh
+curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo sh
 ```
 
 The installer verifies every download against pinned checksums, asks for a
 provider plugin (anthropic or openai-compatible), its credentials and a
 model, creates the pool users `agent-1` to `agent-<max_agents>`, starts the
-service and creates the main agent, `main`, as `agent-1`. The token is
-never stored. No agent gets sudo.
+service and creates the main agent, `main`, as `agent-1`. No agent gets
+sudo.
 
 A newer release's `install.sh` upgrades in place, keeping agents' files,
 journals and credentials; a failed upgrade restores the previous binary.
 Installations older than 0.4.1 upgrade through the v0.4.1 `install.sh`
 first. Releases up to 0.5.2 keep `install.sh` at the repository root
-(`.../vX.Y.Z/install.sh`).
+(`.../vX.Y.Z/install.sh`), and releases up to 0.5.5 need a GitHub token, as
+their README says.
 
 To add another provider later, download its release asset
 `plugin-NAME-linux-ARCH` (`amd64` or `arm64`) and install it; `agent
@@ -35,11 +34,8 @@ provider install` checks it against the checksums compiled into `agent` and
 prompts for its settings:
 
 ```bash
-name=openai-compatible asset=plugin-openai-compatible-linux-amd64 repo=https://api.github.com/repos/SEAN-7/bot
-api() { printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | curl -fsSL -K - "$@"; }
-id=$(api "$repo/releases/tags/v$(agent version)" | tr -d '\n' |
-  grep -o '"url": *"[^"]*/releases/assets/[0-9]*"[^{}]*"name": *"'"$asset"'"' | grep -o 'assets/[0-9]*' | cut -d/ -f2)
-api -H "Accept: application/octet-stream" -o "/tmp/$asset" "$repo/releases/assets/$id"
+name=openai-compatible asset=plugin-openai-compatible-linux-amd64
+curl -fsSL -o "/tmp/$asset" "https://github.com/SEAN-7/bot/releases/download/v$(agent version)/$asset"
 sudo agent provider install "$name" "/tmp/$asset"
 ```
 
