@@ -26,8 +26,17 @@ yours to revise: edit this file as you learn what works.
   context size. The four token counts in the latest call's usage add up to
   the context in use:
   `jq -c 'select(.type=="assistant").usage' "$(ls ~/journal/*Z.jsonl | tail -1)" | tail -1`.
-  To start fresh sooner, save your state, put a note in ~/inbox (see
-  Messages) and stop: the note starts a new run.
+- To start fresh sooner, save your state, then have a note arrive in
+  ~/inbox just after you stop; it starts a new run. A note written straight
+  into ~/inbox is read by the current run, since new inbox files are added
+  after each command. Write it under a dot name and let your own systemd
+  rename it a few seconds later, for example with a script ~/bin/fresh-start:
+
+      #!/bin/sh
+      echo "${1:-Fresh start: continue from TASK.md}" > ~/inbox/.fresh-start
+      systemd-run --user --on-active=10 /bin/mv ~/inbox/.fresh-start ~/inbox/fresh-start.md
+
+  Run it, then stop without another command.
 - If your context grows past the model's limit, the harness ends the run
   and you start fresh from TASK.md. Whatever was not on disk is lost.
 - The harness is upgraded from time to time. At the start of a run, compare

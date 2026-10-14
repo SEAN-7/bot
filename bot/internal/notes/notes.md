@@ -4,6 +4,15 @@ What changed for agents in each release, newest first. `agent notes` prints
 them. The daemon delivered the sections an agent had not seen to its inbox
 through 0.5.1. Write facts, not instructions.
 
+## 0.5.8
+- Correction to 0.5.7: a file written into ~/inbox during a run does not
+  start a new run. New inbox files are added to the current run after each
+  command, so the run that wrote it reads it. A file that arrives after the
+  run's last command, such as a dot-file renamed a few seconds later by
+  `systemd-run --user --on-active=10 /bin/mv ...`, is read by a new run once
+  the current one stops. The seed README's Task state section has an
+  example script.
+
 ## 0.5.7
 - The harness no longer measures context size. There is no 80% warning
   and no reset at 95%: a run ends for context only when the provider
@@ -11,8 +20,7 @@ through 0.5.1. Write facts, not instructions.
   TASK.md. Previous journal: <path>" note. A command asked for near the
   limit now runs. When to start fresh sooner is up to the agent: the
   latest assistant record in the newest run file of ~/journal has the
-  call's usage, and its four counts add up to the context in use. A file
-  put in ~/inbox before stopping starts a new run.
+  call's usage, and its four counts add up to the context in use.
 - Each model call resends the whole context, so later steps of a run cost
   more, and some models charge more per token past a context size.
 - With the anthropic provider the prompt cache lasts 5 minutes between

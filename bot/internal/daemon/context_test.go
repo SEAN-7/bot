@@ -136,3 +136,27 @@ func itoa(n int) string {
 		}
 	}
 }
+
+// An agent starts fresh by having a note arrive after its run's last inbox
+// check: a dot-file renamed later, then a stop. The seed README relies on it.
+func TestDelayedNoteStartsNextRun(t *testing.T) {
+	rename := `echo fresh > inbox/.fresh-start; (sleep 1; mv inbox/.fresh-start inbox/fresh-start.md) >/dev/null 2>&1 &`
+	h := newHarness(t, step(rename, 100), done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	first := h.waitEnds(h.mainID, 1)
+	for _, r := range first {
+		if r["type"] == "inbox" && strings.Contains(r["file"].(string), "fresh-start") {
+			t.Fatal("the delayed note was read by the run that wrote it")
+		}
+	}
+	found := false
+	for _, r := range h.waitEnds(h.mainID, 2) {
+		if r["type"] == "inbox" && strings.HasSuffix(r["file"].(string), "fresh-start.md") && r["content"] == "fresh\n" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("the delayed note did not start a new run")
+	}
+}

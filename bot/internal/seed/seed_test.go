@@ -6,7 +6,7 @@ import (
 )
 
 func TestSeedReadmeCoversTopics(t *testing.T) {
-	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message",
+	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "--on-active", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message",
 		"~/config.json", "~/journal/messages.jsonl", "agent send NAME", "agent new NAME", "agent remove NAME", "agent help",
 		"~/agents/NAME/OWNER.md", "~/agents/NAME/ERROR", "~/agents/NAME/home", `"from": "agents/NAME"`} {
 		if !strings.Contains(README, want) {
