@@ -9,7 +9,7 @@ on disk. To stop, reply without a command. That reply goes only to your
 journal; it is not sent to anyone.`
 
 const (
-	MsgInterrupted         = "You were interrupted. Resume from TASK.md."
+	MsgInterruptedFmt      = "You were interrupted. Resume from TASK.md. Interrupted journal: %s"
 	MsgResetFmt            = "Context reset. Continue from TASK.md. Previous journal: %s"
 	MsgWarn80              = "Context is 80% full. Save your state to TASK.md and notes now."
 	MsgTimeoutFmt          = "Command timed out after %s; its process group was killed. Give it a longer wait (up to %s), or run it in the background with systemd-run --user."

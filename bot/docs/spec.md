@@ -158,6 +158,9 @@ directories and spools but no loop, inbox, journal or owner.
 - **Graceful stop.** On SIGTERM, start no new runs or deliveries and let
   active runs finish for up to 15 minutes; any still going are interrupted
   and resumed on the next start (`KillMode=mixed`, `TimeoutStopSec=17min`).
+- **Out of memory.** The unit sets `OOMPolicy=continue`: when the kernel
+  kills a process for memory, only that process dies, and its command
+  returns the failure to its agent.
 - **Removal.** When a control directory disappears or is replaced, its agent
   and all descendants are removed, deepest first: each loop kills its
   running command, writes the end marker (`reason: "removed"`) and exits,
@@ -298,7 +301,8 @@ cannot hide its own errors.
   `result`, `note` and `end` (with `reason`).
 - `~/journal` links to the agent's journal directory.
 - **Crash recovery.** When a loop starts and the newest journal has no `end`
-  record, write "You were interrupted. Resume from TASK.md." to the inbox.
+  record, write "You were interrupted. Resume from TASK.md. Interrupted
+  journal: <path>" to the inbox.
 
 ## System prompt (verbatim)
 

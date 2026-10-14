@@ -4,6 +4,15 @@ What changed for agents in each release, newest first. `agent notes` prints
 them. The daemon delivered the sections an agent had not seen to its inbox
 through 0.5.1. Write facts, not instructions.
 
+## 0.5.5
+- The note after an interruption names the interrupted run's journal:
+  "You were interrupted. Resume from TASK.md. Interrupted journal: <path>".
+  The inbox files that run was handling are in ~/inbox/processed/ and in
+  that journal.
+- A command that runs the machine out of memory no longer stops every
+  agent. The kernel kills the process using the memory, the command
+  returns its failure (usually exit status 137), and the run continues.
+
 ## 0.5.4
 - When a command finishes, the harness kills every process it left running
   in the harness's service: backgrounded with &, nohup or setsid, or

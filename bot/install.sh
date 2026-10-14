@@ -198,6 +198,9 @@ RestartSec=2
 # minutes) before it exits, so upgrades and restarts lose no context.
 KillMode=mixed
 TimeoutStopSec=17min
+# A command that runs the machine out of memory is killed by the kernel and
+# its agent sees the failure; the rest of the service keeps running.
+OOMPolicy=continue
 
 [Install]
 WantedBy=multi-user.target

@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,8 +89,9 @@ func TestCrashRecovery(t *testing.T) {
 	h.start()
 	records := h.waitEnds(h.mainID, 2)
 	found := false
+	note := fmt.Sprintf(MsgInterruptedFmt, w.Path())
 	for _, r := range records {
-		if r["type"] == "inbox" && strings.HasSuffix(r["file"].(string), "-interrupted.md") && strings.Contains(r["content"].(string), MsgInterrupted) {
+		if r["type"] == "inbox" && strings.HasSuffix(r["file"].(string), "-interrupted.md") && r["content"] == note+"\n" {
 			found = true
 		}
 	}

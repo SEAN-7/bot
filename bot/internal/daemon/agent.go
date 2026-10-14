@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -112,7 +113,7 @@ func (a *agent) recover() {
 	if err != nil || path == "" || clean {
 		return
 	}
-	if err := a.d.writeNote(a, "interrupted", MsgInterrupted); err != nil {
+	if err := a.d.writeNote(a, "interrupted", fmt.Sprintf(MsgInterruptedFmt, path)); err != nil {
 		a.logf("interrupted note: %v", err)
 		return
 	}
