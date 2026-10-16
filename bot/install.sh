@@ -6,9 +6,9 @@ set -eu
 
 REPO=SEAN-7/bot
 # BEGIN CHECKSUMS
-VERSION=0.7.0
-SHA_agent_linux_amd64=576842061ae1c6b6fffb7cacfd50ccacf5deb44a3166efbb7cfee69c7db0e662
-SHA_agent_linux_arm64=319a4c80e938cd419d44f5facfb11320000875ada006e4b18cff86550c73a7b7
+VERSION=0.8.0
+SHA_agent_linux_amd64=fe51db3d209ae49e76d09b8ef3736f40657354d4c32b6eb122d9e4e00959fc40
+SHA_agent_linux_arm64=d4065277b34e39cd38567fb8970bb863cfccf3ccdbcf7b0c5c2b3360d1fdaf71
 # END CHECKSUMS
 
 ROLLBACK=no
