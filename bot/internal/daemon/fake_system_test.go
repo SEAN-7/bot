@@ -2,16 +2,67 @@ package daemon
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
 
 // fakeSystem records the root-only operations instead of performing them.
-// PrepareHome still creates the home, so the agent's helper can seed it.
+// PrepareHome still creates the home, so the agent's helper can seed it, and
+// users live in a map so admission and removal see what they created.
 type fakeSystem struct {
 	mu    sync.Mutex
 	calls []string
-	fail  map[string]error // calls that fail, still recorded
+	fail  map[string]error  // calls that fail, still recorded
+	users map[string]string // user name → agent id
+}
+
+func (s *fakeSystem) AddUser(name, id, home string) error {
+	if err := s.record("useradd " + name + " " + id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.users == nil {
+		s.users = map[string]string{}
+	}
+	s.users[name] = id
+	return nil
+}
+
+func (s *fakeSystem) DeleteUser(name string) error {
+	if err := s.record("userdel " + name); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.users, name)
+	return nil
+}
+
+func (s *fakeSystem) SetComment(name, id string) error {
+	if err := s.record("comment " + name + " " + id); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.users[name]; ok {
+		s.users[name] = id
+	}
+	return nil
+}
+
+func (s *fakeSystem) Users(prefix string) ([]User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var users []User
+	for name, id := range s.users {
+		if isAgentUser(name, prefix) {
+			users = append(users, User{name, id})
+		}
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
+	return users, nil
 }
 
 func (s *fakeSystem) record(call string) error {
