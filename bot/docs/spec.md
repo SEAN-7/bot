@@ -278,7 +278,9 @@ Root edits `/etc/agent/agents/NAME/OWNER.md`; an agent edits
 `~/agents/NAME/OWNER.md`. There is no command, and the installer never
 touches it. It is read through the parent's helper. Without content, the
 first segment is the system prompt alone, so the cached prefix is
-unchanged. What the agent sees, and the safety check, are in the manual.
+unchanged. What the agent sees is in the manual. The control directory is
+the parent's and the agent has no way into it, so nothing checks its
+owner or mode.
 
 ## Configuration validation
 

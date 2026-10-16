@@ -234,9 +234,8 @@ is the system prompt, a blank line, this header and the content:
 > context.
 
 It is read at the start of each run (first 1 MiB), so an edit takes effect
-on the next run. It is used only if it is a regular file owned by your
-owner's user and not writable by group or others, in a directory that
-meets the same test. Missing means no instructions. Unsafe or unreadable
+on the next run. It is used if it is a regular file (a link to one
+counts). Missing means no instructions. Anything else, or unreadable,
 means you do not run: "OWNER.md: " and the reason go to your `ERROR`, the
 inbox is left alone, and it is checked again each poll. The harness states
 this precedence; it does not enforce it.

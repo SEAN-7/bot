@@ -391,35 +391,6 @@ func TestPrivilegeConversationLogNotWritable(t *testing.T) {
 	}
 }
 
-// TestPrivilegeOwnerFileOfOtherUser gives main's OWNER.md to main's own user
-// in root's control directory: only the file fails the check.
-func TestPrivilegeOwnerFileOfOtherUser(t *testing.T) {
-	h, name := rootHarness(t, done())
-	owner := filepath.Join(h.mainCtrl, "OWNER.md")
-	os.WriteFile(owner, []byte("Be brief."), 0o644)
-	u, _ := user.Lookup(name)
-	uid, _ := strconv.Atoi(u.Uid)
-	if err := os.Chown(owner, uid, -1); err != nil {
-		t.Fatal(err)
-	}
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	errorFile := filepath.Join(h.mainCtrl, "ERROR")
-	want := MsgOwnerPrefix + owner + " is not owned by its owner\n"
-	waitFor(t, "OWNER.md ERROR", func() bool {
-		data, _ := os.ReadFile(errorFile)
-		return string(data) == want
-	})
-	if n := len(h.requests()); n != 0 {
-		t.Fatalf("%d requests with an OWNER.md the agent owns", n)
-	}
-	os.Chown(owner, 0, -1)
-	h.waitEnds(h.mainID, 1)
-	if got := h.requests()[0].System[0].Text; got != SystemPrompt+ownerSegment("Be brief.") {
-		t.Fatalf("first segment %q", got)
-	}
-}
-
 // TestPrivilegeSubagentIsolation: a subagent cannot write its parent's home,
 // its control directory or its OWNER.md, nor read a sibling's home; its
 // parent can read its home and journals; a sibling can read neither.

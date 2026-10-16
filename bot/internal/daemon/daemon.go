@@ -100,7 +100,7 @@ type daemon struct {
 	stop        context.Context
 	agents      map[string]*agent // by id; root is not among them
 	delivered   *delivered
-	settings    layout.Settings // settings.json as read at startup
+	settings    layout.Settings   // settings.json as read at startup
 	heldBack    map[string]string // control directories not admitted, with the reason already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
