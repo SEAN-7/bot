@@ -13,12 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/proto"
 	"github.com/SEAN-7/bot/internal/shell"
 )
 
-// hashLimit bounds how much of an inbox file is read for labelling.
-const hashLimit = 16 << 20
+// inboxReadLimit bounds how much of an inbox file is read: a text file is
+// clipped far below it, and an image longer than it is not shown.
+const inboxReadLimit = 16 << 20
 
 type inboxRecord struct {
 	File    string `json:"file"`
@@ -47,44 +49,26 @@ func (d *daemon) writeNote(to *agent, kind, text string) error {
 	return to.writeInbox(noteName(kind, time.Now()), []byte(text+"\n"))
 }
 
-// inboxStage is where the harness stages the files it writes into an inbox:
-// a directory, which collection skips, so a run never collects a file half
-// written. An agent that removed it gets it back on the next write.
-const inboxStage = "inbox/.tmp"
-
-// writeInbox writes name into the agent's inbox, through its helper.
+// writeInbox writes name into the agent's inbox, through its helper, with
+// the temporary file in inbox/processed, which is the agent's, closed to
+// others, never collected and on the inbox's filesystem: a run never
+// collects a file half written. An agent that removed processed/ gets it
+// back.
 func (a *agent) writeInbox(name string, data []byte) error {
-	path, stage := filepath.Join(a.home, "inbox", name), filepath.Join(a.home, inboxStage)
+	path, stage := filepath.Join(a.inbox, name), filepath.Join(a.inbox, "processed")
 	err := a.fs.WriteStaged(path, stage, data, 0o640)
 	if errors.Is(err, fs.ErrNotExist) {
-		if _, perr := a.fs.Private(stage); perr == nil {
+		if merr := a.fs.Mkdir(stage, 0o750); merr == nil {
 			err = a.fs.WriteStaged(path, stage, data, 0o640)
 		}
 	}
 	return err
 }
 
-// clearStage removes what a write interrupted by a crash left in the
-// inbox's staging directory. Admission calls it, before the agent's loop
-// starts and from the poll goroutine, so no write of the harness is in
-// progress there.
-func (a *agent) clearStage() {
-	stage := filepath.Join(a.home, inboxStage)
-	entries, err := a.fs.List(stage)
-	if err != nil {
-		return
-	}
-	for _, e := range entries {
-		if e.Type == "file" {
-			a.fs.Unlink(filepath.Join(stage, e.Name))
-		}
-	}
-}
-
 // pending lists the inbox files that wake the agent: regular, not
 // dot-prefixed, by name.
 func (a *agent) pending() ([]string, error) {
-	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
+	entries, err := a.fs.List(a.inbox)
 	if err != nil {
 		return nil, err
 	}
@@ -99,52 +83,52 @@ func (a *agent) pending() ([]string, error) {
 }
 
 // deliverable lists the inbox files a run collects: every regular file, a
-// dot-file too, by name. Directories (processed/, the staging directory)
-// are skipped.
-func (a *agent) deliverable() ([]string, error) {
-	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
+// dot-file too, by name, with the uid that wrote each. Directories
+// (processed/) are skipped.
+func (a *agent) deliverable() ([]fsio.Entry, error) {
+	entries, err := a.fs.List(a.inbox)
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	var files []fsio.Entry
 	for _, e := range entries {
 		if e.Type == "file" {
-			names = append(names, e.Name)
+			files = append(files, e)
 		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	return files, nil
 }
 
-// imageExt names a shown image's journal copy. Its keys are the image types
-// the daemon can check, and so the only ones it shows.
-var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
+// moveInbox moves a collected inbox file into processed/; tests replace it.
+var moveInbox = func(a *agent, from, to string) error { return a.fs.Rename(from, to) }
 
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
 // order, the images shown with them. imageTypes is the image media types the
-// model accepts, budget how many more bytes of images the run may show.
-func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inboxRecord, []proto.Image, error) {
+// model accepts.
+func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
-	names, err := a.deliverable()
-	if err != nil || len(names) == 0 {
+	files, err := a.deliverable()
+	if err != nil || len(files) == 0 {
 		return nil, nil, err
 	}
-	processed := filepath.Join(a.home, "inbox", "processed")
+	processed := filepath.Join(a.inbox, "processed")
 	// Created again if the agent removed it. One the agent replaced with a
 	// link is left alone and followed, but it must lead to a directory.
-	if skipped, err := a.fs.Private(processed); err != nil {
-		return nil, nil, err
-	} else if len(skipped) > 0 {
+	if err := a.fs.Mkdir(processed, 0o750); errors.Is(err, fs.ErrExist) {
 		if _, err := a.fs.Stat(processed + "/."); err != nil {
 			return nil, nil, err
 		}
+	} else if err != nil {
+		return nil, nil, err
 	}
 	var records []inboxRecord
 	var shown []proto.Image
-	for _, name := range names {
-		path := filepath.Join(a.home, "inbox", name)
-		data, size, err := a.fs.Read(path, hashLimit)
+	for _, e := range files {
+		name := e.Name
+		path := filepath.Join(a.inbox, name)
+		data, size, err := a.fs.Read(path, inboxReadLimit)
 		readable := err == nil
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -161,7 +145,7 @@ func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inb
 			target = fmt.Sprintf("%s-%d", name, i)
 		}
 		file := "inbox/processed/" + target
-		text, content, img := true, "", (*shownImage)(nil)
+		text, content, img := true, "", (*proto.Image)(nil)
 		if readable {
 			text, content, img = classify(data, size, filepath.Join(a.home, file), imageTypes)
 		}
@@ -172,53 +156,55 @@ func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inb
 				content += "\n" + fmt.Sprintf(MsgInboxClipFmt, filepath.Join(a.home, file))
 			}
 		}
-		if img != nil && len(img.Data) > budget {
-			content, img = fmt.Sprintf(MsgImageBudgetFmt, filepath.Join(a.home, file)), nil
-		}
 		var image map[string]any
 		if img != nil {
-			copyPath, err := j.Attach(imageExt[img.MediaType], img.Data)
+			copyPath, err := j.Attach(strings.TrimPrefix(img.MediaType, "image/"), img.Data)
 			if err != nil {
 				a.logf("journal copy of %s: %v", file, err)
 				content, img = fmt.Sprintf(MsgImageJournalFmt, err, filepath.Join(a.home, file)), nil
 			} else {
-				image = map[string]any{"media_type": img.MediaType, "width": img.Width, "height": img.Height, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
+				image = map[string]any{"media_type": img.MediaType, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
 			}
 		}
-		r := inboxRecord{File: file, From: a.label(name, hash), Content: content}
+		r := inboxRecord{File: file, From: a.label(e.UID), Content: content}
 		fields := map[string]any{"file": r.File, "from": r.From, "size": size, "content": r.Content}
 		if image != nil {
 			fields["image"] = image
 		}
-		j.Record("inbox", fields)
-		if err := a.fs.Rename(path, filepath.Join(processed, target)); err != nil {
-			return records, shown, err
+		if err := moveInbox(a, path, filepath.Join(processed, target)); err != nil {
+			if len(records) == 0 {
+				return nil, nil, err
+			}
+			// The model gets what was moved; this file waits for the next
+			// collection, and nothing is journaled for it yet.
+			a.logf("inbox: %v", err)
+			return records, shown, nil
 		}
+		j.Record("inbox", fields)
 		records = append(records, r)
 		if img != nil {
-			budget -= len(img.Data)
-			shown = append(shown, proto.Image{File: file, MediaType: img.MediaType, Data: img.Data})
+			img.File = file
+			shown = append(shown, *img)
 		}
 	}
 	return records, shown, nil
 }
 
-// imageBytes is how many bytes of images messages show.
-func imageBytes(messages []proto.Message) int {
-	n := 0
-	for _, m := range messages {
-		for _, img := range m.Images {
-			n += len(img.Data)
-		}
+// label is who wrote an inbox file, by its owner uid, which the kernel set:
+// "owner" for the agent's parent (root for a top-level agent), "agents/NAME"
+// for its running subagent NAME, and "data" for anyone else, the agent and
+// the harness's own notes included.
+func (a *agent) label(uid int) string {
+	if uid == a.parent.uid() {
+		return "owner"
 	}
-	return n
-}
-
-// label is the sender the daemon recorded when it delivered this file
-// ("owner" or "agents/NAME"), and "data" for anything else.
-func (a *agent) label(name, sum string) string {
-	if from := a.d.delivered.take(a.id, name, sum); from != "" {
-		return from
+	d := a.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, c := range d.agents {
+		if c.parent == a && c.uid() == uid {
+			return "agents/" + filepath.Base(c.ctrl)
+		}
 	}
 	return "data"
 }

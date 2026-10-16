@@ -8,7 +8,7 @@ import (
 // Usage lists only what needs the binary and points to the manual for the
 // rest.
 func TestUsage(t *testing.T) {
-	for _, want := range []string{"agent provider install NAME FILE", "agent daemon", "agent help", "/var/lib/agent/manual/manual.md"} {
+	for _, want := range []string{"agent provider install NAME SOURCE", "agent daemon", "agent help", "/var/lib/agent/manual/manual.md"} {
 		if !strings.Contains(Usage, want) {
 			t.Errorf("usage lacks %q", want)
 		}

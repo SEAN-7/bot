@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -91,39 +90,6 @@ func TestWriteMode(t *testing.T) {
 // an existing one is kept as it is. It never follows a link, leaves anything
 // that is not a directory alone, and skips what lies below one it left alone.
 // It returns what it left alone.
-func TestPrivate(t *testing.T) {
-	c, dir := start(t), t.TempDir()
-	path := func(p string) string { return filepath.Join(dir, p) }
-	os.Mkdir(path("open"), 0o755)
-	os.Chmod(path("open"), 0o755)
-	outside := t.TempDir()
-	os.Chmod(outside, 0o755)
-	os.Symlink(outside, path("linked"))
-	os.WriteFile(path("file"), []byte("x"), 0o644)
-	skipped, err := c.Private(path("new"), path("new/sub"), path("open"),
-		path("linked"), path("linked/sub"), path("file"), path("file/sub"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := []string{path("linked"), path("file")}; !reflect.DeepEqual(skipped, want) {
-		t.Errorf("skipped %q, want %q", skipped, want)
-	}
-	for p, want := range map[string]os.FileMode{"new": 0o750, "new/sub": 0o750, "open": 0o755} {
-		if info, err := os.Lstat(path(p)); err != nil || !info.IsDir() || info.Mode().Perm() != want {
-			t.Errorf("%s: %v %v, want %v", p, info.Mode(), err, want)
-		}
-	}
-	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
-		t.Errorf("followed a link: %v", info.Mode())
-	}
-	if _, err := os.Lstat(filepath.Join(outside, "sub")); !os.IsNotExist(err) {
-		t.Errorf("created below a link: %v", err)
-	}
-	if info, _ := os.Lstat(path("file")); !info.Mode().IsRegular() || info.Mode().Perm() != 0o644 {
-		t.Errorf("file changed: %v", info.Mode())
-	}
-}
-
 func TestReadLimitReportsFullSize(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	path := filepath.Join(dir, "big")
@@ -188,7 +154,7 @@ func TestSymlinkReplaces(t *testing.T) {
 	}
 }
 
-func TestRenameRemove(t *testing.T) {
+func TestRename(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "a", "b"), 0o750); err != nil {
 		t.Fatal(err)
@@ -197,11 +163,8 @@ func TestRenameRemove(t *testing.T) {
 	if err := c.Rename(filepath.Join(dir, "x"), filepath.Join(dir, "a", "b", "x")); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.Remove(filepath.Join(dir, "a")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "a")); !os.IsNotExist(err) {
-		t.Fatalf("not removed: %v", err)
+	if data, err := os.ReadFile(filepath.Join(dir, "a", "b", "x")); err != nil || string(data) != "1" {
+		t.Fatalf("not renamed: %q %v", data, err)
 	}
 }
 
@@ -313,26 +276,6 @@ func TestHelperCallTimeout(t *testing.T) {
 
 // Private leaves a directory another user owns alone and returns it. Only
 // root can make one, so the test needs root.
-func TestPrivateSkipsOtherUsersDirs(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root to give a directory to another user")
-	}
-	c, dir := start(t), t.TempDir()
-	theirs := filepath.Join(dir, "theirs")
-	os.Mkdir(theirs, 0o755)
-	os.Chmod(theirs, 0o755)
-	if err := os.Lchown(theirs, 1, 1); err != nil {
-		t.Fatal(err)
-	}
-	skipped, err := c.Private(theirs, filepath.Join(theirs, "sub"))
-	if err != nil || !reflect.DeepEqual(skipped, []string{theirs}) {
-		t.Fatalf("skipped %q, %v", skipped, err)
-	}
-	if info, _ := os.Stat(theirs); info.Mode().Perm() != 0o755 {
-		t.Fatalf("another user's directory changed: %v", info.Mode())
-	}
-}
-
 func TestEntryHasOwnerAndMode(t *testing.T) {
 	c, dir := start(t), t.TempDir()
 	path := filepath.Join(dir, "f")
@@ -345,94 +288,6 @@ func TestEntryHasOwnerAndMode(t *testing.T) {
 	entries, err := c.List(dir)
 	if err != nil || len(entries) != 1 || entries[0].UID != os.Getuid() || entries[0].Mode != 0o640 {
 		t.Fatalf("list got %+v %v", entries, err)
-	}
-}
-
-func TestClearKeepsDir(t *testing.T) {
-	c, dir := start(t), t.TempDir()
-	os.WriteFile(filepath.Join(dir, "f"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(dir, ".hidden"), []byte("x"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "sub", "deep"), 0o755)
-	os.WriteFile(filepath.Join(dir, "sub", "deep", "g"), []byte("x"), 0o644)
-	if err := c.Clear(dir); err != nil {
-		t.Fatal(err)
-	}
-	items, err := os.ReadDir(dir)
-	if err != nil || len(items) != 0 {
-		t.Fatalf("left %v %v", items, err)
-	}
-	if err := c.Clear(filepath.Join(dir, "missing")); err != nil {
-		t.Fatalf("missing dir: %v", err)
-	}
-}
-
-func TestPurgeOwnedRemovesOwnEntries(t *testing.T) {
-	c := start(t)
-	one, two := t.TempDir(), t.TempDir()
-	os.WriteFile(filepath.Join(one, "f"), []byte("x"), 0o644)
-	os.MkdirAll(filepath.Join(two, "sub", "deep"), 0o755)
-	os.WriteFile(filepath.Join(two, "sub", "deep", "g"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(two, ".hidden"), []byte("x"), 0o644)
-	if err := c.PurgeOwned([]string{one, filepath.Join(one, "missing"), two}); err != nil {
-		t.Fatal(err)
-	}
-	for _, dir := range []string{one, two} {
-		if items, err := os.ReadDir(dir); err != nil || len(items) != 0 {
-			t.Fatalf("%s left %v %v", dir, items, err)
-		}
-	}
-}
-
-// readOnlyTree builds dir/ro (0555) holding a file and a 0000 directory with
-// a file inside, and a link to outside, a read-only directory that must keep
-// its mode: clearing never follows links.
-func readOnlyTree(t *testing.T, dir string) (outside string) {
-	t.Helper()
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
-	}
-	outside = t.TempDir()
-	ro := filepath.Join(dir, "ro")
-	os.MkdirAll(filepath.Join(ro, "locked"), 0o755)
-	os.WriteFile(filepath.Join(ro, "f"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(ro, "locked", "g"), []byte("x"), 0o644)
-	os.Symlink(outside, filepath.Join(ro, "out"))
-	os.Chmod(filepath.Join(ro, "locked"), 0)
-	os.Chmod(ro, 0o555)
-	os.Chmod(outside, 0o555)
-	t.Cleanup(func() { os.Chmod(outside, 0o755) })
-	return outside
-}
-
-func TestClearReadOnlyDirs(t *testing.T) {
-	c, dir := start(t), t.TempDir()
-	outside := readOnlyTree(t, dir)
-	if err := c.Clear(dir); err != nil {
-		t.Fatal(err)
-	}
-	if items, err := os.ReadDir(dir); err != nil || len(items) != 0 {
-		t.Fatalf("left %v %v", items, err)
-	}
-	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0o555 {
-		t.Fatalf("followed a link: %v %v", info.Mode(), err)
-	}
-}
-
-func TestPurgeOwnedReadOnlyDirsAndContinues(t *testing.T) {
-	c := start(t)
-	one, two := t.TempDir(), t.TempDir()
-	outside := readOnlyTree(t, two)
-	notDir := filepath.Join(one, "file")
-	os.WriteFile(notDir, []byte("x"), 0o644)
-	// The first "directory" cannot be listed; the second is still purged.
-	if err := c.PurgeOwned([]string{notDir, two}); err == nil {
-		t.Fatal("expected the unlistable directory's error")
-	}
-	if items, err := os.ReadDir(two); err != nil || len(items) != 0 {
-		t.Fatalf("left %v %v", items, err)
-	}
-	if info, err := os.Stat(outside); err != nil || info.Mode().Perm() != 0o555 {
-		t.Fatalf("followed a link: %v %v", info.Mode(), err)
 	}
 }
 
@@ -481,5 +336,50 @@ func TestWriteStaged(t *testing.T) {
 	}
 	if err := write(filepath.Join(target, "y.md"), []byte("hi"), 0o640, filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("wrote through a missing staging directory")
+	}
+}
+
+// read never follows a symlink: a link planted where another user may
+// create files must not make the helper read what the link points at.
+func TestReadDoesNotFollowLinks(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	os.WriteFile(secret, []byte("hidden"), 0o644)
+	link := filepath.Join(dir, "link")
+	os.Symlink(secret, link)
+	if data, _, err := c.Read(link, 100); err == nil {
+		t.Fatalf("read through a link: %q", data)
+	}
+	if data, _, err := c.Read(secret, 100); err != nil || string(data) != "hidden" {
+		t.Fatalf("plain read: %q %v", data, err)
+	}
+}
+
+// Mkdir creates a directory with exactly the mode given, the umask
+// notwithstanding, leaves an existing directory of ours as it is, and
+// refuses anything else at the path.
+func TestMkdir(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := func(p string) string { return filepath.Join(dir, p) }
+	if err := c.Mkdir(path("inbox"), 0o770|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(path("inbox")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("inbox: %v %v", info.Mode(), err)
+	}
+	os.Chmod(path("inbox"), 0o755)
+	if err := c.Mkdir(path("inbox"), 0o770|os.ModeSticky); err != nil {
+		t.Fatalf("existing directory: %v", err)
+	}
+	if info, _ := os.Lstat(path("inbox")); info.Mode().Perm() != 0o755 {
+		t.Fatalf("existing directory changed: %v", info.Mode())
+	}
+	os.WriteFile(path("file"), []byte("x"), 0o644)
+	if err := c.Mkdir(path("file"), 0o750); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("file in the way: %v", err)
+	}
+	os.Symlink(t.TempDir(), path("linked"))
+	if err := c.Mkdir(path("linked"), 0o750); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("link in the way: %v", err)
 	}
 }

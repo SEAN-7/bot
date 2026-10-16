@@ -26,8 +26,8 @@ when changing the site).
   see. A fact lives in one of them, never both. `TestManualQuotesTheHarness`
   fails until the manual quotes every string the harness shows agents.
 - Releases: run `scripts/release.sh X.Y.Z` and merge the updated
-  `plugins/index.json` and `install.sh` through a PR, then tag the merge
-  commit `vX.Y.Z` and push the tag.
+  `install.sh` through a PR, then tag the merge commit `vX.Y.Z` and push
+  the tag.
   The release workflow rebuilds and refuses to publish if any checksum differs.
 - Deploy to the VM (SSH host `bot`) by running the release's `install.sh`
   there; on an existing installation it upgrades in place and keeps the

@@ -2,9 +2,10 @@
 package journal
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -193,54 +194,47 @@ func Latest(dir string) (string, bool, error) {
 	}
 	sort.Strings(names)
 	path := filepath.Join(dir, names[len(names)-1])
-	data, err := os.ReadFile(path)
+	line, err := lastLine(path)
 	if err != nil {
 		return "", false, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	var last struct {
 		Type string `json:"type"`
 	}
-	json.Unmarshal([]byte(lines[len(lines)-1]), &last)
+	json.Unmarshal(line, &last)
 	return path, last.Type == "end", nil
 }
 
-// LastVersion returns the harness version in the start record of the newest
-// run file in dir, and whether there is a run file at all. A start record
-// without a version (a run before 0.6.0) gives "".
-func LastVersion(dir string) (string, bool, error) {
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return "", false, nil
-	} else if err != nil {
-		return "", false, err
-	}
-	newest := ""
-	for _, e := range entries {
-		if e.Type().IsRegular() && IsRun(e.Name()) && e.Name() > newest {
-			newest = e.Name()
-		}
-	}
-	if newest == "" {
-		return "", false, nil
-	}
-	f, err := os.Open(filepath.Join(dir, newest))
+// lastLine returns the last non-empty line of the file, reading only its
+// tail: a run file can hold hundreds of megabytes. The window doubles
+// until it holds the whole line.
+func lastLine(path string) ([]byte, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return "", true, err
+		return nil, err
 	}
 	defer f.Close()
-	line, err := bufio.NewReaderSize(f, 64<<10).ReadSlice('\n')
-	if err != nil && len(line) == 0 {
-		return "", true, nil
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
 	}
-	var start struct {
-		Type    string `json:"type"`
-		Version string `json:"version"`
+	size := info.Size()
+	for window := int64(64 << 10); ; window *= 2 {
+		if window > size {
+			window = size
+		}
+		buf := make([]byte, window)
+		if _, err := f.ReadAt(buf, size-window); err != nil && err != io.EOF {
+			return nil, err
+		}
+		tail := bytes.TrimRight(buf, "\n")
+		if i := bytes.LastIndexByte(tail, '\n'); i >= 0 {
+			return tail[i+1:], nil
+		}
+		if window == size {
+			return tail, nil
+		}
 	}
-	if json.Unmarshal(line, &start) != nil || start.Type != "start" {
-		return "", true, nil
-	}
-	return start.Version, true, nil
 }
 
 // MarkInterrupted appends an end record to a run that never finished, so

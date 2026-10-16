@@ -82,7 +82,7 @@ func TestProviderInstallUsage(t *testing.T) {
 		e, out := testEnv(t, 0)
 		var err error
 		stderr := captureStderr(t, func() { err = run(append([]string{"provider", "install"}, args...), e) })
-		if err == nil || err.Error() != "usage: agent provider install NAME FILE" || out.Len() != 0 || stderr != "" {
+		if err == nil || err.Error() != "usage: agent provider install NAME FILE|URL" || out.Len() != 0 || stderr != "" {
 			t.Errorf("%q: err %v, stdout %q, stderr %q", args, err, out.String(), stderr)
 		}
 	}

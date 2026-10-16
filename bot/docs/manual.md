@@ -8,8 +8,9 @@ work is yours to decide.
 
 ## You
 
-- You are an agent: an unprivileged Unix user (`agent-N`, from a fixed pool
-  that is reused) with a home directory. You have no sudo.
+- You are an agent: an unprivileged Unix user (`agent-N`, created for you
+  when you were admitted and deleted when you are removed) with a home
+  directory. You have no sudo.
 - Your owner is whoever created you: the human (root) for a top-level agent
   such as `main`, or your parent agent. You talk only with your owner and
   your own subagents.
@@ -24,21 +25,25 @@ The harness uses these names in your home; everything else is yours.
 | --- | --- |
 | `README.md` | Loaded into every model call of every run (first 1 MiB). Yours to edit; missing means empty. |
 | `config.json` | Your provider, model and options (see Configuration). Yours to edit. |
-| `inbox/` | Files that wake you and are delivered to you (see Runs). |
+| `inbox` | Link to your inbox, `/home/.inbox/<your user>/`: the files that wake you and are delivered to you (see Runs). It is outside your home so that your subagents can reach it without entering your home. |
 | `inbox/processed/` | Where delivered inbox files are moved. |
-| `inbox/.tmp/` | Where the harness stages the files it writes into your inbox; never delivered. |
 | `agents/` | Your subagents' control directories (see Subagents). |
-| `.messages/` | Your outgoing message spool (see Messages). |
+| `owner` | Link to your owner's inbox, where your messages go (see Messages); absent when your owner is the human. |
 | `journal` | Link to your journal directory, read-only (see Journal). |
 | `manual` | Link to this manual, read-only. |
 
 Your home is setgid and commands run with umask 022, so the agents above
 you (your owner and its ancestors, other than root) can read what you
 write; nobody else can enter it. You can tighten your own files' modes. The
-harness creates `inbox/`, `inbox/processed/`, `inbox/.tmp/`, `agents/`, `.messages/`,
-`.messages/agents/` and control directories 0750, and inbox files,
-delivered messages, spool files and `config.json` 0640. Where a name the
-harness uses already exists, it is left as it is.
+harness creates your inbox 1770 (your owner and its ancestors write
+messages straight into it, your subagents by a grant, and nobody removes
+or renames another's file), `inbox/processed/`, `agents/` and control
+directories 0750, and the notes it writes into your inbox and `config.json`
+0640. A file someone else wrote into your inbox has the mode they gave it.
+Where a name the harness uses already exists as a directory you own, it is
+left as it is; anything else of that name keeps you from starting. An
+`inbox/` directory from a release before 0.9.0 is moved to `inbox.0.8.0/`
+once, its pending files into your inbox.
 
 ## Commands
 
@@ -85,12 +90,11 @@ complete.
 1. `config.json` and your owner's `OWNER.md` are read and checked (see
    Configuration and Owner's instructions). If either fails, the run does
    not start and the inbox is left alone.
-2. If the harness was upgraded since your previous run, the upgrade note is
-   written to your inbox (see Upgrades).
-3. The run's journal file is created, with its `start` record.
-4. `~/journal` and `~/manual` are linked.
-5. `README.md` is read.
-6. The inbox is collected: every regular file in name order, dot-files
+2. The run's journal file is created, with its `start` record.
+3. `~/journal`, `~/manual` and, when your owner is an agent, `~/owner` are
+   linked.
+4. `README.md` is read.
+5. The inbox is collected: every regular file in name order, dot-files
    included; directories are skipped. Each is journaled and moved to `inbox/processed/`
    (with a numeric suffix if that name is taken).
 
@@ -125,34 +129,25 @@ How the provider caches these between calls, and what that costs, is the
 
 **Inbox records.** Each inbox file reaches you as one JSON record:
 `{"file": "inbox/processed/NAME", "from": "owner" | "agents/NAME" | "data", "content": "..."}`.
-- `from` is `owner` only for a message your owner sent you, and
-  `agents/NAME` only for one your subagent NAME sent (see Messages): the
-  harness records each delivery (agent, file name,
-  SHA-256, sender) and labels a file only when all three match. Everything
+- `from` is `owner` only for a file your owner's user wrote, and
+  `agents/NAME` only for one your running subagent NAME's user wrote (see
+  Messages): the kernel records who created a file, so no file can forge
+  it. Everything
   else, including the harness's own notes and files your scripts write, is
   `data`. Content is a JSON string, so no file can forge the field.
 - Content over 64 KiB is clipped and followed by "[file clipped; full
   file: PATH]".
-- A JPEG, PNG or GIF up to 5 MiB and 2000 px a side, of a type your model
-  accepts (`image_types` in `/var/lib/agent/providers.json`), is shown to you as
-  an image; its record's content is "[image/png 1280x960, 169027 bytes,
-  shown below]". Shown images are resent with every call, so a run shows
-  at most 20 MiB of them. Images are never resized.
-- Anything else arrives as a note naming the file:
-  - "[image not shown: N bytes is over the 5 MiB limit; resize it and copy
-    the result into ~/inbox/. File: PATH]"
-  - "[image not shown: WxH is over 2000 px a side; resize it and copy the
-    result into ~/inbox/. File: PATH]"
-  - "[image not shown: could not decode it: ERROR. File: PATH]"
-  - "[image not shown: TYPE is not supported, only TYPES; convert it and
-    copy the result into ~/inbox/. File: PATH]"
-  - "[image not shown: the model does not accept images. File: PATH]"
-  - "[image not shown: its journal copy could not be saved: ERROR. File:
-    PATH]"
-  - "[image not shown: images in this run would exceed 20 MiB; resize it,
-    or copy it into ~/inbox/ again after this run ends. File: PATH]"
-  - "[binary file not shown: TYPE, N bytes. File: PATH]", for other
-    non-UTF-8 content, such as a PDF.
+- A file whose type is one your model accepts (`image_types` in
+  `/var/lib/agent/providers.json`) is shown to you as an image, as it is;
+  its record's content is "[image/png, 169027 bytes, shown below]". Shown
+  images are resent with every call. The harness checks nothing else about
+  an image: what your provider does with one it cannot take is in its
+  plugin's own words. One whose journal copy cannot be saved arrives as
+  "[image not shown: its journal copy could not be saved: ERROR. File:
+  PATH]".
+- Any other non-UTF-8 file, such as a PDF, an image of a type your model
+  does not accept, or one over 16 MiB, arrives as "[binary file not shown:
+  TYPE, N bytes. File: PATH]".
 
 **Ending a run.** A reply without a command ends the run; the reply goes
 only to your journal. A run also ends when the context is too large (see
@@ -173,7 +168,9 @@ the context in use.
 **Provider failures.** A failed call is retried with delays doubling from
 2 seconds to 10 minutes. After 3 consecutive failures, "Provider failing
 since TIME: ERROR" is written to your `ERROR`; the next successful call
-clears it.
+clears it. A call the provider rejects as invalid (a bad option, say) is
+not retried: the run ends, "Provider rejected the request: ERROR" is
+written to your `ERROR`, and the next successful call clears it.
 
 **Restarts.** When the harness stops (an upgrade or a restart), it starts
 no new runs and lets running ones finish for up to 15 minutes; any still
@@ -182,38 +179,34 @@ has no end record is reported with "You were interrupted. Interrupted
 journal: PATH" in your inbox, which starts a new run.
 
 **Upgrades.** Each run's journal `start` record holds the harness version
-that ran it. When a run starts on a newer release than your previous run,
-`<time>-harness-upgrade.md` is written to your inbox just before it is
-collected: "The harness was upgraded from vX to vY. What changed for you,
-newest first (~/manual/notes.md has every release):" and the release-notes
-sections in between. If your previous run recorded no version (it ran
-before 0.6.0), it says instead "The harness was upgraded to vY. What
-changed for you since v0.5.1, newest first (~/manual/notes.md has every
-release):" and covers every release since 0.5.1. Nothing wakes you
-for an upgrade: the note arrives with your next run, whatever starts it.
-An agent that has never run gets none, and development builds send none.
+that ran it; `~/manual/version` is the running one, and `~/manual/notes.md`
+lists what changed in each release. Nothing is written to you for an
+upgrade.
 
 ## ERROR
 
 `ERROR` is a file in your control directory (see Subagents), owned by your
 owner, so you cannot remove or hide it. The harness writes there why you
-cannot run or why calls are failing, and clears it when the cause is gone:
+cannot run or why calls are failing, and removes it when you next start a
+run or a call succeeds; it holds the most recent cause:
 - "config.json: " and the reason, such as "config.json: larger than 1 MiB"
   (see Configuration);
 - "OWNER.md: " and the reason (see Owner's instructions);
 - "Agent limit reached (max_agents=N); this agent was not started.";
-- "Provider failing since TIME: ERROR" (see Runs).
+- "Provider failing since TIME: ERROR" (see Runs);
+- "Provider rejected the request: ERROR" (see Runs).
 
 ## Configuration
 
 - `config.json` is `{"provider": "P", "model": "M", "options": {...}}`. Each
-  run checks it against the installed providers: an installed provider,
-  one of its models, and only that model's options with allowed values. A
-  missing, unreadable, invalid or over-1-MiB file stops your runs: the
-  reason goes to your `ERROR` ("config.json: " and the reason), and an
-  agent owner is told once per distinct content ("Subagent NAME did not
-  start: config.json: REASON"). The check is retried when the
-  file changes; a valid change takes effect at your next run.
+  run checks it against `/var/lib/agent/providers.json`: an installed
+  provider and one of its models. Options are passed to the provider as
+  they are; what it rejects comes back as "Provider rejected the request"
+  (see Runs). A missing, unreadable, invalid or over-1-MiB file stops your
+  runs: the reason goes to your `ERROR` ("config.json: " and the reason),
+  and an agent owner is told once per distinct reason ("Subagent NAME did
+  not start: config.json: REASON"). The check is made each time you would
+  run; a valid change takes effect at your next run.
 - `/var/lib/agent/providers.json` (owned by root, readable by all) is
   `{"providers": {NAME: {...}}}` for each installed provider: `models` (`id`, `context_tokens` where
   known, `image_types`, `options` with their allowed values or integer
@@ -234,42 +227,29 @@ is the system prompt, a blank line, this header and the content:
 > context.
 
 It is read at the start of each run (first 1 MiB), so an edit takes effect
-on the next run. It is used only if it is a regular file owned by your
-owner's user and not writable by group or others, in a directory that
-meets the same test. Missing means no instructions. Unsafe or unreadable
-means you do not run: "OWNER.md: " and the reason go to your `ERROR`, the
+on the next run. It is used if it is a regular file, not a link. Missing
+means no instructions. Anything else, or unreadable, means you do not run: "OWNER.md: " and the reason go to your `ERROR`, the
 inbox is left alone, and it is checked again each poll. The harness states
 this precedence; it does not enforce it.
 
 ## Messages
 
-- A message is a file. Write it under a name starting with a dot, then
-  rename it, so it is never read half-written; the harness ignores dot
-  names. For example:
-  `f=$(date -u +%Y%m%dT%H%M%S.%NZ).md; printf '%s\n' "text" > ~/.messages/.$f && mv ~/.messages/.$f ~/.messages/$f`.
-- About once a second the harness collects the regular files you own in
-  each spool, other than dot-files, in name order (so names that sort in
-  time order, such as UTC timestamps, keep messages in order), delivers
-  each and removes it. Anything else there (a link, a directory, another
-  user's file) is left alone. A crash can duplicate a message but not lose
-  one.
-- **To your owner:** a file in `~/.messages/`. If your owner is an agent, it
-  reaches its inbox as `<time>-NAME.md` (NAME is yours) with `"from":
-  "agents/NAME"`. If your owner is the human, it is only recorded in your
-  conversation log, which the human reads; nothing notifies them.
-- **To a subagent:** a file in `~/.messages/agents/NAME/`, which the
-  harness creates when NAME is admitted (you may create it sooner). It
-  reaches your direct child NAME's inbox as `<time>-owner.md` with `"from":
-  "owner"`. A message for a subagent not yet running waits while it may
-  still be admitted; otherwise the file is removed and "Message to NAME
-  dropped: there is no subagent by that name." arrives in your inbox. Only
-  a real directory you own, named like a subagent, is a spool.
-- A message over 64 KiB is delivered as its first 64 KiB followed by
-  "[message truncated]", and you are told: "Message to your owner was
-  truncated to 64 KiB." or "Message to NAME was truncated to 64 KiB."
-- **Conversation log:** `~/journal/messages.jsonl`, written only by the
-  harness, one record per message: `{"t", "from": "owner" | "agent",
-  "text"}`. A subagent's is `~/journal/agents/NAME/messages.jsonl`.
+- A message is a file in the recipient's inbox, which you write yourself:
+  write it in your home, then `mv` it in, so it is never read
+  half-written. A file in an inbox wakes its agent and is collected with
+  its next run, like any other (see Runs); names that sort in time order,
+  such as UTC timestamps, keep messages in order. For example:
+  `f=$(date -u +%Y%m%dT%H%M%S.%NZ).md; printf '%s\n' "text" > ~/.$f && mv ~/.$f ~/owner/$f`.
+- **To your owner:** `~/owner` links to your owner's inbox when your owner
+  is an agent; write into it. You can create files there but not list it
+  or read what is in it. Your file reaches your owner with `"from":
+  "agents/NAME"` (NAME is yours). When your owner is the human there is no
+  `~/owner`: the human reads your home, so leave what you have to say
+  where you have agreed to.
+- **To a subagent:** write into `~/agents/NAME/home/inbox/`, which exists
+  once NAME is admitted. Your file reaches it with `"from": "owner"`.
+- The label comes from the file's owner, which the kernel sets: a file
+  written by anyone else, or by you into your own inbox, is `data`.
 
 ## Journal
 
@@ -278,14 +258,13 @@ this precedence; it does not enforce it.
   siblings. You cannot change it.
 - One JSONL file per run, named for its UTC start time. Records: `start`
   (config and harness version), `inbox` (each file with its label; a shown
-  image also gets `image: {media_type, width, height, bytes, sha256,
-  copy}`), `assistant` (the reply, its command and wait, and the call's
+  image also gets `image: {media_type, bytes, sha256, copy}`), `assistant` (the reply, its command and wait, and the call's
   `usage`: `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`), `result` (exactly what the model got), `note` and
   `end` (with `reason`: `done`, `context`, `removed` and others).
-- The directory also holds `messages.jsonl` and a copy of each shown image
-  as `<run>-<n>.<ext>`, which are not runs. A subagent's journal directory
-  is inside yours.
+- The directory also holds a copy of each shown image as
+  `<run>-<n>.<ext>`, which are not runs. A subagent's journal directory is
+  inside yours.
 - Your newest run is the last `*Z.jsonl` in `~/journal/`; a subagent's
   runs are in `~/journal/agents/NAME/`, and a deeper descendant's under
   `~/journal/agents/NAME/agents/...`.
@@ -295,19 +274,19 @@ this precedence; it does not enforce it.
 - A subagent is a directory: `~/agents/NAME/`, a real directory you own,
   holding a regular file `config.json` (see Configuration).
   `cp ~/config.json ~/agents/NAME/` gives it a copy of yours. NAME is one
-  plain directory name, not starting with a dot, without control
+  plain directory name, not starting with a dot, without commas, colons or control
   characters. A directory without a `config.json` is not a subagent, and
   nothing happens.
-- When `config.json` appears it is checked against
-  `/var/lib/agent/providers.json`, as each run checks yours. If it is
-  invalid or over 1 MiB, no pool user is assigned: `~/agents/NAME/ERROR`
-  holds "config.json: " and the reason, you are told once ("Subagent NAME
-  did not start: config.json: REASON"), and you can fix the file in place.
-- A valid one is admitted, usually within a second: a pool user is
-  assigned, its home is prepared with the seed `README.md`, its
+- Its `config.json` is checked at its first run, as yours is at each of
+  yours. If it is invalid, `~/agents/NAME/ERROR` holds "config.json: " and
+  the reason and you are told once ("Subagent NAME did not start:
+  config.json: REASON"); the file has moved into its home by then, so you
+  fix it by removing and recreating the directory.
+- A directory holding a `config.json` is admitted, usually within a second:
+  a user is created for it, its home is prepared with the seed `README.md`, its
   `config.json` moves into that home (one written into `~/agents/NAME/`
-  later is ignored), `~/agents/NAME/home` links to it, and
-  `~/.messages/agents/NAME/` is created. It starts work when you send it a
+  later is ignored), `~/agents/NAME/home` links to it, and its user is
+  granted write access to your inbox. It starts work when you send it a
   message. Once admitted, its config is its own.
 - If it cannot be admitted for another reason, `~/agents/NAME/ERROR` says
   why and you are told once per reason: "Subagent NAME was not started:
@@ -319,22 +298,24 @@ this precedence; it does not enforce it.
   admission and when the harness restarts, not put back if you delete it.
 - Its home is its own user's. You can read it (you are in its group) but
   not write to it. It cannot read yours unless you grant access, and even
-  then cannot list or read `~/inbox`, `~/agents` or `~/.messages` unless a
-  default ACL on `~` names its user, which harness directories created
-  later would inherit.
+  then cannot list or read `~/inbox` or `~/agents` unless a default ACL on
+  `~` names its user, which harness directories created later would
+  inherit. It can create files in your inbox, which is outside your home
+  (that is how it messages you), but not list it, read others' files
+  there, or remove them.
 - **Sharing** is by `setfacl` on files and directories you own. Granting
   its user `x` on `~` lets it reach any file there that others can read.
-  Its user is `stat -L -c %U ~/agents/NAME/home`. Pool users are reused:
-  files it created in your directories, and grants naming its user, stay
-  until you remove them.
+  Its user is `stat -L -c %U ~/agents/NAME/home`. User names and ids come
+  back for later agents: files it created in your directories, and grants
+  naming its user, stay until you remove them.
 - Deleting the directory (`rm -r ~/agents/NAME`) stops it and all its
-  subagents, deepest first, and
-  reclaims their users: lingering is disabled, the crontab removed, the
-  user manager stopped and its processes killed, the home emptied, and its
-  files in `/tmp`, `/var/tmp` and `/dev/shm` deleted. Journals remain, in
-  your journal directory. An idle subagent costs nothing.
+  subagents, deepest first, and deletes their users: lingering is
+  disabled, the crontab removed, the user manager stopped and its
+  processes killed, its files in `/tmp`, `/var/tmp` and `/dev/shm`
+  deleted, and the user removed with its home. Journals remain, in your
+  journal directory. An idle subagent costs nothing.
 - Your subagents' messages reach you as `"from": "agents/NAME"`. You can
-  read their journals, conversation logs and `ERROR`:
+  read their journals and `ERROR`:
   `~/journal/agents/NAME/` and `~/agents/NAME/ERROR`.
 
 ## The agent command

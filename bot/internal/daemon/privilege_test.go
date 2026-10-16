@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
@@ -66,14 +65,11 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	os.Chown(replayDir, puid, pgid)
 	h.cfg.RootUser, h.cfg.ProviderUser = "root", provider
 	h.cfg.LookupUser = osuser.Lookup
-	// The pool: real users, the real System, homes in a root-owned Homes
-	// and a sticky world-writable temporary directory, as on the VM.
-	pool := os.Getenv("AGENT_TEST_POOL")
-	if pool == "" {
-		pool = "agent-test-1,agent-test-2,agent-test-3"
-	}
-	h.cfg.PoolUsers = strings.Split(pool, ",")
-	h.mainHome = h.cfg.PoolHome(h.cfg.PoolUsers[0])
+	// Real users, which the daemon creates under a test prefix, the real
+	// System, homes in a root-owned Homes and a sticky world-writable
+	// temporary directory, as on the VM.
+	h.cfg.UserPrefix = "agent-test-"
+	h.mainHome = h.cfg.Home(h.cfg.UserPrefix + "1")
 	sys := newExecSystem()
 	if !withSystemd() {
 		sys = noLinger{sys} // a container without systemd: everything else is real
@@ -82,30 +78,31 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	if err := os.Chmod(h.cfg.Homes, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, u := range h.cfg.PoolUsers {
-		lookupIDs(t, u)
-		if err := sys.PrepareHome(u, h.cfg.PoolHome(u)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	tmp := filepath.Join(h.root, "tmp")
 	if err := os.Chmod(tmp, 0o777|fs.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
 	h.cfg.TmpDirs = []string{tmp}
-	// Undo what admission did to the real users, whatever the test left:
-	// after the daemon stops (newHarness's cleanup runs after this one).
+	// Delete the users the daemon created, whatever the test left: after
+	// the daemon stops (newHarness's cleanup runs after this one).
 	t.Cleanup(func() {
 		h.stop()
-		for _, u := range h.cfg.PoolUsers {
-			for _, err := range []error{sys.DisableLinger(u), sys.RemoveCrontab(u), sys.StopProcesses(u), sys.SetMembers(u, nil)} {
+		users, err := sys.Users(h.cfg.UserPrefix)
+		if err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+		for _, u := range users {
+			if u.ID == "" {
+				continue // not the daemon's
+			}
+			for _, err := range []error{sys.DisableLinger(u.Name), sys.RemoveCrontab(u.Name), sys.StopProcesses(u.Name), sys.DeleteUser(u.Name)} {
 				if err != nil {
-					t.Logf("cleanup %s: %v", u, err)
+					t.Logf("cleanup %s: %v", u.Name, err)
 				}
 			}
 		}
 	})
-	return h, h.cfg.PoolUsers[0]
+	return h, h.cfg.UserPrefix + "1"
 }
 
 // noLinger is the real System without lingering, which needs systemd.
@@ -131,7 +128,7 @@ func lookupIDs(t *testing.T, name string) (int, int) {
 // belong to that user.
 func rootChild(t *testing.T, h *harness, name string) string {
 	t.Helper()
-	uid, gid := lookupIDs(t, h.cfg.PoolUsers[0])
+	uid, gid := lookupIDs(t, h.cfg.UserPrefix+"1")
 	agents := filepath.Join(h.mainHome, "agents")
 	ctrl := filepath.Join(agents, name)
 	if err := os.MkdirAll(ctrl, 0o755); err != nil {
@@ -249,11 +246,11 @@ func lingering(user string) bool {
 	return err == nil
 }
 
-// waitReclaimed waits until the pool no longer holds user.
+// waitReclaimed waits until user has been deleted.
 func (h *harness) waitReclaimed(user string) {
 	h.t.Helper()
-	waitFor(h.t, "reclaim of "+user, func() bool {
-		return !strings.Contains(poolJSON(h), `"`+user+`"`) && strings.Contains(h.logs.String(), user+": reclaimed")
+	waitFor(h.t, "removal of "+user, func() bool {
+		return strings.Contains(h.logs.String(), user+": reclaimed") && exitCode(h.t, "getent", "passwd", user) != 0
 	})
 }
 
@@ -373,50 +370,6 @@ func TestPrivilegeHelperNotDumpable(t *testing.T) {
 	h.waitEnds(h.mainID, 1)
 	if tool := h.requests()[1].Messages[2].Content; !strings.Contains(tool, "environ-rc=1") {
 		t.Fatalf("agent can inspect the file helper: %q", tool)
-	}
-}
-
-func TestPrivilegeConversationLogNotWritable(t *testing.T) {
-	h, _ := rootHarness(t)
-	log := h.cfg.ConversationFile(h.mainID)
-	h.setScript(step(sendMessage, 100), step("echo forged >> "+log+"; echo rc=$?", 100), done())
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	h.waitEnds(h.mainID, 1)
-	if tool := h.requests()[2].Messages[4].Content; !strings.Contains(tool, "rc=1") {
-		t.Fatalf("agent wrote to its conversation log: %q", tool)
-	}
-	if fileContains(log, "forged") {
-		t.Fatal("conversation log modified by the agent")
-	}
-}
-
-// TestPrivilegeOwnerFileOfOtherUser gives main's OWNER.md to main's own user
-// in root's control directory: only the file fails the check.
-func TestPrivilegeOwnerFileOfOtherUser(t *testing.T) {
-	h, name := rootHarness(t, done())
-	owner := filepath.Join(h.mainCtrl, "OWNER.md")
-	os.WriteFile(owner, []byte("Be brief."), 0o644)
-	u, _ := user.Lookup(name)
-	uid, _ := strconv.Atoi(u.Uid)
-	if err := os.Chown(owner, uid, -1); err != nil {
-		t.Fatal(err)
-	}
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	errorFile := filepath.Join(h.mainCtrl, "ERROR")
-	want := MsgOwnerPrefix + owner + " is not owned by its owner\n"
-	waitFor(t, "OWNER.md ERROR", func() bool {
-		data, _ := os.ReadFile(errorFile)
-		return string(data) == want
-	})
-	if n := len(h.requests()); n != 0 {
-		t.Fatalf("%d requests with an OWNER.md the agent owns", n)
-	}
-	os.Chown(owner, 0, -1)
-	h.waitEnds(h.mainID, 1)
-	if got := h.requests()[0].System[0].Text; got != SystemPrompt+ownerSegment("Be brief.") {
-		t.Fatalf("first segment %q", got)
 	}
 }
 
@@ -555,16 +508,17 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		}
 	}
 	homeG := h.childHome(ctrlG)
-	for _, dir := range []string{"inbox", "inbox/processed", ".messages", ".messages/agents", "agents"} {
-		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
-	}
+	inboxA := h.cfg.Inbox(ownerName(t, homeA))
+	statIs(t, inboxA, uidA, gidA, fs.ModeDir|fs.ModeSticky|0o770)
+	statIs(t, filepath.Join(inboxA, "processed"), uidA, gidA, fs.ModeDir|0o750)
+	statIs(t, filepath.Join(homeA, "agents"), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
 	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
 		t.Fatal(err)
 	}
 	reads := func(home, key string) string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "cat %s/shared.txt; echo %sok=$?", home, key)
-		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/.messages", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
+		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
 			fmt.Fprintf(&b, "; "+c+"; echo %s%d=$?", home, key, i+1)
 		}
 		return b.String()
@@ -576,10 +530,10 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h.waitEnds(childID("a/agents/g"), 1)
 	out := h.toolOutput("g1=")
 	exitCodes(t, out, true, "gok")
-	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5", "g6")
+	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5")
 	h.drop(h.mainHome, "go.md", "task-for-main")
 	h.waitEnds(h.mainID, 1)
-	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6")
+	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5")
 }
 
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops
@@ -590,17 +544,17 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	mine := filepath.Join(h.cfg.TmpDirs[0], "mine")
 	h.setScript(matchStep("task-for-c", "echo '* * * * * true' | crontab -; echo cron=$?; touch "+mine+"; echo tmp=$?", 100))
 	h.start()
-	if got := groupMembers(t, h.cfg.PoolUsers[0]); got != "" {
-		t.Fatalf("main's group %s members %q, want none: root needs no membership", h.cfg.PoolUsers[0], got)
+	if got := groupMembers(t, h.cfg.UserPrefix+"1"); got != "" {
+		t.Fatalf("main's group %s members %q, want none: root needs no membership", h.cfg.UserPrefix+"1", got)
 	}
 	ctrl := rootChild(t, h, "c")
 	home := h.childHome(ctrl)
 	user := ownerName(t, home)
-	if user != h.cfg.PoolUsers[1] {
+	if user != h.cfg.UserPrefix+"2" {
 		t.Fatalf("main's first subagent got %s", user)
 	}
-	if got := groupMembers(t, user); got != h.cfg.PoolUsers[0] {
-		t.Fatalf("group %s members %q, want the parent %s", user, got, h.cfg.PoolUsers[0])
+	if got := groupMembers(t, user); got != h.cfg.UserPrefix+"1" {
+		t.Fatalf("group %s members %q, want the parent %s", user, got, h.cfg.UserPrefix+"1")
 	}
 	if withSystemd() && !lingering(user) {
 		t.Fatalf("%s not lingering after admission", user)
@@ -623,20 +577,21 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	}
 	os.RemoveAll(ctrl)
 	h.waitReclaimed(user)
-	if code := exitCode(t, "pgrep", "-u", user); code != 1 {
-		t.Fatalf("pgrep -u %s exited %d: processes survived", user, code)
+	// By uid: the user no longer exists for pgrep to look up.
+	if code := exitCode(t, "pgrep", "-u", strconv.Itoa(uid)); code != 1 {
+		t.Fatalf("pgrep -u %d exited %d: processes survived", uid, code)
 	}
 	if code := exitCode(t, "crontab", "-l", "-u", user); code == 0 {
 		t.Fatal("crontab kept")
 	}
-	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
-		t.Fatalf("home not emptied: %v %v", entries, err)
+	if _, err := os.Lstat(home); !os.IsNotExist(err) {
+		t.Fatalf("home kept: %v", err)
 	}
 	if _, err := os.Lstat(mine); !os.IsNotExist(err) {
 		t.Fatal("temporary file kept")
 	}
-	if got := groupMembers(t, user); got != "" {
-		t.Fatalf("group %s keeps members %q", user, got)
+	if code := exitCode(t, "getent", "group", user); code == 0 {
+		t.Fatalf("group %s kept", user)
 	}
 	if withSystemd() && lingering(user) {
 		t.Fatalf("%s still lingering", user)
@@ -683,48 +638,10 @@ func TestPrivilegeReusedUserCannotReadOldJournals(t *testing.T) {
 	exitCodes(t, h.toolOutput("frc="), false, "rc", "frc")
 }
 
-// TestPrivilegeSpoolFileNotOwnedIgnored: a file in a subagent's spool that
-// its user does not own is never delivered as its message and stays put.
-func TestPrivilegeSpoolFileNotOwnedIgnored(t *testing.T) {
-	h, _ := rootHarness(t)
-	h.start()
-	ctrl := rootChild(t, h, "c")
-	home := h.childHome(ctrl)
-	uid, gid := lookupIDs(t, ownerName(t, home))
-	spool := filepath.Join(home, ".messages") // seeded at admission
-	statIs(t, spool, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
-	planted := h.queue(spool, "planted")
-	// The child's own message in the same spool is delivered.
-	temp := filepath.Join(spool, ".g")
-	os.WriteFile(temp, []byte("genuine"), 0o644)
-	os.Lchown(temp, uid, gid)
-	if err := os.Rename(temp, filepath.Join(spool, "20261012T000000Z.md")); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "the child's own message", func() bool { return countNotes(h.mainHome, "-c.md") >= 1 })
-	time.Sleep(300 * time.Millisecond) // several polls
-	if _, err := os.Stat(planted); err != nil {
-		t.Fatalf("foreign spool file not left in place: %v", err)
-	}
-	if n := countNotes(h.mainHome, "-c.md"); n != 1 {
-		t.Fatalf("%d messages from the child", n)
-	}
-	for _, sub := range []string{"inbox", "inbox/processed"} {
-		matches, _ := filepath.Glob(filepath.Join(h.mainHome, sub, "*.md"))
-		for _, m := range matches {
-			if fileContains(m, "planted") {
-				t.Fatalf("a root-owned spool file was delivered as the child's: %s", m)
-			}
-		}
-	}
-	if !strings.Contains(h.logs.String(), "ignoring "+planted) {
-		t.Fatalf("foreign file not logged:\n%s", h.logs)
-	}
-}
-
-// TestPrivilegeChildOwnerMd: a subagent's OWNER.md owned by its parent's user
-// leads its system prompt; once the subagent's own user owns it, the
-// subagent stops with an OWNER.md ERROR until the file is fixed.
+// TestPrivilegeChildOwnerMd: a subagent's OWNER.md, written by its parent
+// into the control directory the parent owns, leads its system prompt and
+// is read through the parent's helper, which the subagent cannot reach
+// (TestPrivilegeSubagentIsolation shows it cannot write the file).
 func TestPrivilegeChildOwnerMd(t *testing.T) {
 	h, name := rootHarness(t)
 	h.start()
@@ -738,52 +655,5 @@ func TestPrivilegeChildOwnerMd(t *testing.T) {
 	h.waitEnds(childID("c"), 1)
 	if got := h.requests()[0].System[0].Text; got != SystemPrompt+ownerSegment("Child rules.") {
 		t.Fatalf("child's first segment %q", got)
-	}
-	childUID, _ := lookupIDs(t, ownerName(t, home))
-	if err := os.Lchown(owner, childUID, -1); err != nil {
-		t.Fatal(err)
-	}
-	h.drop(home, "next.md", "second")
-	errorFile := filepath.Join(ctrl, "ERROR")
-	want := MsgOwnerPrefix + owner + " is not owned by its owner\n"
-	waitFor(t, "OWNER.md ERROR", func() bool {
-		data, _ := os.ReadFile(errorFile)
-		return string(data) == want
-	})
-	time.Sleep(300 * time.Millisecond) // several polls
-	if n := len(h.runs(childID("c"))); n != 1 {
-		t.Fatalf("%d runs with an OWNER.md the child owns", n)
-	}
-	if names := inboxNames(home); len(names) != 1 || names[0] != "next.md" {
-		t.Fatalf("inbox touched: %v", names)
-	}
-	os.Lchown(owner, mainUID, -1)
-	h.waitEnds(childID("c"), 2)
-	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
-		t.Fatal("OWNER.md ERROR not cleared")
-	}
-}
-
-// TestPrivilegeRootSpoolPrivate: root's spool for main, which the daemon
-// creates in /etc/agent (which every user may traverse), cannot be listed by
-// another pool user, nor a message being written there read.
-func TestPrivilegeRootSpoolPrivate(t *testing.T) {
-	h, _ := rootHarness(t)
-	h.start()
-	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")
-	waitFor(t, "root's spool for main", func() bool { _, err := os.Stat(spool); return err == nil })
-	// A message still being written: a dot name, which delivery leaves alone.
-	staged := filepath.Join(spool, ".m.md")
-	if err := os.WriteFile(staged, []byte("owner secret"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	uid, gid := lookupIDs(t, h.cfg.PoolUsers[1])
-	for _, args := range [][]string{{"ls", spool}, {"cat", staged}} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
-		out, err := cmd.CombinedOutput()
-		if err == nil || strings.Contains(string(out), "owner secret") {
-			t.Fatalf("%s as %s: %v %q", strings.Join(args, " "), h.cfg.PoolUsers[1], err, out)
-		}
 	}
 }

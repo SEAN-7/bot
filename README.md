@@ -17,9 +17,8 @@ curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | 
 
 The installer verifies every download against pinned checksums, asks for a
 provider plugin (anthropic or openai-compatible), its credentials and a
-model, creates the pool users `agent-1` to `agent-<max_agents>`, starts the
-service and creates the main agent, `main`, as `agent-1`. No agent gets
-sudo.
+model, starts the service and creates the main agent, `main`, which the
+daemon gives a Unix user of its own (`agent-1`). No agent gets sudo.
 
 A newer release's `install.sh` upgrades in place, keeping agents' files,
 journals and credentials; a failed upgrade restores the previous binary.
@@ -28,15 +27,13 @@ first. Releases up to 0.5.2 keep `install.sh` at the repository root
 (`.../vX.Y.Z/install.sh`), and releases up to 0.5.5 need a GitHub token, as
 their README says.
 
-To add another provider later, download its release asset
-`plugin-NAME-linux-ARCH` (`amd64` or `arm64`) and install it; `agent
-provider install` checks it against the checksums compiled into `agent` and
-prompts for its settings:
+To add another provider later, install it from a file or a URL; `agent
+provider install` prompts for its settings. This release's plugins are
+`plugin-NAME-linux-ARCH` (`amd64` or `arm64`) on the release page, and any
+plugin that speaks [the protocol](bot/docs/plugins.md) works:
 
 ```bash
-name=openai-compatible asset=plugin-openai-compatible-linux-amd64
-curl -fsSL -o "/tmp/$asset" "https://github.com/SEAN-7/bot/releases/download/v$(cat /var/lib/agent/version)/$asset"
-sudo agent provider install "$name" "/tmp/$asset"
+sudo agent provider install openai-compatible "https://github.com/SEAN-7/bot/releases/download/v$(cat /var/lib/agent/version)/plugin-openai-compatible-linux-amd64"
 ```
 
 ## Set a spend limit first
@@ -49,24 +46,26 @@ first message. When it is reached, calls fail, the agent pauses, and
 ## Talk to it
 
 You are root, the top of the agent tree; `main` is your child. You do what
-an agent does for its children: a message is a file in your spool for the
-child, `/etc/agent/.messages/agents/NAME/`. Write it under a dot name and
-rename it, so it is never read half-written. A shell function does both:
+an agent does for its children: a message is a file you write into the
+child's inbox, `/etc/agent/agents/NAME/home/inbox/`. Write it in the home
+first and move it in, so it is never read half-written. A shell function
+does both:
 
 ```bash
 send() { # send NAME "text"
-	sudo sh -c 'd=/etc/agent/.messages/agents/$1 f=$(date -u +%Y%m%dT%H%M%S.%NZ).md
-		mkdir -p -m 700 "$d" && printf "%s\n" "$2" >"$d/.$f" && mv "$d/.$f" "$d/$f"' sh "$1" "$2"
+	sudo sh -c 'h=/etc/agent/agents/$1/home f=$(date -u +%Y%m%dT%H%M%S.%NZ).md
+		printf "%s\n" "$2" >"$h/.$f" && mv "$h/.$f" "$h/inbox/$f"' sh "$1" "$2"
 }
-send main "Hello. Read your README, then tell me how you plan to keep notes."
-sudo cat /var/log/agent/main/messages.jsonl  # the conversation so far, both directions
+send main "Hello. Read your README, then tell me how you plan to keep notes, and where you will leave your replies to me."
+sudo ls /etc/agent/agents/main/home/   # its home: read what it leaves there
 ```
 
-Only messages you send this way are labelled as yours; everything else the
-agent reads is marked as data. The agent replies with a file in its own
-spool, which the harness records in a log only it writes
-(`/var/log/agent/main/messages.jsonl`). It is not push: you see replies when
-you look. For notifications, ask the agent to build a channel:
+Files you write this way are labelled as yours, because you wrote them;
+everything else the agent reads is marked as data. The agent has no inbox
+to reply into, since you have none: it leaves its replies in its home, where
+you agree, and its journal holds every reply it ever made
+(`/var/log/agent/main/`). It is not push: you see replies when you look. For
+notifications, ask the agent to build a channel:
 
 ```bash
 send main "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."
@@ -92,9 +91,10 @@ Subagents don't see it; each has its own, written by its parent.
 
 ## Agents and subagents
 
-Every agent runs as its own pool user; `max_agents` (default 16, main
-included) is in `/etc/agent/settings.json`. An agent that does not fit is
-not started, and its parent is told.
+Every agent runs as a Unix user of its own, created when it is admitted
+and deleted when it is removed; `max_agents` (default 16, main included)
+in `/etc/agent/settings.json` bounds how many exist at once. An agent that
+does not fit is not started, and its parent is told.
 
 An agent creates a subagent by making a directory in `~/agents/` holding a
 `config.json`, and removes it by deleting the directory. As root you can
@@ -102,7 +102,7 @@ watch any of them; their journals mirror the tree:
 
 ```bash
 sudo ls /var/log/agent/main/agents/research/                    # its runs, newest last
-sudo cat /var/log/agent/main/agents/research/messages.jsonl     # its conversation with its parent
+sudo ls /etc/agent/agents/main/home/agents/research/home/inbox/ # what main has sent it and it has not yet read
 ```
 
 You can also create your own agents beside `main`, isolated from it
@@ -117,8 +117,8 @@ sudo rm -r /etc/agent/agents/research   # stops it and its subagents, discards t
 ```
 
 Within about a second `/etc/agent/agents/NAME/` gets a `home` link, or an
-`ERROR` saying why not (an invalid `config.json` takes no pool user and can
-be fixed in place).
+`ERROR` saying why not (an invalid `config.json` is reported at its first
+run; remove the directory and create it again to fix it).
 
 ## Watch it
 
@@ -146,34 +146,11 @@ u=$(sudo stat -L -c %U /etc/agent/agents/main/home)
 sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") systemctl --user list-units
 ```
 
-## If pool.json is lost
-
-`/var/lib/agent/pool.json` is the only record of which pool user each agent
-holds. If it is missing while `/var/log/agent` holds journals, the daemon
-refuses to start, since a live agent's home could be cleared or given to
-another agent. Either:
-
-- Restore the latest backup, taken after the last admission or removal. An
-  older one can make the daemon wipe the home of an agent that now holds a
-  reused user.
-- Or start with no agents: stop everything the pool users run, then move
-  the journals somewhere only root can read. Old control directories stay
-  and are not started.
-
-  ```bash
-  for u in $(getent passwd | cut -d: -f1 | grep -x 'agent-[0-9]*'); do
-    sudo loginctl disable-linger "$u"; sudo crontab -r -u "$u"; sudo pkill -KILL -u "$u"
-  done
-  sudo mkdir -m 700 /root/agent-journals && sudo mv /var/log/agent/* /root/agent-journals/
-  ```
-
-Then `sudo systemctl restart agent`.
-
 ## What is protected, and what isn't
 
 - No agent has sudo, can read provider credentials (`/etc/agent`), or can
-  change its journals or conversation log (`/var/log/agent`). The daemon
-  touches agent files only with the agent's own permissions.
+  change its journals (`/var/log/agent`). The daemon touches agent files
+  only with the agent's own permissions.
 - Nothing an agent writes can pass as your message.
 - An agent cannot change its parent's or siblings' files or its own control
   directory (`OWNER.md`, `ERROR`). A parent shares files with a child

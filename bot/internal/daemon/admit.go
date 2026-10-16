@@ -5,21 +5,11 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"strings"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
-	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/seed"
 )
-
-// heldBackPrefixes begin the ERRORs that say why an agent was not admitted
-// (see notStarted), which admission clears, including those an earlier
-// daemon wrote (only 0.4.1 and 0.5.0 wrote "No free agent user").
-var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix}
-
-// errConfigTooLarge: a starting config.json over configLimit.
-var errConfigTooLarge = errors.New(MsgConfigTooLarge)
 
 // admit gives the agent at ctrl a pool user and a home, and starts its
 // loop. It returns nil when ctrl is not an agent (yet), or the agent cannot
@@ -35,8 +25,8 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		d.admitFailed(ctrl, id, "control directory", err)
 		return nil
 	}
-	held := d.pool.userOf(id)
-	ok, err := d.admission(parent, ctrl, held)
+	user := d.userOf(id)
+	ok, err := d.admission(parent, ctrl, user)
 	if err != nil {
 		d.admitFailed(ctrl, id, "admission", err)
 		return nil
@@ -44,52 +34,34 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if !ok {
 		return nil // it may still be being written
 	}
-	keep := held != ""
-	if !keep {
-		// A new agent's config.json is adopted: one too large to adopt
-		// takes no user.
-		if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Size > configLimit {
-			d.configTooLarge(parent, ctrl, id)
-			return nil
-		}
-		// An invalid one takes no user either: the parent can still fix it
-		// in place, which it cannot once it has moved into the home.
-		if text := d.startingConfigError(parent, ctrl); text != "" {
-			d.notStarted(parent, ctrl, id, text, fmt.Sprintf(MsgSubagentFmt, id, text))
-			return nil
-		}
-	}
-	limit := min(len(d.pool.users), d.settings.MaxAgents)
-	user, err := d.pool.assign(id, limit)
-	if err != nil {
-		d.admitFailed(ctrl, id, "pool", err)
-		return nil
-	}
-	if user == "" {
-		if held == "" {
+	fresh := user == ""
+	if fresh {
+		if d.agentCount() >= d.settings.MaxAgents {
 			d.holdBack(parent, ctrl, id)
+			return nil
 		}
-		return nil // held: its user is being reclaimed
+		// A user of its own, named for the lowest free number. A name freed
+		// by userdel comes back, but as a new user with an empty home.
+		user = d.newUserName()
+		if err := d.cfg.System.AddUser(user, id, d.cfg.Home(user)); err != nil {
+			d.admitFailed(ctrl, id, "user", err)
+			return nil
+		}
+		d.users = append(d.users, User{user, id})
 	}
-	c := &agent{d: d, id: id, name: id, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
-	// A user new to this agent may hold a previous agent's files; a user it
-	// already held keeps them.
-	fresh, cleared := !keep, false
+	c := &agent{d: d, id: id, name: id, home: d.cfg.Home(user), inbox: d.cfg.Inbox(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	fail := func(step string, err error) *agent {
 		d.admitFailed(ctrl, id, step, err)
 		if c.fs != nil {
 			c.fs.Close()
 		}
-		if fresh && !cleared {
-			// Retry as a new assignment, so the home is cleared then.
-			if err := d.pool.free(user); err != nil {
-				d.cfg.Logger.Printf("%s: pool: %v", id, err)
-			}
-		}
 		return nil
 	}
 	if err := d.cfg.System.PrepareHome(user, c.home); err != nil {
 		return fail("prepare home", err)
+	}
+	if err := d.cfg.System.PrepareInbox(user, c.inbox); err != nil {
+		return fail("prepare inbox", err)
 	}
 	cred, err := c.cred()
 	if err == nil {
@@ -99,10 +71,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return fail("file helper", err)
 	}
 	if fresh {
-		if err := c.fs.Clear(c.home); err != nil {
+		// A home directory left under this name (a userdel that could not
+		// remove it) must not reach the new user.
+		if err := d.clearHome(user); err != nil {
 			return fail("clear home", err)
 		}
-		cleared = true
 	}
 	var ancestors []string // nearest first; root needs no group membership
 	for p := parent; p != d.root; p = p.parent {
@@ -114,10 +87,14 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := c.seed(); err != nil {
 		return fail("seed home", err)
 	}
-	if err := c.adoptConfig(); err != nil {
-		if errors.Is(err, errConfigTooLarge) {
-			d.configTooLarge(parent, ctrl, id)
+	// Its messages are files it writes into its owner's inbox: the owner,
+	// who owns the inbox, grants it write access. Root has no inbox.
+	if parent != d.root {
+		if err := d.cfg.System.ShareInbox(parent.user, parent.inbox, c.uid(), true); err != nil {
+			return fail("share inbox", err)
 		}
+	}
+	if err := c.adoptConfig(); err != nil {
 		return fail("config", err)
 	}
 	if err := d.cfg.System.EnableLinger(user); err != nil {
@@ -132,14 +109,6 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
 		return fail("home link", err)
 	}
-	// The parent's spool for it, so messages need only a file written; a
-	// failure leaves the parent to create it.
-	spool := filepath.Join(parent.home, ".messages", "agents", filepath.Base(ctrl))
-	if skipped, err := parent.fs.Private(spool); err != nil {
-		c.logf("spool %s: %v", spool, err)
-	} else if len(skipped) > 0 {
-		c.logf("not closed to others: %s is a link, a file or another user's", spool)
-	}
 	delete(d.admitErrs, ctrl)
 	d.clearHeldBack(parent, ctrl)
 	d.mu.Lock()
@@ -150,9 +119,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 }
 
 // admission decides whether the agent at ctrl, which the daemon does not
-// run, is admitted (false: it is not an agent yet). held is the user it holds
-// in pool.json. An error means there is no answer yet (a file or helper
-// failed): the caller retries at the next poll. It is admitted when:
+// run, is admitted (false: it is not an agent yet). held is the user it
+// holds. An error means there is no answer yet (a file or helper failed):
+// the caller retries at the next poll. It is admitted when:
 //  1. it holds a user (a daemon restart): that user, keeping the home;
 //  2. it holds a regular config.json: a fresh user.
 func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
@@ -168,56 +137,28 @@ func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 	return e.Type == "file", nil
 }
 
-// startingConfigError checks a new agent's starting config.json, read
-// through its parent's helper, against the providers cache: the check each
-// run makes, without running plugins from the poll. It returns the ERROR
-// text, or "" when the config is valid or cannot be checked yet (no cache,
-// or the file could not be read: admission or the first run reports it).
-func (d *daemon) startingConfigError(parent *agent, ctrl string) string {
-	providers, err := plugin.LoadProviders(d.cfg.ProvidersCache())
-	if err != nil {
-		return ""
-	}
-	data, _, err := parent.fs.Read(filepath.Join(ctrl, "config.json"), configLimit)
-	if err != nil {
-		return ""
-	}
-	if _, err := plugin.ValidateCached(data, providers); err != nil {
-		return MsgConfigPrefix + err.Error()
-	}
-	return ""
-}
-
-// harnessDirs are the directories the harness keeps in a home, parents
-// first.
-var harnessDirs = []string{"inbox", "inbox/processed", inboxStage, "agents", ".messages", ".messages/agents"}
-
-// seed creates the harness's directories and the seed files the home lacks,
-// through the agent's own helper. The directories are created open to the
-// home's group, the agent's ancestors, and closed to others: a child the
-// agent lets through its home never reads its inbox, spools or its
-// siblings' control directories. One left alone, as it is not a real
-// directory the agent owns, may be open to others: the service log names it
-// once per daemon run.
+// seed creates the harness's directories and the seed files the agent
+// lacks, through the agent's own helper: inbox/processed in the inbox
+// (closed to others, so a subagent with write access to the inbox never
+// reads what was collected) and agents/ in the home (closed to others, so
+// a child the agent lets through its home never reads its siblings'
+// control directories). A directory that exists is left as it is; anything
+// else of that name is an error, and the agent does not start. An inbox
+// from a release before 0.9.0, a real directory in the home, is moved
+// aside once, its pending files into the new inbox.
 func (a *agent) seed() error {
-	dirs := make([]string, len(harnessDirs))
-	for i, dir := range harnessDirs {
-		dirs[i] = filepath.Join(a.home, dir)
-	}
-	skipped, err := a.fs.Private(dirs...)
-	for _, path := range skipped {
-		if !a.d.unclosed[path] {
-			if a.d.unclosed == nil {
-				a.d.unclosed = map[string]bool{}
-			}
-			a.d.unclosed[path] = true
-			a.logf("not closed to others: %s is a link, a file or another user's", path)
-		}
-	}
-	if err != nil {
+	if err := a.fs.Mkdir(filepath.Join(a.inbox, "processed"), 0o750); err != nil {
 		return err
 	}
-	a.clearStage()
+	if err := a.fs.Mkdir(filepath.Join(a.home, "agents"), 0o750); err != nil {
+		return err
+	}
+	if err := a.moveLegacyInbox(); err != nil {
+		return err
+	}
+	if err := a.fs.Symlink(a.inbox, filepath.Join(a.home, "inbox")); err != nil {
+		return err
+	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}} {
 		path := filepath.Join(a.home, file.name)
 		_, err := a.fs.Stat(path)
@@ -228,6 +169,38 @@ func (a *agent) seed() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// moveLegacyInbox handles a ~/inbox that is a real directory, left by a
+// release before 0.9.0: it is renamed to ~/inbox.0.8.0, keeping its
+// processed/ history, and its regular files, the pending ones, are moved
+// into the inbox, which shares the filesystem. Nothing happens otherwise.
+func (a *agent) moveLegacyInbox() error {
+	old := filepath.Join(a.home, "inbox")
+	e, err := a.fs.Stat(old)
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && e.Type != "dir") {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	kept := old + ".0.8.0"
+	if err := a.fs.Rename(old, kept); err != nil {
+		return err
+	}
+	entries, err := a.fs.List(kept)
+	if err != nil {
+		return err
+	}
+	for _, f := range entries {
+		if f.Type != "file" {
+			continue
+		}
+		if err := a.fs.Rename(filepath.Join(kept, f.Name), filepath.Join(a.inbox, f.Name)); err != nil {
+			return err
+		}
+	}
+	a.logf("moved the pre-0.9.0 inbox aside as %s", kept)
 	return nil
 }
 
@@ -256,7 +229,7 @@ func (c *agent) adoptConfig() error {
 	}
 	data, size, err := c.parent.fs.Read(from, configLimit)
 	if err == nil && size > int64(len(data)) {
-		err = errConfigTooLarge
+		err = errors.New("config.json is larger than 1 MiB; shrink it in place")
 	}
 	if err == nil {
 		err = c.fs.Write(to, data, 0o644)
@@ -283,13 +256,7 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 // max_agents, or as the pool users there are, already exist.
 func (d *daemon) holdBack(parent *agent, ctrl, name string) {
 	n := d.settings.MaxAgents
-	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
-}
-
-// configTooLarge reports a starting config.json over configLimit.
-func (d *daemon) configTooLarge(parent *agent, ctrl, name string) {
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	d.notStarted(parent, ctrl, name, text, fmt.Sprintf(MsgSubagentFmt, name, text))
+	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, filepath.Base(ctrl), n))
 }
 
 // notStarted reports an agent that is not admitted for a reason its parent
@@ -313,21 +280,10 @@ func (d *daemon) notStarted(parent *agent, ctrl, name, text, note string) {
 	}
 }
 
-// clearHeldBack removes from an admitted agent's control directory the
-// ERROR that said why it was not admitted, including one an earlier daemon
-// wrote. (An oversized ~/config.json's ERROR, which reads the same, is
-// written again by the next run that finds it.)
+// clearHeldBack removes an admitted agent's ERROR, which said why it was not
+// admitted; the agent's first run writes it again if something is still
+// wrong.
 func (d *daemon) clearHeldBack(parent *agent, ctrl string) {
 	delete(d.heldBack, ctrl)
-	path := filepath.Join(ctrl, "ERROR")
-	data, _, err := parent.fs.Read(path, 4096)
-	if err != nil {
-		return
-	}
-	for _, prefix := range heldBackPrefixes {
-		if strings.HasPrefix(string(data), prefix) {
-			parent.fs.Remove(path)
-			return
-		}
-	}
+	parent.fs.Unlink(filepath.Join(ctrl, "ERROR"))
 }

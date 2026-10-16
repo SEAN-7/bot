@@ -23,8 +23,10 @@ never both.
 - **One owner per agent.** Root for a top-level agent, the creator
   otherwise. An agent talks only with its owner and its own children, so
   only top-level agents reach the human.
-- **Each agent is its own Unix user**, from a fixed pool of `max_agents`
-  users created at install and reused.
+- **Each agent is its own Unix user**, created by the daemon at admission
+  (`useradd`, with the agent id in the comment field) and deleted at
+  removal (`userdel -r`); the passwd file is the only record. `max_agents`
+  bounds how many exist at once.
 - **Each agent owns its config.** Its creator writes the starting
   `config.json`; it moves into the agent's home at admission. A parent
   stops a child only by removing it.
@@ -42,19 +44,22 @@ never both.
   notes are embedded in the binary and written as a read-only directory,
   so they always describe the running version. What a provider caches and
   what it costs comes from its plugin's `describe`.
-- **Everything an agent does with the harness is a file.** Messages are
-  files in spools, a subagent is a directory holding a `config.json`, and
-  journals, providers and the manual are files to read. The binary is the
-  daemon, its file helper and root's plugin installer.
-- **Upgrades are reported, not announced.** An agent learns what changed
-  at its next run; nothing wakes it for an upgrade.
+- **Everything an agent does with the harness is a file.** A message is a
+  file the sender writes into the recipient's inbox, a subagent is a
+  directory holding a `config.json`, and journals, providers and the manual
+  are files to read. The binary is the daemon, its file helper and root's
+  plugin installer.
+- **Upgrades are not announced.** Nothing is written to an agent for an
+  upgrade; the manual and each run's `start` record carry the version.
 - **The repository is public.** Installs download release assets without
   credentials and trust only the checksums pinned in `install.sh`.
-- **Conversations are pull, not push.** The daemon logs both directions in
-  a root-owned log; alerts are something the agent builds.
-- **The harness presents files; it does not convert them.** A file reaches
-  the model as text or an image only in a form the model accepts natively;
-  anything else (a PDF) arrives as a note with its path.
+- **Conversations are pull, not push.** A top-level agent's replies are
+  files in its home that the human reads; alerts are something the agent
+  builds.
+- **The harness presents files; it does not convert or check them.** A
+  file reaches the model as text, or as an image when its type is one the
+  model declares; anything else (a PDF) arrives as a note with its path.
+  Image limits belong to the plugin, which knows its provider's.
 - **`OWNER.md` precedence is stated, not enforced.** The harness enforces
   only the privilege model.
 - **The cached prefix changes rarely.** The system prompt, the owner
@@ -66,32 +71,33 @@ never both.
 | Path | Owner, mode | Contents |
 | --- | --- | --- |
 | `/usr/local/bin/agent` | root, 0755 | The harness binary |
-| `/etc/agent/` | root, 0711 | Root's place in the tree: `settings.json` (0600), `credentials/`, `plugins/`, `agents/`, `.messages/` |
+| `/etc/agent/` | root, 0711 | Root's place in the tree: `settings.json` (0600), `credentials/`, `plugins/`, `agents/` |
 | `/etc/agent/credentials/NAME.env` | root, 0600 | Plugin settings as `KEY=value` lines |
 | `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables (same owner and mode) |
 | `/etc/agent/agents/NAME/` | root, 0700 | Root's control directory for its child NAME |
 | `/etc/agent/agents/NAME/OWNER.md` | root, 0644 | The human's standing instructions for NAME; optional |
-| `/etc/agent/.messages/agents/NAME/` | root, 0700 | Root's spool for NAME; files 0600 |
-| `/var/lib/agent/delivered.jsonl` | root, 0600 | Delivered messages: agent id, file name, SHA-256, sender |
-| `/var/lib/agent/pool.json` | root, 0600 | Pool assignments: user, agent id, state |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output, no secrets |
 | `/var/lib/agent/manual/` | root, 0755 | `manual.md`, `notes.md` and `version` (files 0644) |
 | `/var/lib/agent/version` | root, 0644 | Installed version, written by `install.sh` |
-| `/var/log/agent/` | root, 0755 | Journals and conversation logs |
-| `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home; empty while free |
+| `/var/log/agent/` | root, 0755 | Journals |
+| `/home/agent-N/` | agent-N:agent-N, 2750 | An agent user's home, created at admission and removed with the user |
+| `/home/.inbox/` | root, 0711 | Every agent's inbox; traversable, not listable |
+| `/home/.inbox/agent-N/` | agent-N:agent-N, 1770 | The agent's inbox, which `~/inbox` links to; removed with the user |
 
 `settings.json` holds `max_agents` (default 16), which bounds the whole
-tree, main included. What the harness keeps in an agent's home and control
+tree, main included. It is read when the daemon starts; a change takes
+effect at the next restart. What the harness keeps in an agent's home and control
 directory, and their modes, are in the manual ("Your home", "Subagents").
 
 ## Privilege model
 
-The daemon runs as root; each agent is an unprivileged pool user `agent-N`.
+The daemon runs as root; each agent is an unprivileged user `agent-N` of
+its own.
 
 **Groups.** Each agent user has its own group, whose members are the
 agent's ancestors other than root, kept current in `/etc/group`. A process
-started while in a reclaimed user's group keeps read access to the next
-holder's home until it restarts.
+started while in a deleted user's group keeps that gid, which a later user
+may be given, until it restarts.
 
 **File access through helpers.** The daemon never opens a path inside an
 agent home or control directory as root. It runs one long-lived helper per
@@ -101,12 +107,14 @@ planted symlink reaches only what the user could. A home is accessed
 through its agent's helper, a control directory through its parent's, and
 `/etc/agent` through a root helper. A helper that dies is restarted and the
 affected run retried. Operations: `list`, `read` (regular files, byte
-limit), `write` (atomic: a temporary dot-file in the target's directory, or
-in a staging directory the caller names, then a rename), `private` (create a missing
-directory 0750; leave anything else alone), `rename`, `remove` and `clear`
-(never following symlinks), `unlink`, `symlink`, `purge_owned` (the user's
-files in shared temporary directories) and `stat` (lstat of the final
-component).
+limit, never through a link), `write` (atomic: a temporary dot-file in the target's directory, or
+in a staging directory the caller names, then a rename), `mkdir` (create
+with a mode; an existing directory of the user's is left alone, anything
+else is an error), `rename`, `unlink` (never following symlinks),
+`symlink` (remove, then create) and `stat` (lstat of the final component).
+Removing what a user left behind, in its home or the shared temporary
+directories, is `rm -rf` run as that user through `shell.Run`, after its
+processes are dead.
 
 **Shell commands.** Credentials are set before exec. When a command
 finishes, every live process in the daemon's own cgroup whose real or
@@ -123,53 +131,51 @@ environment. No agent can read `/etc/agent` or another user's environment.
 
 `agent daemon` is one systemd service (`Restart=always`) for the whole tree.
 An agent's id is its path from root (`main`, `main/agents/research`); it
-keys journals, pool assignments and delivery records. Root has control
-directories and spools but no loop, inbox, journal or owner.
+keys journals, delivery records and the user's comment field. Root has
+control directories but no loop, inbox, journal or owner.
 
-- **Startup.** Require root. Refuse to start when `pool.json` is missing but
-  `/var/log/agent` holds anything other than regular files, since without it
-  a live agent's home could be cleared or handed to another agent; the error
-  names the README section "If pool.json is lost". Resolve the provider and
-  pool users (missing ones are logged), start root's helper, write the
-  manual (see Manual), create root's spools `/etc/agent/.messages` and
-  `.messages/agents` where missing (`private`), then poll about
-  once a second: finish any reclaim in progress, walk the tree, collect
-  messages.
+- **Startup.** Require root. Resolve the provider user, start root's
+  helper, write the manual (see Manual), create `/home/.inbox` (0711),
+  migrate a `pool.json` left by a release before 0.9.0 (its active
+  entries' users get their agent ids as comments, every other `agent-N`
+  user is marked removed for the sweep to delete, and the file goes; a
+  failure stops the daemon, so the service retries; the code leaves in
+  0.10.0), then poll about once a second: read the agent users from the
+  passwd file, finish any deletion in progress, walk the tree.
 - **Discovery.** Walk the tree breadth-first, listing each node's `agents/`
   through its own helper without following symlinks. A control directory is
   a real directory owned by the node's user in an `agents/` that is itself
-  one, named by one plain name not starting with `.` and without control
-  characters. One not yet running is admitted with the user `pool.json` records for
-  it (a restart: the home is kept), or else with a fresh user if it holds a
+  one, named by one plain name not starting with `.` and without commas,
+  colons (the id rides in the passwd comment field) or control
+  characters. One not yet running whose id names a user is admitted with
+  it (a restart: the home is kept), or else with a new user if it holds a
   regular `config.json`; otherwise it is left alone. Failures are logged once
   and retried next poll. A known agent is kept unless its control directory
   is certainly gone. A `config.json` in an admitted agent's control directory
   is ignored.
-- **Starting config.** Before a new agent is given a user, its starting
-  `config.json` is read through the parent's helper and checked against
-  `providers.json` (no plugin runs from the poll; without the cache the
-  check is skipped and the first run's gate reports). An invalid one, like
-  one over 1 MiB, keeps the agent out (see Admission errors) and is checked
-  again each poll, so the parent fixes it in place.
-- **Admission.** Take the lowest free pool user and record it in
-  `pool.json`; prepare the home (2750, setgid); start the user's helper;
-  clear what a previous holder left; set the group's members; create the
-  harness directories where missing (`inbox/.tmp` among them; `private`;
-  anything else of that name
-  is left alone and logged once); write the seed `README.md` where
-  missing; move the starting `config.json` into the home unless it
-  already has one; enable lingering; create the journal directory; write
-  the `home` link (never recreating a control directory that was removed);
-  create the parent's spool `.messages/agents/NAME` (`private`; a failure
-  is logged). A failed step is retried next poll. The control directory's
+- **Admission.** Unless the agent already has a user: refuse when
+  `max_agents` users exist, else create the user `agent-N` for the lowest
+  N no user has, its id in the comment. Prepare the home (2750, setgid)
+  and the inbox (1770, see Messages); start the user's helper; clear what
+  a previous user of the name may have left in the home; set the group's
+  members; create `inbox/processed` and `agents/` where missing (`mkdir`
+  0750; an existing directory of the user's is left as it is, anything
+  else of that name fails the step); move a pre-0.9.0 `~/inbox` directory
+  to `~/inbox.0.8.0` and its regular files into the inbox; link `~/inbox`;
+  write the seed `README.md` where missing; grant the user `wx` on its
+  parent's inbox (not for root's children); move the starting `config.json` into the home
+  unless it already has one; enable lingering; create the journal
+  directory; write the `home` link (never recreating a control directory
+  that was removed). A failed step is retried next poll. The control directory's
   device and inode are part of the agent's identity, so renaming or
   recreating it makes a new agent. A deleted `home` link is written again
   only at the next admission (a restart), so `rm -r` of a control directory
   never races it.
-- **Admission errors.** An invalid starting `config.json` or one over 1 MiB,
-  or no free pool user ("Agent limit reached"), keeps the agent out: the reason goes to its
-  `ERROR` and the service log, and the parent's inbox is told once per
-  reason (root's children: the service log only).
+- **Admission errors.** `max_agents` users existing ("Agent limit reached")
+  keeps the agent out: the reason goes to its `ERROR` and the service log, and the
+  parent's inbox is told once per reason (root's children: the service log
+  only). A starting `config.json` over 1 MiB fails adoption, which is
+  logged once and retried each poll until the parent shrinks it in place.
 - **Runs.** One goroutine per agent, one run at a time.
 - **Graceful stop.** On SIGTERM, start no new runs or deliveries and let
   active runs finish for up to 15 minutes; any still going are interrupted
@@ -180,26 +186,23 @@ directories and spools but no loop, inbox, journal or owner.
 - **Removal.** When a control directory disappears or is replaced, its agent
   and all descendants are removed, deepest first: each loop kills its
   running command, writes the end marker (`reason: "removed"`) and exits,
-  then its user is reclaimed. Journals remain.
-- **Reclaim.** Mark the user `reclaiming`; disable lingering; remove its
-  crontab; stop its user manager and kill its processes; remove its home's
-  contents (making its directories writable first) and its files in `/tmp`,
-  `/var/tmp` and `/dev/shm`; move its journal directory to the nearest
-  remaining ancestor's group. Its group is cleared and the user freed only
-  after every descendant is reclaimed. An interrupted reclaim finishes on
-  the next start; a failed one is retried every poll.
+  then its user is deleted. Journals remain.
+- **Deletion.** Mark the user removed (its comment becomes `removed,` and
+  the id, a comma being impossible in an id, so a control directory made
+  again under that id gets a new user rather than this one); disable lingering; remove its crontab; stop its
+  user manager and kill its processes; remove its files in `/tmp`,
+  `/var/tmp` and `/dev/shm`, as the user; move its journal directory to
+  the nearest remaining ancestor's group; remove its inbox (as root, under
+  root's directory, following no link); `userdel -r`, which removes the
+  home and the group and takes the user out of its descendants' groups. An
+  interrupted deletion finishes on the next start, from the mark; a failed
+  one is retried every poll.
 
 ### Known limits
 
-- After starting with the journals moved aside, the daemon does not stop
-  what the pool users were running; root does (README, "If pool.json is
-  lost").
-- A restored `pool.json` older than the last admission or removal can make
-  the daemon wipe the home of an agent that now holds a reused user; the
-  latest backup cannot.
 - While stat fails on a not-yet-running child's control directory, messages
   for it wait.
-- Reclaim leaves links in `/home`. An installation upgraded from 0.3 has
+- Deletion leaves links in `/home`. An installation upgraded from 0.3 has
   `/home/agent` leading to main's home, which nothing removes.
 
 ## The loop
@@ -211,27 +214,20 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
   included, and skips directories.
 - **Staging.** Every file the harness writes into an inbox (a message, a
   note) is written through the agent's helper with its temporary file in
-  `inbox/.tmp`, which collection skips, so a run never collects one half
-  written; a missing `inbox/.tmp` is created and the write repeated.
-  Admission removes files left there, before the agent's loop starts and
-  from the poll goroutine, so no write is in progress.
-- **Labels.** An inbox file is read (up to 16 MiB) and hashed; it is
-  labelled `owner` or `agents/NAME` only if the agent path, file name and
-  SHA-256 match a `delivered.jsonl` record with that sender.
-- **Images.** Detected with `http.DetectContentType`; dimensions are read
-  from the header before the whole image is decoded. A shown image is
-  copied into the journal directory first; one whose copy cannot be saved
-  is not shown. The anthropic API's 32 MB request limit is reported by its
-  plugin as `context_overflow`.
-- **Upgrades.** Before collecting the inbox, the daemon reads the first
-  line of the agent's newest run file (the `start` record) for its
-  `version`. When the running version and that one are both release
-  versions and the previous is older, it writes the upgrade note through
-  the agent's helper, holding the `## X.Y.Z` sections of the embedded
-  release notes newer than the previous version, up to the running one; no
-  recorded version counts as 0.5.1, the last release that delivered notes.
-  The note is written before the new run's `start` record, so a crash
-  between them can only repeat it. No state is kept outside the journal.
+  the agent's home directory and renamed into the inbox, so a run never
+  collects one half written. A crash leaves at worst a dot-file in the
+  home.
+- **Labels.** An inbox file is labelled by the uid the helper's listing
+  reports as its owner: the parent's uid (root's for a top-level agent) is
+  `owner`, the uid of a running child of the agent is `agents/NAME`, and
+  anything else is `data`. The kernel set the uid, so nothing an agent
+  writes carries another's label.
+- **Images.** Detected with `http.DetectContentType` and shown when the
+  type is in the model's `image_types`; a file longer than the 16 MiB read
+  limit is a binary note. Size and decoding limits are the plugin's. A
+  shown image is copied into the journal directory first; one whose copy
+  cannot be saved is not shown. The anthropic API's 32 MB request limit is
+  reported by its plugin as `context_overflow`.
 - **First-call guard.** A `context_overflow` on a run's first call writes
   `ERROR` instead of the reset note and waits for new input, so resets
   cannot loop.
@@ -243,24 +239,35 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
 
 ## Messages
 
-What agents send and receive is the manual's "Messages". Delivery:
+What agents send and receive is the manual's "Messages". The daemon is not
+in the path: the sender writes the file into the recipient's inbox, and
+the kernel's record of who wrote it is the label (see Labels).
 
-- **Up** is `~/.messages/`; **down** is `.messages/agents/NAME/` under the
-  sender's home (root: under `/etc/agent`). Root has no up spool.
-- Each poll, the daemon reads every spool through its owner's helper:
-  regular non-dot files owned by the spool's user, in name order; anything
-  else is logged and ignored. The spool's location identifies the sender.
-  Up from a top-level agent is appended to its conversation log only; a
-  message for a child that can no longer be admitted is dropped with a note
-  to the sender (root: the service log). A file over 64 KiB is read to its
-  first 64 KiB, delivered with "[message truncated]", and the sender is
-  told with a note once it is delivered (root: the service log).
-- The `delivered.jsonl` record is written first, then the inbox file, then
-  the conversation log, then the spool file is removed, so a crash can only
-  duplicate a message. A failing delivery is retried every poll under the
-  same name.
-- **Conversation logs** are `messages.jsonl` in the agent's journal
-  directory, root-owned 0640 in its group, written only by the daemon.
+- **Where.** An agent's inbox is `/home/.inbox/agent-N/`, outside its home,
+  under a root-owned directory anyone may traverse but not list: a
+  subagent reaches its owner's inbox without entering the owner's home,
+  which stays closed to it. The daemon creates it as root at admission
+  (the parent directory is root's, so the path cannot have been swapped
+  for a link), 1770 and the agent's; the agent's helper creates
+  `processed/` inside it, and each run links `~/inbox` to it. It shares a
+  filesystem with the homes, so a file staged in a home is renamed in.
+- **Down.** The inbox's group is the agent's own, whose members are its
+  ancestors (see Groups), so its parent writes straight into it; the
+  sticky bit keeps anyone from removing or renaming another's file. Root
+  writes into a top-level agent's inbox as root.
+- **Up.** At admission the daemon grants the child's uid `wx` on the
+  parent's inbox by running `setfacl -m u:UID:wx` on it as the parent
+  through `shell.Run` (never as root), and each run links `~/owner` in the
+  child's home to that inbox. A grant that fails holds admission, logged
+  once and retried. At deletion the grant is revoked the same way, as long
+  as the parent still has a user; a failure is logged and not retried,
+  since a uid that comes back for another agent is labelled `data` anyway.
+  Root has no inbox, so a top-level agent has no `~/owner`.
+- **Links.** The helper never reads through a symlink: a child that
+  swapped its own inbox file for a link cannot make its parent's harness
+  read what the link points at; the file is reported unreadable instead.
+- Nothing is logged: the inbound side is in the recipient's journal, with
+  its label.
 
 ## Journal
 
@@ -277,68 +284,45 @@ Root edits `/etc/agent/agents/NAME/OWNER.md`; an agent edits
 `~/agents/NAME/OWNER.md`. There is no command, and the installer never
 touches it. It is read through the parent's helper. Without content, the
 first segment is the system prompt alone, so the cached prefix is
-unchanged. What the agent sees, and the safety check, are in the manual.
+unchanged. What the agent sees is in the manual. The control directory is
+the parent's and the agent has no way into it, so nothing checks its
+owner or mode.
 
 ## Configuration validation
 
-Each run checks `config.json` against the cached `describe` output. On
-failure the reason also goes to the service log; root's children's
-failures go to the log only.
+Each run checks `config.json` against `providers.json`, the cached
+`describe` output: the provider is installed and the model is one of its.
+No plugin runs at a run's start; options are the plugin's to reject, with
+`kind: "invalid_request"`. On failure the reason also goes to the service
+log; root's children's failures go to the log only.
 
-## Plugin protocol (version 1)
+## Plugin protocol
 
-A plugin is an executable. Per call, the daemon writes one JSON request to
-its stdin and reads one JSON response from stdout; stderr goes to the
-service log. Every message carries `"protocol": 1`.
-
-**describe** (`{"protocol": 1, "type": "describe"}`, works without
-credentials) returns:
-- `settings`: `{name, description, secret}` for each environment variable
-  it needs; the installer prompts for them.
-- `models`: `{id, context_tokens, image_types, options}`. `context_tokens`
-  is the context window where known, for agents choosing a model.
-  `image_types` lists accepted image media types (a 0.5.0 boolean `images`
-  is ignored).
-  `options` maps names to `{description, values}` or
-  `{description, type: "integer", min, max}`.
-- `caching` (optional): text for agents on what the provider caches between
-  calls and for how long, the smallest prompt it caches, where the plugin
-  puts cache markers, and what cache reads and writes cost relative to
-  plain input. An older plugin omits it and an older daemon ignores it, so
-  the protocol version is unchanged.
-
-**complete** sends `model`, `options` (passed through), `system` (`{text}`
-segments, most stable first, for cache markers), `tools` (the `sh`
-definition) and `messages`:
-- `{role: "user", content, images}`, `images` being `{file, media_type,
-  data}` with `data` the raw bytes (base64 in JSON)
-- `{role: "assistant", text, command, wait, call_id, opaque}`
-- `{role: "tool", call_id, content}`
-
-The response is `{text, command, wait, usage: {input_tokens, output_tokens,
-cache_read_tokens, cache_write_tokens}, opaque}` or `{error: {message,
-kind}}`. `wait` is the model's argument passed through unchanged (absent
-means the default). `kind: "context_overflow"` is not retried: it ends the
-run with a reset, or triggers the first-call guard. The daemon assigns
-`call_id`; `opaque` is stored on the assistant message and returned in later
-requests (reasoning blocks, signatures). A plugin returns at most one
-command and disables parallel tool calls.
-
-The daemon interprets only `image_types`; `usage` is journaled and
-`caching` cached in `providers.json`, neither interpreted.
+The protocol (version 1) is a public contract, in [plugins.md](plugins.md)
+with what plugin authors need: `describe`, `complete`, the error kinds and
+the image rule. How the daemon acts on it: a `context_overflow` ends the
+run with a reset or triggers the first-call guard; an `invalid_request`
+ends the run with reason `invalid` and the message in `ERROR`; anything
+else is retried. The daemon interprets only `image_types` and the error
+kinds; `usage` is journaled and `caching` cached in `providers.json`,
+neither interpreted. An older plugin that omits `caching` still works, so
+the version is unchanged.
 
 ## Plugins
 
-Sources live in `plugins/<name>/`. `plugins/index.json` lists each plugin's
-version and per-architecture SHA-256 and is compiled into `agent`; releases
-publish each as `plugin-<name>-linux-<arch>`, and `agent provider install`
-accepts only a file matching the index.
+Sources live in `plugins/<name>/`; releases publish each as
+`plugin-<name>-linux-<arch>`, and `install.sh` verifies the ones it
+installs against the checksums pinned in it. `agent provider install`
+itself verifies nothing: root installs any plugin it chooses, from a file
+or a URL.
 
 - **anthropic**: Messages API, `ANTHROPIC_API_KEY`. Cache markers on each
   system segment (at most the last three) and the latest message. Declares
-  JPEG, PNG, GIF and WebP (WebP still arrives as a note); each image follows
-  its message's text as a text block naming the file and an image block.
-  HTTP 413 is `context_overflow`. Exposes the models' reasoning settings as
+  JPEG, PNG and GIF; each image follows its message's text as a text block
+  naming the file and an image block. An image over 5 MiB, undecodable, or
+  over 8000 px a side is replaced by a text block saying so and naming the
+  file, so the request still goes through. HTTP 413 is `context_overflow`
+  and a 400 that is not an overflow is `invalid_request`. Exposes the models' reasoning settings as
   options, taken from the current Anthropic documentation. Its `caching`
   text gives the 5-minute lifetime, the read and write multipliers and each
   model's minimum cacheable prompt, from the current documentation.
@@ -355,9 +339,9 @@ accepts only a file matching the index.
 ## The binary
 
 `agent daemon` (the service, root only), the hidden `agent _fsio` (the file
-helper), `agent provider install NAME FILE` (root: install a plugin binary
-whose SHA-256 matches the index for NAME and this architecture, prompt for
-missing settings and refresh `providers.json`; downloads nothing) and
+helper), `agent provider install NAME SOURCE` (root: install the plugin
+binary at SOURCE, a file or an http(s) URL of at most 64 MiB, as NAME,
+prompt for missing settings and refresh `providers.json`) and
 `agent help`. The commands 0.7.0 kept (`new`, `remove`, `send`, `message`,
 `messages`, `log`, `provider describe`, `version`) were removed in 0.8.0.
 
@@ -386,8 +370,8 @@ ordinary file of its own, which the harness neither reads nor writes.
 curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo sh
 ```
 
-`install.sh` takes no options and pins its version and the `agent` binary's
-checksums (which pin the plugins'). It:
+`install.sh` takes no options and pins its version and the checksums of
+the `agent` binary and the release's plugins. It:
 1. Installs `acl` if `setfacl` is missing, downloads the binary from the
    release into a root-only temporary directory and verifies it.
 2. Treats a machine with `/var/lib/agent/version` or `/etc/agent/agents/main`
@@ -395,25 +379,25 @@ checksums (which pin the plugins'). It:
    0.4.1 (upgrade with the v0.4.1 `install.sh` first).
 3. Stops the service (runs finish first), installs the binary, keeping the
    previous one to restore if anything fails before the service starts, and
-   creates `agent-provider` and the directories above, root's spools
-   `/etc/agent/.messages` and `.messages/agents` included (0700).
-4. Creates missing pool users, each with its own group and an empty home.
-5. Fresh install: asks for a provider, downloads and installs it with
-   `agent provider install` (which prompts for its settings), and asks for a
-   model. Upgrade: reinstalls each installed plugin, keeping the old one
-   with a warning if that fails.
-6. Installs and starts the service, then writes `/var/lib/agent/version`.
-7. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
+   creates `agent-provider` and the directories above.
+4. Fresh install: asks for a provider, downloads it, verifies it against
+   the pinned checksum, installs it with `agent provider install` (which
+   prompts for its settings), and asks for a model. Upgrade: reinstalls
+   each installed plugin the same way, keeping the old one with a warning
+   if that fails.
+5. Installs and starts the service, then writes `/var/lib/agent/version`.
+6. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
    `config.json`, saying how to retry if that fails; the daemon admits it.
 
 **Releases** are reproducible (`CGO_ENABLED=0`, `-trimpath`, empty build ID,
 toolchain pinned in `go.mod`). `scripts/release.sh` builds everything and
-writes `plugins/index.json` and the checksums in `install.sh`; the tag's
-workflow rebuilds and refuses to publish if any checksum differs.
+writes the checksums in `install.sh`; the tag's workflow rebuilds and
+refuses to publish if any checksum differs.
 
 ## Tests
 
 Paths, user names and timings are configurable, so tests run in a temporary
-root against the replay plugin. Privilege tests need root and a throwaway
-pool of real users (`AGENT_ROOT_TESTS=1`); they run in CI, and on a
-machine with live agents they need their own temporary root and users.
+root against the replay plugin. Privilege tests need root
+(`AGENT_ROOT_TESTS=1`) and create real users under a test prefix; they run
+in CI, and on a machine with live agents they need their own temporary
+root.

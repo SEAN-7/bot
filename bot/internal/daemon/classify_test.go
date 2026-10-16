@@ -2,11 +2,7 @@ package daemon
 
 import (
 	"bytes"
-	"encoding/binary"
-	"hash/crc32"
 	"image"
-	"image/color/palette"
-	"image/gif"
 	"image/jpeg"
 	"image/png"
 	"strings"
@@ -21,15 +17,6 @@ func encodePNG(w, h int) []byte {
 	return b.Bytes()
 }
 
-// hugePNG is a small PNG whose header declares 100000x100000 px.
-func hugePNG() []byte {
-	b := encodePNG(4, 4)
-	binary.BigEndian.PutUint32(b[16:], 100000)
-	binary.BigEndian.PutUint32(b[20:], 100000)
-	binary.BigEndian.PutUint32(b[29:], crc32.ChecksumIEEE(b[12:29]))
-	return b
-}
-
 func encodeJPEG(w, h int) []byte {
 	var b bytes.Buffer
 	if err := jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
@@ -38,48 +25,31 @@ func encodeJPEG(w, h int) []byte {
 	return b.Bytes()
 }
 
-func encodeGIF(w, h int) []byte {
-	var b bytes.Buffer
-	if err := gif.Encode(&b, image.NewPaletted(image.Rect(0, 0, w, h), palette.Plan9), nil); err != nil {
-		panic(err)
-	}
-	return b.Bytes()
-}
-
+// The harness detects a file's type and shows it as an image when the model
+// accepts that type, bytes unchanged; limits and decoding are the plugin's.
 func TestClassify(t *testing.T) {
 	const path = "/home/x/inbox/processed/f"
 	webp := append([]byte("RIFF\x24\x00\x00\x00WEBPVP8 "), make([]byte, 32)...)
 	tests := []struct {
 		name  string
 		data  []byte
-		size  int64 // 0 means len(data)
-		path  string
+		size  int64    // 0 means len(data)
 		types []string // nil means JPEG, PNG and GIF
 		text  bool
 		media string // expected shown media type, empty when no image is shown
-		w, h  int
-		want  []string // substrings of the content
+		want  []string
 	}{
-		{name: "PNG shown", data: encodePNG(40, 30), media: "image/png", w: 40, h: 30, want: []string{"[image/png 40x30, ", " bytes, shown below]"}},
-		{name: "JPEG shown", data: encodeJPEG(20, 10), media: "image/jpeg", w: 20, h: 10},
-		{name: "GIF shown", data: encodeGIF(5, 5), media: "image/gif", w: 5, h: 5},
-		{name: "JPEG named png", data: encodeJPEG(8, 8), path: "/home/x/inbox/processed/photo.png", media: "image/jpeg", w: 8, h: 8},
-		{name: "too large", data: encodePNG(4, 4), size: 5<<20 + 1, want: []string{"is over the 5 MiB limit", path}},
-		{name: "too wide", data: encodePNG(2001, 10), want: []string{"2001x10 is over 2000 px", path}},
-		{name: "too tall", data: encodePNG(10, 2001), want: []string{"10x2001"}},
-		{name: "huge declared size", data: hugePNG(), want: []string{"100000x100000 is over 2000 px"}},
-		{name: "2000 px exactly", data: encodePNG(2000, 2000), media: "image/png", w: 2000, h: 2000},
-		{name: "half-written JPEG", data: encodeJPEG(64, 64)[:40], want: []string{"could not decode it", path}},
-		{name: "WebP", data: webp, want: []string{"image/webp is not supported", path}},
-		{name: "no-image model", data: encodePNG(4, 4), types: []string{}, want: []string{"does not accept images", path}},
-		{name: "WebP to a no-image model", data: webp, types: []string{}, want: []string{"does not accept images"}},
-		{name: "WebP declared but not checkable", data: webp, types: []string{"image/jpeg", "image/png", "image/gif", "image/webp"}, want: []string{"image/webp is not supported, only image/jpeg, image/png, image/gif;"}},
-		{name: "PNG not declared", data: encodePNG(4, 4), types: []string{"image/jpeg"}, want: []string{"image/png is not supported, only image/jpeg;"}},
-		{name: "only WebP declared", data: encodePNG(4, 4), types: []string{"image/webp"}, want: []string{"does not accept images"}},
+		{name: "png accepted", data: encodePNG(40, 30), media: "image/png", want: []string{"[image/png, ", " bytes, shown below]"}},
+		{name: "jpeg accepted", data: encodeJPEG(20, 10), media: "image/jpeg"},
+		{name: "webp accepted is shown unchecked", data: webp, types: []string{"image/webp"}, media: "image/webp"},
+		{name: "half-written jpeg is shown unchecked", data: encodeJPEG(64, 64)[:40], media: "image/jpeg"},
+		{name: "png not accepted", data: encodePNG(4, 4), types: []string{"image/jpeg"}, want: []string{"[binary file not shown: image/png, ", path}},
+		{name: "no-image model", data: encodePNG(4, 4), types: []string{}, want: []string{"[binary file not shown: image/png, "}},
+		{name: "oversized image is binary note", data: encodePNG(4, 4), size: 16<<20 + 1, want: []string{"[binary file not shown: image/png, 16777217 bytes", path}},
 		{name: "binary", data: []byte{0xff, 0x00, 0x01, 0x02}, want: []string{"[binary file not shown:", "4 bytes", path}},
-		{name: "Latin-1 text", data: []byte("caf\xe9 au lait"), want: []string{"[binary file not shown: not valid UTF-8 text, 12 bytes."}},
-		{name: "UTF-8 text", data: []byte("héllo"), text: true},
-		{name: "rune cut by read limit", data: []byte("héllo")[:2], size: 100, text: true},
+		{name: "latin-1 text is binary", data: []byte("caf\xe9 au lait"), want: []string{"[binary file not shown: not valid UTF-8 text, 12 bytes."}},
+		{name: "utf-8 text", data: []byte("héllo"), text: true},
+		{name: "truncated rune at read limit is text", data: []byte("héllo")[:2], size: 100, text: true},
 		{name: "invalid byte before the cut", data: []byte("a\xffb\xc3"), size: 100, want: []string{"[binary file not shown:"}},
 	}
 	for _, tc := range tests {
@@ -88,15 +58,11 @@ func TestClassify(t *testing.T) {
 			if size == 0 {
 				size = int64(len(tc.data))
 			}
-			p := tc.path
-			if p == "" {
-				p = path
-			}
 			types := tc.types
 			if types == nil {
 				types = []string{"image/jpeg", "image/png", "image/gif"}
 			}
-			text, content, img := classify(tc.data, size, p, types)
+			text, content, img := classify(tc.data, size, path, types)
 			if text != tc.text {
 				t.Fatalf("text = %v, want %v (content %q)", text, tc.text, content)
 			}
@@ -111,11 +77,8 @@ func TestClassify(t *testing.T) {
 				if img == nil {
 					t.Fatalf("image not shown; content %q", content)
 				}
-				if img.MediaType != tc.media || img.Width != tc.w || img.Height != tc.h {
-					t.Errorf("img = %s %dx%d, want %s %dx%d", img.MediaType, img.Width, img.Height, tc.media, tc.w, tc.h)
-				}
-				if !bytes.Equal(img.Data, tc.data) {
-					t.Error("img.Data differs from the input")
+				if img.MediaType != tc.media || !bytes.Equal(img.Data, tc.data) {
+					t.Errorf("img = %s, %d bytes; want %s, %d bytes", img.MediaType, len(img.Data), tc.media, len(tc.data))
 				}
 			}
 			for _, w := range tc.want {

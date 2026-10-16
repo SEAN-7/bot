@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -60,7 +59,7 @@ func run(args []string, e env) error {
 		return daemon.Run(ctx, daemon.DefaultConfig(self))
 	case "provider":
 		if len(args) != 4 || args[1] != "install" {
-			return errors.New("usage: agent provider install NAME FILE")
+			return errors.New("usage: agent provider install NAME FILE|URL")
 		}
 		if !e.root() {
 			return errors.New("agent provider install needs root (sudo)")
@@ -83,15 +82,14 @@ func runner(l layout.Layout) (*plugin.Runner, error) {
 	return &plugin.Runner{PluginDir: l.Plugins(), CredDir: l.Credentials(), User: cred, Timeout: 2 * time.Minute, Stderr: os.Stderr}, nil
 }
 
-// install installs the plugin binary install.sh downloaded to file as name.
-func install(ctx context.Context, l layout.Layout, name, file string) error {
+// install installs the plugin binary at source, a file or a URL, as name.
+func install(ctx context.Context, l layout.Layout, name, source string) error {
 	r, err := runner(l)
 	if err != nil {
 		return err
 	}
-	err = cli.Install(ctx, name, file, cli.InstallOptions{
+	err = cli.Install(ctx, name, source, cli.InstallOptions{
 		Layout:        l,
-		Arch:          runtime.GOARCH,
 		ProviderGroup: "agent-provider",
 		Prompt:        prompt,
 		Runner:        r,

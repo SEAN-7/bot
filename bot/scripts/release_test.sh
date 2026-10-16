@@ -3,8 +3,8 @@
 set -eu
 cd "$(dirname "$0")/.."
 backup=$(mktemp -d)
-cp install.sh plugins/index.json "$backup/"
-restore() { cp "$backup/install.sh" install.sh; cp "$backup/index.json" plugins/index.json; rm -rf "$backup"; }
+cp install.sh "$backup/"
+restore() { cp "$backup/install.sh" install.sh; rm -rf "$backup"; }
 trap restore EXIT
 
 sh -n install.sh
@@ -14,8 +14,8 @@ tail -n 1 install.sh | grep -q '^main "\$@"$' || { echo "install.sh must end by 
 
 sh scripts/release.sh 0.0.0-test >/dev/null
 cp dist/SHA256SUMS "$backup/first"
-grep -q '"version": "0.0.0-test"' plugins/index.json
 grep -q '^VERSION=0.0.0-test$' install.sh
+grep -q '^SHA_plugin_openai_compatible_linux_arm64=' install.sh
 sh scripts/release.sh 0.0.0-test >/dev/null
 cmp "$backup/first" dist/SHA256SUMS || { echo "builds are not reproducible" >&2; exit 1; }
 

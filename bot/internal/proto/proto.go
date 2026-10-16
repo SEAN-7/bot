@@ -58,8 +58,13 @@ type Error struct {
 	Kind    string `json:"kind,omitempty"`
 }
 
-// ErrContextOverflow: the request exceeds the model's context window.
+// ErrContextOverflow: the request exceeds the model's context window. The
+// daemon ends the run with a context reset instead of retrying.
 const ErrContextOverflow = "context_overflow"
+
+// ErrInvalidRequest: the provider rejected the request as malformed (a bad
+// option, say). The daemon ends the run and reports it instead of retrying.
+const ErrInvalidRequest = "invalid_request"
 
 type CompleteRequest struct {
 	Protocol int            `json:"protocol"`

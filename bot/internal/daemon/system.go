@@ -1,23 +1,45 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/osuser"
+	"github.com/SEAN-7/bot/internal/shell"
 )
 
 // System is the daemon's root-only side effects, behind an interface so tests
 // that cannot be root can substitute a fake.
 type System interface {
+	// AddUser creates the agent user name with its own group, home as its
+	// home directory (not created) and the agent id as its GECOS comment.
+	AddUser(name, id, home string) error
+	// DeleteUser removes the user, its group and its home. A user that is
+	// already gone is not an error.
+	DeleteUser(name string) error
+	// SetComment makes id the user's GECOS comment.
+	SetComment(name, id string) error
+	// Users lists the users named prefix followed by digits, with the agent
+	// id each carries in its comment ("" for none), by name.
+	Users(prefix string) ([]User, error)
 	// PrepareHome creates home if missing and makes the user own it, setgid.
 	PrepareHome(user, home string) error
+	// PrepareInbox creates the user's inbox directory if missing, 1770 and
+	// owned by the user, under the root-owned inboxes directory.
+	PrepareInbox(user, inbox string) error
+	// ShareInbox grants (or revokes) uid write and search access to the
+	// user's inbox, as user, who owns it: setfacl, run as the owner so that
+	// a planted link reaches nothing root could.
+	ShareInbox(user, inbox string, uid int, grant bool) error
 	// SetMembers makes members the whole membership of group.
 	SetMembers(group string, members []string) error
 	EnableLinger(user string) error
@@ -27,9 +49,13 @@ type System interface {
 	RemoveCrontab(user string) error
 }
 
+// User is an agent user and the agent id in its comment.
+type User struct{ Name, ID string }
+
 type execSystem struct {
 	run    func(name string, args ...string) ([]byte, error)
 	lookup func(string) (*syscall.Credential, error)
+	passwd string // the passwd file Users reads
 }
 
 func newExecSystem() System {
@@ -38,7 +64,63 @@ func newExecSystem() System {
 			return exec.Command(name, args...).CombinedOutput()
 		},
 		lookup: osuser.Lookup,
+		passwd: "/etc/passwd",
 	}
+}
+
+func (s *execSystem) AddUser(name, id, home string) error {
+	return s.do("useradd", "--no-create-home", "--home-dir", home, "--user-group", "--shell", "/bin/bash", "--comment", id, name)
+}
+
+// DeleteUser runs userdel -r; its exit status 6 means no such user.
+func (s *execSystem) DeleteUser(name string) error {
+	out, err := s.run("userdel", "-r", name)
+	var ee *exec.ExitError
+	if errors.As(err, &ee) && ee.ExitCode() == 6 {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("userdel -r %s: %v: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (s *execSystem) SetComment(name, id string) error {
+	return s.do("usermod", "-c", id, name)
+}
+
+// Users reads the passwd file: agents are local users, and the file is the
+// record. The comment is the whole GECOS field, as the daemon wrote it
+// (cleanName keeps commas and colons out of ids, so it round-trips).
+func (s *execSystem) Users(prefix string) ([]User, error) {
+	data, err := os.ReadFile(s.passwd)
+	if err != nil {
+		return nil, err
+	}
+	var users []User
+	for _, line := range strings.Split(string(data), "\n") {
+		f := strings.Split(line, ":")
+		if len(f) < 5 || !isAgentUser(f[0], prefix) {
+			continue
+		}
+		users = append(users, User{f[0], f[4]})
+	}
+	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
+	return users, nil
+}
+
+// isAgentUser reports whether name is prefix followed by one or more digits.
+func isAgentUser(name, prefix string) bool {
+	digits, ok := strings.CutPrefix(name, prefix)
+	if !ok || digits == "" {
+		return false
+	}
+	for _, r := range digits {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // killPause is the wait between kill attempts; tests shorten it.
@@ -70,6 +152,54 @@ func (s *execSystem) PrepareHome(user, home string) error {
 		return fmt.Errorf("%s is not a directory", home)
 	}
 	return os.Chmod(home, 0o750|fs.ModeSetgid)
+}
+
+func (s *execSystem) PrepareInbox(user, inbox string) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	if cred == nil {
+		return fmt.Errorf("no such user %q", user)
+	}
+	// The parent directory is root's and nobody else creates entries in
+	// it, so the path cannot have been swapped for a link.
+	if err := os.Mkdir(inbox, 0o770|fs.ModeSticky); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(inbox)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", inbox)
+	}
+	if err := os.Lchown(inbox, int(cred.Uid), int(cred.Gid)); err != nil {
+		return err
+	}
+	return os.Chmod(inbox, 0o770|fs.ModeSticky)
+}
+
+func (s *execSystem) ShareInbox(user, inbox string, uid int, grant bool) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	command := fmt.Sprintf("setfacl -x u:%d %s", uid, shellQuote(inbox))
+	if grant {
+		command = fmt.Sprintf("setfacl -m u:%d:wx %s", uid, shellQuote(inbox))
+	}
+	home := filepath.Dir(filepath.Dir(inbox)) // not entered: the command runs from /
+	result, err := shell.Run(context.Background(), command, shell.Options{
+		Dir: "/", Home: home, Env: shell.Env(home, user, credUID(cred)), User: cred, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%s: exit status %d: %s", command, result.ExitCode, strings.TrimSpace(result.Output))
+	}
+	return nil
 }
 
 func (s *execSystem) SetMembers(group string, members []string) error {

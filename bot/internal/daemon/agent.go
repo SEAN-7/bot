@@ -19,6 +19,7 @@ type agent struct {
 	id     string       // the path from root (main, main/agents/research), "" for root: keys journals, pool and deliveries
 	name   string       // the id, or "root", in the service log
 	home   string       // RootHome for root
+	inbox  string       // the inbox directory, outside the home; "" for root, which has none
 	ctrl   string       // the real control directory, in the parent's home; "" for root
 	ctrlID fileID       // ctrl as admitted: a directory created again there is another agent
 	user   string       // a pool user, or cfg.RootUser for root
@@ -27,8 +28,7 @@ type agent struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{} // closed when loop returns; root has no loop
 
-	failedConfig string // hash of a config.json already reported invalid
-	failedOwner  string // the OWNER.md error already logged
+	lastError string // the ERROR text already logged, "" once cleared
 }
 
 // fileID identifies a file by device and inode.

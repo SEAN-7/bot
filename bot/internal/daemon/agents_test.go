@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -126,10 +124,10 @@ func TestParentChildReport(t *testing.T) {
 	h.markParent()
 	h.drop(h.mainHome, "go.md", "make a child")
 	waitFor(t, "parent receiving the report", func() bool {
-		return h.sawRecord(`"file":"inbox/processed/`, `-c.md","from":"agents/c","content":"report: hi"}`)
+		return h.sawRecord(`"file":"inbox/processed/`, `"content":"report: hi"}`)
 	})
-	if !h.sawRecord(`-owner.md","from":"owner","content":"child-task: say hi"}`) {
-		t.Fatal("child task not delivered from owner")
+	if !h.sawRecord(`"content":"child-task: say hi"}`) {
+		t.Fatal("child task not delivered")
 	}
 	if records := h.waitEnds(childID("c"), 1); lastEnd(records) != "done" {
 		t.Fatalf("child end %v", records)
@@ -193,25 +191,26 @@ func TestRemoveDuringAdmissionNotUndone(t *testing.T) {
 	}
 }
 
-func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
-	h := newHarness(t, step("sleep 0.5", 100), done())
+// settings.json is read when the daemon starts; a later change waits for a
+// restart.
+func TestSettingsReadOnceAtStart(t *testing.T) {
+	h := newHarness(t)
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
+	other := topLevel(t, h, "other")
 	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
-	os.WriteFile(h.cfg.SettingsFile(), []byte("{"), 0o644)
-	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
-		t.Fatalf("run ended %q after settings.json broke", end)
+	errorFile := filepath.Join(other, "ERROR")
+	waitFor(t, "limit ERROR", func() bool { return fileContains(errorFile, "Agent limit reached (max_agents=1)") })
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":4}`), 0o644)
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Lstat(filepath.Join(other, "home")); !os.IsNotExist(err) {
+		t.Fatal("other admitted after settings.json changed")
 	}
-	if fileContains(filepath.Join(h.mainCtrl, "ERROR"), "Agent limit") {
-		t.Fatal("broken settings treated as max_agents=0")
-	}
-	time.Sleep(100 * time.Millisecond)
-	if n := strings.Count(h.logs.String(), "settings"); n != 1 {
-		t.Fatalf("settings error logged %d times", n)
+	if strings.Contains(h.logs.String(), "settings.json:") {
+		t.Fatalf("settings logged after start:\n%s", h.logs)
 	}
 }
 
-func TestAdmissionSeedsPoolHome(t *testing.T) {
+func TestAdmissionSeedsHome(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "pwd; cat README.md | head -1", 100), `{"match":"inbox/processed/task.md","text":"done"}`)
 	h.start()
 	ctrl := makeChild(t, h, "c", true)
@@ -225,11 +224,23 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 		}
 	}
 	// The harness's directories are its ancestors' to read (the home's
-	// group), not its children's, should it let them through its home.
-	for _, p := range []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"} {
-		if info, err := os.Lstat(filepath.Join(home, p)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
+	// group), not its children's, should it let them through its home. The
+	// inbox, outside the home, is also its ancestors' to write into, and
+	// sticky; ~/inbox links to it.
+	inbox := h.cfg.Inbox("agent-2")
+	if info, err := os.Lstat(inbox); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&fs.ModeSticky == 0 {
+		t.Fatalf("inbox: %v %v", info, err)
+	}
+	if target, err := os.Readlink(filepath.Join(home, "inbox")); err != nil || target != inbox {
+		t.Fatalf("~/inbox %q %v", target, err)
+	}
+	for _, p := range []string{filepath.Join(inbox, "processed"), filepath.Join(home, "agents")} {
+		if info, err := os.Lstat(p); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
 			t.Fatalf("%s: %v %v", p, info, err)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".messages")); !os.IsNotExist(err) {
+		t.Fatalf("a spool was created: %v", err)
 	}
 	h.drop(home, "task.md", "work")
 	h.waitEnds(childID("c"), 1) // journals are keyed by the path from root
@@ -246,30 +257,25 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 }
 
 // A harness directory that is not a real directory the agent owns (a link,
-// a file) is left alone, no link followed, and named in the service log once
-// per daemon run, so a directory left open is visible, also when admission
-// is retried.
-func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
+// a file) keeps the agent from being admitted: logged once, no link
+// followed, nothing replaced, and admitted once the agent's owner puts a
+// directory there.
+func TestHarnessDirNotADirectoryHoldsAdmission(t *testing.T) {
 	h := newHarness(t)
-	sys := h.cfg.System.(*fakeSystem)
 	h.start()
 	h.stop()
-	processed, spools := filepath.Join(h.mainHome, "inbox", "processed"), filepath.Join(h.mainHome, ".messages", "agents")
+	processed := filepath.Join(h.cfg.Inbox("agent-1"), "processed")
 	outside := t.TempDir()
 	os.Chmod(outside, 0o755)
 	os.RemoveAll(processed)
 	os.Symlink(outside, processed)
-	os.RemoveAll(spools)
-	os.WriteFile(spools, nil, 0o644)
-	sys.setFail("linger agent-1", errors.New("linger failed"))
 	h.run()
-	waitFor(t, "admission retried", func() bool { return strings.Count(sys.String(), "linger agent-1") >= 4 })
-	sys.setFail("linger agent-1", nil)
-	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
-	for _, p := range []string{processed, spools} {
-		if n := strings.Count(h.logs.String(), "main: not closed to others: "+p+" "); n != 1 {
-			t.Errorf("%s logged %d times:\n%s", p, n, h.logs)
-		}
+	time.Sleep(300 * time.Millisecond)
+	if n := strings.Count(h.logs.String(), "main: not started: seed home: "+processed+" is not a directory this user owns"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, h.logs)
+	}
+	if strings.Count(h.logs.String(), "main: admitted as agent-1") != 1 {
+		t.Fatal("admitted with a link in place of a harness directory")
 	}
 	if info, _ := os.Lstat(processed); info.Mode()&fs.ModeSymlink == 0 {
 		t.Errorf("inbox/processed link replaced: %v", info.Mode())
@@ -277,11 +283,9 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
 		t.Errorf("followed a link: %v", info.Mode())
 	}
-	// The empty file is also a message in main's spool, which the daemon
-	// may have delivered and removed by now; it must not become a directory.
-	if info, err := os.Lstat(spools); err == nil && !info.Mode().IsRegular() {
-		t.Errorf(".messages/agents file replaced: %v", info.Mode())
-	}
+	os.Remove(processed)
+	os.Mkdir(processed, 0o750)
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
 }
 
 func TestConfigErrorGoesToControlDir(t *testing.T) {
@@ -297,6 +301,10 @@ func TestConfigErrorGoesToControlDir(t *testing.T) {
 	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
+	// The parent knows its child as c, not by the child's path from root.
+	if notes := noteTexts(h.mainHome, "-subagent-error.md"); !strings.HasPrefix(notes[0], "Subagent c did not start: config.json: ") {
+		t.Fatalf("parent note %q", notes[0])
+	}
 	if _, err := os.Stat(filepath.Join(home, "ERROR")); !os.IsNotExist(err) {
 		t.Fatal("ERROR written into the subagent's home")
 	}
@@ -305,7 +313,7 @@ func TestConfigErrorGoesToControlDir(t *testing.T) {
 	}
 }
 
-func TestMaxAgentsUsesPool(t *testing.T) {
+func TestMaxAgentsHoldsSubagentBack(t *testing.T) {
 	h := newHarness(t)
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
 	h.start()
@@ -322,8 +330,8 @@ func TestMaxAgentsUsesPool(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(b, "home")); !os.IsNotExist(err) {
 		t.Fatal("b admitted despite the limit")
 	}
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":3}`), 0o644)
-	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-3") {
+	os.RemoveAll(a)
+	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-2") {
 		t.Fatal(home)
 	}
 	waitFor(t, "limit ERROR cleared", func() bool {
@@ -363,6 +371,10 @@ func TestGrandchildAdmitted(t *testing.T) {
 	if !sys.called("members agent-3 agent-2,agent-1") {
 		t.Fatal(sys)
 	}
+	// The grandchild may write into its parent's inbox, the parent into main's.
+	if !sys.inOrder("grant agent-1 "+itoa(os.Getuid()), "grant agent-2 "+itoa(os.Getuid())) {
+		t.Fatal(sys)
+	}
 	// The grandchild's id is its path from root, so its journals sit inside
 	// its parent's journal directory whichever user holds the parent.
 	id := childID("c/agents/g")
@@ -370,11 +382,10 @@ func TestGrandchildAdmitted(t *testing.T) {
 		t.Fatalf("grandchild journal dir: %v", err)
 	}
 	if _, err := os.Stat(h.cfg.JournalDir(g)); !os.IsNotExist(err) {
-		t.Fatalf("journal keyed by the pool home path: %v", err)
+		t.Fatalf("journal keyed by the home path: %v", err)
 	}
-	data, _ := os.ReadFile(h.cfg.PoolFile())
-	if !strings.Contains(string(data), `{"user":"agent-3","agent":"`+id+`","state":"active"}`) {
-		t.Fatalf("pool.json %s", data)
+	if users, _ := h.cfg.System.(*fakeSystem).Users("agent-"); len(users) != 3 || users[2] != (User{"agent-3", id}) {
+		t.Fatalf("users %v", users)
 	}
 	h.drop(h.childHome(g), "task.md", "work")
 	if records := h.waitEnds(id, 1); lastEnd(records) != "done" {
@@ -538,28 +549,12 @@ func TestValidControlDir(t *testing.T) {
 	}
 }
 
-func TestMissingPoolUsersLogged(t *testing.T) {
-	h := newHarness(t)
-	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
-		if name == "agent-3" {
-			return nil, errors.New("unknown user")
-		}
-		return nil, nil
-	}
-	h.start()
-	time.Sleep(100 * time.Millisecond)
-	h.stop()
-	if n := strings.Count(h.logs.String(), "pool users not found: agent-3; agents are limited to 3"); n != 1 {
-		t.Fatalf("logged %d times:\n%s", n, h.logs)
-	}
-}
-
 // TestRootChildAdmitted: main is root's child, admitted from root's control
 // directory like any subagent.
 func TestRootChildAdmitted(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
-	if home := h.childHome(h.mainCtrl); home != h.cfg.PoolHome("agent-1") || home != h.mainHome {
+	if home := h.childHome(h.mainCtrl); home != h.cfg.Home("agent-1") || home != h.mainHome {
 		t.Fatalf("main's home %s", home)
 	}
 	for _, p := range []string{"README.md", "inbox/processed", "agents"} {
@@ -567,8 +562,8 @@ func TestRootChildAdmitted(t *testing.T) {
 			t.Fatal(p, err)
 		}
 	}
-	if !strings.Contains(poolJSON(h), `{"user":"agent-1","agent":"main","state":"active"}`) {
-		t.Fatalf("pool.json %s", poolJSON(h))
+	if !onlyMain(h) {
+		t.Fatal(h.cfg.System)
 	}
 	if sys := h.cfg.System.(*fakeSystem); !sys.called("members agent-1 ") {
 		t.Fatalf("root listed among main's group members: %v", sys)
@@ -588,7 +583,7 @@ func TestTwoTopLevelAgentsIsolated(t *testing.T) {
 	research := topLevel(t, h, "research")
 	h.start()
 	mainHome, researchHome := h.childHome(h.mainCtrl), h.childHome(research)
-	if mainHome != h.cfg.PoolHome("agent-1") || researchHome != h.cfg.PoolHome("agent-2") {
+	if mainHome != h.cfg.Home("agent-1") || researchHome != h.cfg.Home("agent-2") {
 		t.Fatalf("homes %s and %s", mainHome, researchHome)
 	}
 	sys := h.cfg.System.(*fakeSystem)
@@ -615,46 +610,8 @@ func TestOwnerMessageFromRoot(t *testing.T) {
 	if from := inboxRecordFrom(h.waitEnds("main", 1), "hi"); from != "owner" {
 		t.Fatalf("labelled %q", from)
 	}
-	log := readRecords(h.cfg.ConversationFile("main"))
-	if len(log) != 1 || log[0]["from"] != "owner" || log[0]["text"] != "hi" {
-		t.Fatalf("conversation %v", log)
-	}
 	if _, err := os.Stat(spooled); !os.IsNotExist(err) {
-		t.Fatalf("spool file kept: %v", err)
-	}
-}
-
-// TestTopLevelMessageLoggedOnly: a top-level agent's message to its owner is
-// logged in its conversation and delivered to no inbox: root has none.
-func TestTopLevelMessageLoggedOnly(t *testing.T) {
-	h := newHarness(t, step(sendMessageText("tests pass"), 100), done())
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	waitFor(t, "message logged", func() bool {
-		log := readRecords(h.cfg.ConversationFile("main"))
-		return len(log) == 1 && log[0]["from"] == "agent" && log[0]["text"] == "tests pass"
-	})
-	waitFor(t, "spool emptied", func() bool {
-		entries, _ := os.ReadDir(filepath.Join(h.mainHome, ".messages"))
-		for _, e := range entries {
-			if !e.IsDir() { // agents/, the down spools, is seeded
-				return false
-			}
-		}
-		return true
-	})
-	if log := readRecords(h.cfg.ConversationFile("main")); log[0]["agent"] != nil {
-		t.Fatalf("record names the agent: %v", log[0])
-	}
-	time.Sleep(100 * time.Millisecond)
-	filepath.WalkDir(h.root, func(path string, e fs.DirEntry, err error) error {
-		if err == nil && strings.HasSuffix(path, "-main.md") {
-			t.Errorf("delivered to an inbox: %s", path)
-		}
-		return nil
-	})
-	if _, err := os.Stat(filepath.Join(h.cfg.RootHome(), "inbox")); !os.IsNotExist(err) {
-		t.Fatalf("root got an inbox: %v", err)
+		t.Fatalf("inbox file kept: %v", err)
 	}
 }
 
@@ -747,7 +704,7 @@ func TestInvalidOwnConfigReportsInControlDir(t *testing.T) {
 	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
-	want := fmt.Sprintf(MsgSubagentFmt, childID("x"), `config.json: unknown model "nope"`)
+	want := fmt.Sprintf(MsgSubagentFmt, "x", `config.json: unknown model "nope"`)
 	if notes := noteTexts(h.mainHome, "-subagent-error.md"); len(notes) != 1 || !strings.HasPrefix(notes[0], want) {
 		t.Fatalf("parent note %q, want %q", notes, want)
 	}
@@ -840,49 +797,6 @@ func TestRootChildHoldBackLoggedOnly(t *testing.T) {
 	noRootInbox(t, h)
 }
 
-// A starting config.json over the size limit is reported in the control
-// directory's ERROR and once to the parent, and takes no user; a smaller one
-// is admitted and clears the ERROR.
-func TestOversizedStartingConfigReported(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := makeChild(t, h, "big", false)
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), oversizedConfig())
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	errorFile := filepath.Join(ctrl, "ERROR")
-	waitFor(t, "ERROR", func() bool { return fileContains(errorFile, text) })
-	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
-	time.Sleep(200 * time.Millisecond)
-	want := fmt.Sprintf(MsgSubagentFmt, childID("big"), text)
-	if notes := noteTexts(h.mainHome, "-subagent-error.md"); len(notes) != 1 || notes[0] != want+"\n" {
-		t.Fatalf("parent notes %q, want %q", notes, want)
-	}
-	if got := fileText(t, errorFile); got != text+"\n" {
-		t.Fatalf("ERROR %q", got)
-	}
-	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
-		t.Fatalf("a user was prepared: %v", sys)
-	}
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), testConfig)
-	h.childHome(ctrl)
-	waitFor(t, "ERROR cleared", func() bool { _, err := os.Lstat(errorFile); return os.IsNotExist(err) })
-}
-
-// For root's child, an oversized starting config.json goes to its ERROR and
-// the service log only.
-func TestOversizedRootChildConfigLoggedOnly(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := filepath.Join(h.cfg.RootHome(), "agents", "big")
-	os.Mkdir(ctrl, 0o700)
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), oversizedConfig())
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	waitFor(t, "ERROR", func() bool { return fileContains(filepath.Join(ctrl, "ERROR"), text) })
-	waitFor(t, "log", func() bool { return strings.Contains(h.logs.String(), "big: not started: "+text) })
-	time.Sleep(100 * time.Millisecond)
-	noRootInbox(t, h)
-}
-
 // An oversized ~/config.json is reported as too large, not as the JSON
 // error of the part that was read.
 func TestOversizedOwnConfigReported(t *testing.T) {
@@ -892,7 +806,7 @@ func TestOversizedOwnConfigReported(t *testing.T) {
 	h.drop(h.mainHome, "go.md", "go")
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	waitFor(t, "ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
-	if got := fileText(t, errorFile); got != MsgConfigPrefix+MsgConfigTooLarge+"\n" {
+	if got := fileText(t, errorFile); got != MsgConfigPrefix+"larger than 1 MiB\n" {
 		t.Fatalf("ERROR %q", got)
 	}
 	noRootInbox(t, h)

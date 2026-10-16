@@ -466,9 +466,18 @@ func TestContextOverflowKind(t *testing.T) {
 			t.Fatalf("%s: got %+v", body, r.Error)
 		}
 	}
+}
+
+// A 400 that is not an overflow is invalid_request, which the daemon does
+// not retry; other failures carry no kind.
+func TestInvalidRequestKind(t *testing.T) {
 	f := newFake(t, 400, `{"error":{"message":"invalid model"}}`)
+	if r := handlerFor(f).Complete(context.Background(), baseRequest()); r.Error == nil || r.Error.Kind != "invalid_request" || !strings.Contains(r.Error.Message, "invalid model") {
+		t.Fatalf("other 400: %+v", r.Error)
+	}
+	f = newFake(t, 503, `{"error":{"message":"overloaded"}}`)
 	if r := handlerFor(f).Complete(context.Background(), baseRequest()); r.Error == nil || r.Error.Kind != "" {
-		t.Fatalf("other 400 marked as overflow: %+v", r.Error)
+		t.Fatalf("503 given a kind: %+v", r.Error)
 	}
 }
 

@@ -2,35 +2,41 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/SEAN-7/bot/internal/layout"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
-	"github.com/SEAN-7/bot/plugins"
 )
+
+// fetchLimit bounds a plugin binary fetched from a URL.
+const fetchLimit = 64 << 20
 
 type InstallOptions struct {
 	Layout        layout.Layout
-	Arch          string
-	Index         *plugins.Index // nil: the index compiled into this binary
-	ProviderGroup string         // group allowed to run plugins; "" leaves ownership alone
+	ProviderGroup string // group allowed to run plugins; "" leaves ownership alone
 	Prompt        func(proto.Setting) (string, error)
 	Runner        *plugin.Runner
 }
 
-// Install verifies the plugin binary at file, which install.sh downloaded,
-// against the release index, installs it as name for the provider user,
-// collects its settings into a root-only credentials file and refreshes the
-// provider cache. Nothing is written if verification fails.
-func Install(ctx context.Context, name, file string, o InstallOptions) error {
-	data, err := verify(name, file, o)
+// Install installs the plugin binary at source, a file path or an http(s)
+// URL, as name for the provider user, collects its settings into a
+// root-only credentials file and refreshes the provider cache. Root trusts
+// what it installs, as it trusts any package. Nothing is written if the
+// fetch fails.
+func Install(ctx context.Context, name, source string, o InstallOptions) error {
+	if !plugin.ValidName.MatchString(name) {
+		return fmt.Errorf("invalid plugin name %q", name)
+	}
+	data, err := fetch(ctx, source)
 	if err != nil {
 		return err
 	}
@@ -75,31 +81,29 @@ func Install(ctx context.Context, name, file string, o InstallOptions) error {
 	return err
 }
 
-// verify reads the plugin binary at file and checks it against the SHA-256
-// the index records for name on this architecture.
-func verify(name, file string, o InstallOptions) ([]byte, error) {
-	if !plugin.ValidName.MatchString(name) {
-		return nil, fmt.Errorf("invalid plugin name %q", name)
+// fetch reads the plugin binary from a path, or from an http(s) URL.
+func fetch(ctx context.Context, source string) ([]byte, error) {
+	if !strings.HasPrefix(source, "http://") && !strings.HasPrefix(source, "https://") {
+		return os.ReadFile(source)
 	}
-	idx := o.Index
-	if idx == nil {
-		loaded, err := plugins.Load()
-		if err != nil {
-			return nil, err
-		}
-		idx = &loaded
-	}
-	want := idx.Plugins[name]["linux-"+o.Arch]
-	if want == "" {
-		return nil, fmt.Errorf("no plugin %q for linux-%s in release %s", name, o.Arch, idx.Version)
-	}
-	data, err := os.ReadFile(file)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, source, nil)
 	if err != nil {
 		return nil, err
 	}
-	sum := sha256.Sum256(data)
-	if got := hex.EncodeToString(sum[:]); got != want {
-		return nil, fmt.Errorf("checksum mismatch for %s: got %s, want %s; nothing installed", name, got, want)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("fetch %s: HTTP %d", source, resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, fetchLimit+1))
+	if err != nil {
+		return nil, fmt.Errorf("fetch %s: %w", source, err)
+	}
+	if len(data) > fetchLimit {
+		return nil, errors.New("fetch " + source + ": larger than 64 MiB")
 	}
 	return data, nil
 }

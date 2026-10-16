@@ -194,6 +194,32 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+// Latest reads only the tail of a run file, and still finds the end record
+// when the last line is longer than the tail it reads first, or the file
+// holds a single long line.
+func TestLatestReadsLongTail(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := Create(dir, time.Unix(300, 0), -1)
+	w.Record("start", nil)
+	w.Record("result", map[string]any{"output": strings.Repeat("x", 3<<20)})
+	w.End("done")
+	if _, clean, err := Latest(dir); !clean || err != nil {
+		t.Fatalf("long middle line: %v %v", clean, err)
+	}
+	w, _ = Create(dir, time.Unix(400, 0), -1)
+	w.Record("note", map[string]any{"text": strings.Repeat("y", 3<<20)})
+	w.Close()
+	if _, clean, err := Latest(dir); clean || err != nil {
+		t.Fatalf("long last line, unclean: %v %v", clean, err)
+	}
+	w, _ = Create(dir, time.Unix(500, 0), -1)
+	w.Record("end", map[string]any{"reason": "done", "pad": strings.Repeat("z", 3<<20)})
+	w.Close()
+	if _, clean, err := Latest(dir); !clean || err != nil {
+		t.Fatalf("long end line: %v %v", clean, err)
+	}
+}
+
 // childRun makes dir/agents/x holding a run file with loose modes, as a
 // subagent's journal directory nested in its parent's.
 func childRun(t *testing.T, dir string) (string, string) {
@@ -273,25 +299,5 @@ func TestAttach(t *testing.T) {
 	}
 	if path, ended, err := Latest(dir); err != nil || path != w.Path() || !ended {
 		t.Fatalf("latest %s %v %v", path, ended, err)
-	}
-}
-
-func TestLastVersion(t *testing.T) {
-	dir := t.TempDir()
-	if v, found, err := LastVersion(dir); err != nil || found || v != "" {
-		t.Fatalf("no runs: %q %v %v", v, found, err)
-	}
-	old, _ := Create(dir, time.Unix(100, 0), -1)
-	old.Record("start", map[string]any{"agent": "main"})
-	old.End("done")
-	if v, found, err := LastVersion(dir); err != nil || !found || v != "" {
-		t.Fatalf("run without a version: %q %v %v", v, found, err)
-	}
-	w, _ := Create(dir, time.Unix(200, 0), -1)
-	w.Record("start", map[string]any{"agent": "main", "version": "0.6.0"})
-	w.End("done")
-	os.WriteFile(filepath.Join(dir, "messages.jsonl"), []byte(`{"type":"start","version":"9.9.9"}`+"\n"), 0o640)
-	if v, found, err := LastVersion(dir); err != nil || !found || v != "0.6.0" {
-		t.Fatalf("newest run: %q %v %v", v, found, err)
 	}
 }

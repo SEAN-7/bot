@@ -2,8 +2,6 @@ package daemon
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -36,103 +33,61 @@ func (a *agent) logf(format string, args ...any) {
 	a.d.cfg.Logger.Printf("%s: %s", a.name, fmt.Sprintf(format, args...))
 }
 
-// errConfig marks a problem the agent must fix in config.json, as opposed
-// to a provider failure, which is retried.
-type errConfig struct{ error }
-
-// gate reads ~/config.json and validates it against the provider's describe.
-// A config error is reported once per distinct config.json content and the
-// agent waits until the file changes; provider failures are retried.
-func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
+// gate reads ~/config.json and checks it against the providers cache: an
+// installed provider and one of its models. No plugin runs. A config error
+// is reported once per distinct error, and the agent waits until the file
+// changes.
+func (a *agent) gate() (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
-	var describe proto.DescribeResponse
+	var cfg plugin.Config
+	var providers map[string]proto.DescribeResponse
 	data, size, err := a.fs.Read(filepath.Join(a.home, "config.json"), configLimit)
 	if err == nil && size > int64(len(data)) {
-		err = errConfigTooLarge // not the JSON error of the part read
+		err = errors.New("larger than 1 MiB") // not the JSON error of the part read
 	}
-	sum := sha256.Sum256(data)
-	hash := hex.EncodeToString(sum[:])
-	if err != nil {
-		hash = "unreadable: " + err.Error()
-	}
-	if hash == a.failedConfig {
-		return plugin.Config{}, describe, false
-	}
-	var cfg plugin.Config
 	if err == nil {
 		cfg, err = plugin.ParseConfig(data)
 	}
 	if err == nil {
-		err = a.retry(ctx, func() error {
-			installed, err := d.runner.Installed()
-			if err != nil {
-				return err
-			}
-			if !slices.Contains(installed, cfg.Provider) {
-				return errConfig{plugin.Validate(cfg, installed, describe)}
-			}
-			if describe, err = d.runner.Describe(ctx, cfg.Provider); err != nil {
-				return err
-			}
-			if err := plugin.Validate(cfg, installed, describe); err != nil {
-				return errConfig{err}
-			}
-			return nil
-		})
-		var bad errConfig
-		if errors.As(err, &bad) {
-			err = bad.error
-		} else if err != nil {
-			return cfg, describe, false // stopped while retrying
-		}
+		providers, err = plugin.LoadProviders(d.cfg.ProvidersCache())
+	}
+	if err == nil {
+		err = plugin.Validate(cfg, providers)
 	}
 	if err != nil {
-		a.failedConfig = hash
 		text := MsgConfigPrefix + err.Error()
-		a.logf("not starting: %s", text)
-		a.setError(text)
-		if a.parent != d.root { // root has no inbox: the service log reports it
-			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, a.name, text)); err != nil {
+		// Root has no inbox: the service log reports its children's errors.
+		if text != a.lastError && a.parent != d.root {
+			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, filepath.Base(a.ctrl), text)); err != nil {
 				a.logf("notify parent: %v", err)
 			}
 		}
-		return cfg, describe, false
+		a.reportError(text)
+		return cfg, proto.DescribeResponse{}, false
 	}
-	if a.failedConfig != "" {
-		a.failedConfig = ""
-		a.clearError(MsgConfigPrefix)
-	}
-	return cfg, describe, true
+	return cfg, providers[cfg.Provider], true
 }
 
 func (a *agent) run(ctx context.Context) {
-	cfg, describe, ok := a.gate(ctx)
+	cfg, describe, ok := a.gate()
 	if !ok {
 		return
 	}
 	owner, err := a.readOwner()
 	if err != nil {
 		// Running without the owner's instructions would be worse than
-		// not running: log once per distinct problem, and keep it in ERROR
-		// while it lasts, though a config error or a person replaced it.
-		text := MsgOwnerPrefix + err.Error()
-		if text != a.failedOwner {
-			a.failedOwner = text
-			a.logf("not starting: %s", text)
-		}
-		a.ensureError(text)
+		// not running.
+		a.reportError(MsgOwnerPrefix + err.Error())
 		return
 	}
-	// Cleared on every safe read, not only after a problem this daemon saw:
-	// the error may have been written before a restart.
-	a.failedOwner = ""
-	a.clearError(MsgOwnerPrefix)
+	// A run starting settles whatever ERROR held, this daemon's or an
+	// earlier one's.
+	a.clearError()
 	jdir := a.d.cfg.JournalDir(a.id)
 	if !strings.HasPrefix(jdir, filepath.Clean(a.d.cfg.Log)+"/") {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
 		return
 	}
-	a.d.upgradeNote(a, jdir)
 	j, err := journal.Create(jdir, time.Now(), a.gid())
 	if err != nil {
 		a.logf("journal: %v", err)
@@ -172,8 +127,17 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	if err := a.fs.Symlink(d.cfg.Manual(), filepath.Join(a.home, "manual")); err != nil {
 		a.logf("manual link: %v", err)
 	}
+	if err := a.fs.Symlink(a.inbox, filepath.Join(a.home, "inbox")); err != nil {
+		a.logf("inbox link: %v", err)
+	}
+	// Where its messages go: its owner's inbox. Root has none.
+	if a.parent != d.root {
+		if err := a.fs.Symlink(a.parent.inbox, filepath.Join(a.home, "owner")); err != nil {
+			a.logf("owner link: %v", err)
+		}
+	}
 	system := []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}}
-	records, shown, err := a.collectInbox(j, imageTypes, d.cfg.ImageBudget)
+	records, shown, err := a.collectInbox(j, imageTypes)
 	if err != nil {
 		a.logf("inbox: %v", err)
 		j.Record("note", map[string]any{"text": "inbox: " + err.Error()})
@@ -187,15 +151,17 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		resp, err := a.complete(ctx, cfg, system, messages)
 		if plugin.IsContextOverflow(err) {
 			if n == 1 {
-				text := fmt.Sprintf(MsgOverflowGuardFmt, err)
-				a.logf("%s", text)
-				a.setError(text)
+				a.reportError(fmt.Sprintf(MsgOverflowGuardFmt, err))
 				return "context-guard"
 			}
 			if err := d.writeNote(a, "reset", fmt.Sprintf(MsgResetFmt, j.Path())); err != nil {
 				a.logf("reset note: %v", err)
 			}
 			return "context"
+		}
+		if plugin.IsInvalidRequest(err) {
+			a.reportError(fmt.Sprintf(MsgInvalidRequestFmt, err))
+			return "invalid"
 		}
 		if err != nil {
 			return a.stopReason(ctx)
@@ -208,9 +174,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		messages = append(messages, msg)
 		j.Record("assistant", map[string]any{"text": msg.Text, "command": msg.Command, "wait": msg.Wait, "call_id": callID, "usage": resp.Usage, "opaque": msg.Opaque})
 		if n == 1 {
-			// A successful call settles errors left by earlier runs or a restart.
-			a.clearError(errGuardPrefix)
-			a.clearError(errProviderPrefix)
+			a.clearError() // a successful call settles the guard and provider errors
 		}
 		if msg.Command == nil {
 			return "done"
@@ -226,7 +190,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		var more []inboxRecord
 		var moreImages []proto.Image
 		if !d.draining() { // during a stop, new messages wait for the next daemon
-			if more, moreImages, err = a.collectInbox(j, imageTypes, d.cfg.ImageBudget-imageBytes(messages)); err != nil {
+			if more, moreImages, err = a.collectInbox(j, imageTypes); err != nil {
 				a.logf("inbox: %v", err)
 			}
 		}
@@ -248,18 +212,18 @@ func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.
 	return resp, err
 }
 
-// retry runs call until it succeeds, returns an errConfig, or the agent is
-// stopped, with delays doubling from RetryBase to RetryMax. Persistent
-// provider failures are reported in ERROR and the log, never the inbox.
+// retry runs call until it succeeds, fails in a way a retry cannot fix, or
+// the agent is stopped, with delays doubling from RetryBase to RetryMax.
+// Persistent provider failures are reported in ERROR and the log, never the
+// inbox.
 func (a *agent) retry(ctx context.Context, call func() error) error {
 	delay := a.d.cfg.RetryBase
 	var since time.Time
 	for failures := 0; ; failures++ {
 		err := call()
-		var bad errConfig
-		if err == nil || errors.As(err, &bad) || plugin.IsContextOverflow(err) {
+		if err == nil || plugin.IsContextOverflow(err) || plugin.IsInvalidRequest(err) {
 			if failures >= a.d.cfg.ErrorAfter {
-				a.clearError(errProviderPrefix)
+				a.clearError()
 			}
 			return err
 		}
@@ -271,9 +235,7 @@ func (a *agent) retry(ctx context.Context, call func() error) error {
 		}
 		a.logf("provider: %v", err)
 		if failures+1 >= a.d.cfg.ErrorAfter {
-			text := fmt.Sprintf(MsgProviderFmt, since.Format(time.RFC3339), err)
-			a.logf("%s", text)
-			a.setError(text)
+			a.reportError(fmt.Sprintf(MsgProviderFmt, since.Format(time.RFC3339), err))
 		}
 		select {
 		case <-ctx.Done():
@@ -284,36 +246,28 @@ func (a *agent) retry(ctx context.Context, call func() error) error {
 	}
 }
 
-const (
-	errProviderPrefix = "Provider failing since"
-	errGuardPrefix    = "Context is over" // MsgOverflowGuardFmt
-)
-
-// setError writes the agent's ERROR in its control directory, where its
-// owner sees it.
-func (a *agent) setError(text string) {
+// reportError puts text in the agent's ERROR, in its control directory where
+// its owner sees it, and in the service log once per distinct text. ERROR
+// holds the latest cause; a missing or different file is written again.
+func (a *agent) reportError(text string) {
+	if text != a.lastError {
+		a.lastError = text
+		a.logf("not starting: %s", text)
+	}
 	parent, path := a.errorFile()
+	if data, _, err := parent.Read(path, 4096); err == nil && string(data) == text+"\n" {
+		return
+	}
 	if err := parent.Write(path, []byte(text+"\n"), 0o644); err != nil {
 		a.logf("write ERROR: %v", err)
 	}
 }
 
-// ensureError writes the agent's ERROR unless it already holds text.
-func (a *agent) ensureError(text string) {
+// clearError removes the agent's ERROR, whatever it holds.
+func (a *agent) clearError() {
+	a.lastError = ""
 	parent, path := a.errorFile()
-	if data, _, err := parent.Read(path, 4096); err == nil && string(data) == text+"\n" {
-		return
-	}
-	a.setError(text)
-}
-
-// clearError removes the agent's ERROR if it holds an error of the given kind.
-func (a *agent) clearError(prefix string) {
-	parent, path := a.errorFile()
-	data, _, err := parent.Read(path, 4096)
-	if err == nil && strings.HasPrefix(string(data), prefix) {
-		parent.Remove(path)
-	}
+	parent.Unlink(path)
 }
 
 // commandWait interprets the model's wait argument: seconds as a JSON number,

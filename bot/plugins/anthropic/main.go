@@ -77,6 +77,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"net/http"
 	"os"
@@ -108,8 +112,33 @@ var (
 	disableable = []string{"adaptive", "disabled"}
 )
 
-// imageTypes is what the API accepts as image input, for every model.
-var imageTypes = []string{"image/jpeg", "image/png", "image/gif", "image/webp"}
+// imageTypes is what this plugin sends as image input, for every model: the
+// types it can check before sending. The API also takes WebP, which Go
+// cannot decode without a module.
+var imageTypes = []string{"image/jpeg", "image/png", "image/gif"}
+
+// Image limits from the Messages API: 5 MB a file and 8000 px a side.
+const (
+	imageMaxBytes = 5 << 20
+	imageMaxEdge  = 8000
+)
+
+// imageNote returns "" when the API will take img, or the text block that
+// replaces it: the daemon sends any file of a declared type unchecked, and
+// a request the API rejects would cost the whole run.
+func imageNote(img proto.Image) string {
+	if len(img.Data) > imageMaxBytes {
+		return fmt.Sprintf("[image not shown: %d bytes is over 5 MiB. File: %s]", len(img.Data), img.File)
+	}
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(img.Data))
+	if err != nil {
+		return fmt.Sprintf("[image not shown: could not decode it: %v. File: %s]", err, img.File)
+	}
+	if cfg.Width > imageMaxEdge || cfg.Height > imageMaxEdge {
+		return fmt.Sprintf("[image not shown: %dx%d is over %d px a side. File: %s]", cfg.Width, cfg.Height, imageMaxEdge, img.File)
+	}
+	return ""
+}
 
 var models = []modelSpec{
 	{id: "claude-opus-5-5", contextTokens: 1000000, maxOutput: 128000, defaultMax: 64000, efforts: allEfforts, defaultEffort: "medium"},
@@ -335,8 +364,12 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 		var e apiError
 		if json.Unmarshal(respData, &e) == nil && e.Error.Message != "" {
 			resp = fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
-			if httpResp.StatusCode == http.StatusBadRequest && isOverflow(e.Error.Message) {
-				resp.Error.Kind = proto.ErrContextOverflow
+			if httpResp.StatusCode == http.StatusBadRequest {
+				if isOverflow(e.Error.Message) {
+					resp.Error.Kind = proto.ErrContextOverflow
+				} else if e.Error.Type == "invalid_request_error" {
+					resp.Error.Kind = proto.ErrInvalidRequest
+				}
 			}
 		} else {
 			resp = fail("anthropic: HTTP %d: %s", httpResp.StatusCode, clip(string(respData), 2000))
@@ -442,6 +475,10 @@ func buildMessages(in []proto.Message) ([]apiMessage, error) {
 				add("user", mustJSON(textBlock{Type: "text", Text: m.Content}))
 			}
 			for _, img := range m.Images {
+				if note := imageNote(img); note != "" {
+					add("user", mustJSON(textBlock{Type: "text", Text: note}))
+					continue
+				}
 				add("user",
 					mustJSON(textBlock{Type: "text", Text: img.File + ":"}),
 					mustJSON(imageBlock{Type: "image", Source: imageSource{

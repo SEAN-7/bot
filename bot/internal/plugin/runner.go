@@ -84,6 +84,13 @@ func IsContextOverflow(err error) bool {
 	return errors.As(err, &p) && p.Kind == proto.ErrContextOverflow
 }
 
+// IsInvalidRequest reports whether err says the provider rejected the
+// request as malformed, which a retry cannot fix.
+func IsInvalidRequest(err error) bool {
+	var p *ProviderError
+	return errors.As(err, &p) && p.Kind == proto.ErrInvalidRequest
+}
+
 func (r *Runner) run(ctx context.Context, provider string, req, resp any) error {
 	if !ValidName.MatchString(provider) {
 		return fmt.Errorf("invalid provider name %q", provider)

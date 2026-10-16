@@ -6,12 +6,13 @@ The harness provides a few guarantees; the agent provides all policy.
 
 1. **An agent is a user and a home** holding `README.md` and `inbox/`. Its
    owner, root or another agent, creates it by making a directory holding
-   its config; the harness gives it a user from a pool. Deleting the
-   directory stops it. Root is the top of the tree and the main agent its
+   its config; the harness gives it a Unix user of its own. Deleting the
+   directory stops it and deletes the user. Root is the top of the tree and the main agent its
    first child, so the human does exactly what an agent does.
 2. **Everything that happens is a file in an inbox**: owner messages,
    schedules, heartbeats, child reports, crash recovery and context resets.
-   There is no other event channel.
+   Whoever sends it writes it there, and the kernel's record of who wrote a
+   file is its label. There is no other event channel.
 3. **The harness has no provider code.** Model access is a plugin that speaks a
    small versioned JSON protocol.
 
@@ -30,7 +31,7 @@ The harness provides a few guarantees; the agent provides all policy.
 - A subagent cannot change its parent's or siblings' files; its ancestors
   can always read its journals.
 - No agent has sudo, and none can read provider credentials or alter
-  journals or conversation logs.
+  journals.
 - All daemon file access inside agent homes happens with an agent's
   privileges, so a planted symlink reaches nothing that agent couldn't.
 - Every model message and command result is journaled; an interrupted run,

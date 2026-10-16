@@ -33,7 +33,7 @@ func TestBasicRun(t *testing.T) {
 	if len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "sh" || reqs[0].Model != "replay-1" {
 		t.Fatalf("request %+v", reqs[0])
 	}
-	want := `{"file":"inbox/processed/hi.md","from":"data","content":"hello there"}`
+	want := `{"file":"inbox/processed/hi.md","from":"owner","content":"hello there"}`
 	if reqs[0].Messages[0].Role != "user" || !strings.Contains(reqs[0].Messages[0].Content, want) {
 		t.Fatalf("first message %q", reqs[0].Messages[0].Content)
 	}
@@ -185,7 +185,7 @@ func TestDotFilesWaitForARun(t *testing.T) {
 	for _, r := range h.waitEnds(h.mainID, 1) {
 		if r["type"] == "inbox" {
 			files = append(files, r["file"].(string))
-			if strings.HasSuffix(r["file"].(string), ".quiet") && (r["from"] != "data" || r["content"] != "later") {
+			if strings.HasSuffix(r["file"].(string), ".quiet") && (r["from"] != "owner" || r["content"] != "later") {
 				t.Fatalf("dot-file record %v", r)
 			}
 		}
@@ -195,15 +195,12 @@ func TestDotFilesWaitForARun(t *testing.T) {
 	}
 }
 
-// The harness stages what it writes into an inbox in inbox/.tmp, so nothing
-// half-written is ever in the inbox itself; admission clears leftovers.
-func TestInboxWritesStaged(t *testing.T) {
+// The harness stages what it writes into an inbox as a dot-file in
+// inbox/processed and renames it in, so nothing half-written is ever
+// collected and the inbox needs no staging directory of its own.
+func TestInboxWritesStagedInProcessed(t *testing.T) {
 	h := newHarness(t, done())
-	stage := filepath.Join(h.mainHome, "inbox", ".tmp")
-	os.MkdirAll(stage, 0o750)
-	os.WriteFile(filepath.Join(stage, ".x.md.123.tmp"), []byte("half"), 0o640)
 	h.start()
-	waitFor(t, "leftover cleared", func() bool { entries, _ := os.ReadDir(stage); return len(entries) == 0 })
 	h.sendOwner("hello")
 	records := h.waitEnds(h.mainID, 1)
 	for _, r := range records {
@@ -211,11 +208,19 @@ func TestInboxWritesStaged(t *testing.T) {
 			t.Fatalf("record %v", r)
 		}
 	}
-	statMode(t, stage, os.ModeDir|0o750)
-	// An agent that removes the staging directory gets it back.
-	os.RemoveAll(stage)
+	if _, err := os.Lstat(filepath.Join(h.cfg.Inbox("agent-1"), ".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("inbox/.tmp exists: %v", err)
+	}
+	entries, _ := os.ReadDir(filepath.Join(h.cfg.Inbox("agent-1"), "processed"))
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("temporary file left in processed: %s", e.Name())
+		}
+	}
+	// An agent that removes processed/ gets it back with the next note.
+	os.RemoveAll(filepath.Join(h.cfg.Inbox("agent-1"), "processed"))
 	h.sendOwner("again")
-	waitFor(t, "second message", func() bool { return countNotes(h.mainHome, "-owner.md") == 2 })
+	h.waitEnds(h.mainID, 2)
 }
 
 func TestJournalSymlinkRepaired(t *testing.T) {
@@ -242,7 +247,7 @@ func (countRecorder) Attach(string, []byte) (string, error) {
 // before recording anything when it leads nowhere.
 func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	h := newHarness(t)
-	main := detachedMain(t, h, &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}}})
+	main := detachedMain(t, h, &daemon{cfg: h.cfg})
 	inbox := filepath.Join(h.mainHome, "inbox")
 	processed := filepath.Join(inbox, "processed")
 	var recorded int
@@ -251,7 +256,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(inbox, "a.md"), []byte("a"), 0o644)
-	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+	if records, _, err := main.collectInbox(j, nil); err != nil || len(records) != 1 {
 		t.Fatalf("removed: %v %v", records, err)
 	}
 	if info, err := os.Lstat(processed); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
@@ -261,7 +266,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	os.RemoveAll(processed)
 	os.Symlink(elsewhere, processed)
 	os.WriteFile(filepath.Join(inbox, "b.md"), []byte("b"), 0o644)
-	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+	if records, _, err := main.collectInbox(j, nil); err != nil || len(records) != 1 {
 		t.Fatalf("link: %v %v", records, err)
 	}
 	if _, err := os.Stat(filepath.Join(elsewhere, "b.md")); err != nil {
@@ -270,15 +275,52 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	os.Remove(processed)
 	os.WriteFile(processed, nil, 0o644)
 	os.WriteFile(filepath.Join(inbox, "c.md"), []byte("c"), 0o644)
-	if _, _, err := main.collectInbox(j, nil, 0); err == nil || recorded != 2 {
+	if _, _, err := main.collectInbox(j, nil); err == nil || recorded != 2 {
 		t.Fatalf("a file: %d records, %v", recorded, err)
+	}
+}
+
+// A file that cannot be moved into processed/ after others were does not
+// cost the model the ones that were: the run goes on with what it has, the
+// failure is logged, and the file waits for the next collection.
+func TestLateRenameFailureKeepsRecords(t *testing.T) {
+	defer func(f func(*agent, string, string) error) { moveInbox = f }(moveInbox)
+	calls := 0
+	moveInbox = func(a *agent, from, to string) error {
+		if calls++; calls == 2 {
+			return errors.New("boom")
+		}
+		return a.fs.Rename(from, to)
+	}
+	h := newHarness(t, done(), done())
+	h.start()
+	h.drop(h.mainHome, "a.md", "first")
+	h.drop(h.mainHome, "b.md", "second")
+	records := h.waitEnds(h.mainID, 1)
+	var files []string
+	for _, r := range records {
+		if r["type"] == "inbox" {
+			files = append(files, r["file"].(string))
+		}
+	}
+	if strings.Join(files, " ") != "inbox/processed/a.md" || lastEnd(records) != "done" {
+		t.Fatalf("first run: files %v, end %q", files, lastEnd(records))
+	}
+	if !strings.Contains(h.logs.String(), "inbox: boom") {
+		t.Fatalf("failure not logged:\n%s", h.logs)
+	}
+	if !h.sawRecord(`"content":"first"`) {
+		t.Fatal("the model did not get the file that was moved")
+	}
+	records = h.waitEnds(h.mainID, 2)
+	if inboxRecordFrom(records, "second") == "" {
+		t.Fatalf("second run did not collect b.md: %v", records)
 	}
 }
 
 func TestVanishedInboxDoesNotCallModel(t *testing.T) {
 	h := newHarness(t, step("echo never", 100))
-	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}},
-		runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
+	d := &daemon{cfg: h.cfg, runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
 	main := detachedMain(t, h, d)
 	if err := os.MkdirAll(filepath.Join(h.mainHome, "inbox"), 0o755); err != nil {
 		t.Fatal(err)

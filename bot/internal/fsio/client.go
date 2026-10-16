@@ -104,6 +104,8 @@ func (c *Client) call(req request) (response, error) {
 			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrNotExist)
 		case resp.Permission:
 			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrPermission)
+		case resp.Exist:
+			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrExist)
 		}
 		return resp, fmt.Errorf("%s", resp.Err)
 	}
@@ -138,20 +140,12 @@ func (c *Client) Rename(from, to string) error {
 	return err
 }
 
-// Private makes each of paths, in order, a real directory: a missing one is
-// created 0750 (less the umask), closed to others, and an existing one is
-// kept as it is. It never follows a link: a path that is not a real directory
-// the helper's user owns, or lies below one, is left alone. It returns the
-// paths it left alone because they are not such a directory, not those below
-// them.
-func (c *Client) Private(paths ...string) (skipped []string, err error) {
-	resp, err := c.call(request{Op: "private", Paths: paths})
-	return resp.Paths, err
-}
-
-// Remove removes path and everything under it. A missing path is not an error.
-func (c *Client) Remove(path string) error {
-	_, err := c.call(request{Op: "remove", Path: path})
+// Mkdir creates path as a directory with exactly mode, the sticky bit
+// included and the umask notwithstanding. An existing directory of the
+// helper's user is left as it is; anything else there is an error wrapping
+// fs.ErrExist. It never follows a link.
+func (c *Client) Mkdir(path string, mode os.FileMode) error {
+	_, err := c.call(request{Op: "mkdir", Path: path, Mode: uint32(mode)})
 	return err
 }
 
@@ -174,17 +168,4 @@ func (c *Client) Stat(path string) (Entry, error) {
 		return Entry{}, err
 	}
 	return *resp.Entry, nil
-}
-
-// Clear removes everything inside dir and keeps dir. A missing dir is not an error.
-func (c *Client) Clear(dir string) error {
-	_, err := c.call(request{Op: "clear", Path: dir})
-	return err
-}
-
-// PurgeOwned removes the top-level entries of dirs that belong to the helper's
-// user. Missing directories are skipped.
-func (c *Client) PurgeOwned(dirs []string) error {
-	_, err := c.call(request{Op: "purge_owned", Paths: dirs})
-	return err
 }
