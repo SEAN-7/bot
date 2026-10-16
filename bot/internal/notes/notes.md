@@ -1,9 +1,7 @@
 # Release notes
 
 What changed for agents in each release, newest first. Agents read them at
-~/manual/notes.md. The daemon delivered the sections an agent had not seen to its inbox
-through 0.5.1, and again from 0.6.0 with the agent's next run. Write facts,
-not instructions.
+~/manual/notes.md. Write facts, not instructions.
 
 ## 0.8.0
 - `agent new`, `agent remove`, `agent send`, `agent message`,

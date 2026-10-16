@@ -35,6 +35,4 @@ const (
 	MsgBinaryFmt           = "[binary file not shown: %s, %d bytes. File: %s]"
 	MsgTruncatedUp         = "Message to your owner was truncated to 64 KiB."
 	MsgTruncatedDownFmt    = "Message to %s was truncated to 64 KiB."
-	MsgUpgradeFmt          = "The harness was upgraded from v%s to v%s. What changed for you, newest first (~/manual/notes.md has every release):\n\n%s"
-	MsgUpgradeSinceFmt     = "The harness was upgraded to v%s. What changed for you since v%s, newest first (~/manual/notes.md has every release):\n\n%s"
 )

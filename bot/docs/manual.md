@@ -182,16 +182,9 @@ has no end record is reported with "You were interrupted. Interrupted
 journal: PATH" in your inbox, which starts a new run.
 
 **Upgrades.** Each run's journal `start` record holds the harness version
-that ran it. When a run starts on a newer release than your previous run,
-`<time>-harness-upgrade.md` is written to your inbox just before it is
-collected: "The harness was upgraded from vX to vY. What changed for you,
-newest first (~/manual/notes.md has every release):" and the release-notes
-sections in between. If your previous run recorded no version (it ran
-before 0.6.0), it says instead "The harness was upgraded to vY. What
-changed for you since v0.5.1, newest first (~/manual/notes.md has every
-release):" and covers every release since 0.5.1. Nothing wakes you
-for an upgrade: the note arrives with your next run, whatever starts it.
-An agent that has never run gets none, and development builds send none.
+that ran it; `~/manual/version` is the running one, and `~/manual/notes.md`
+lists what changed in each release. Nothing is written to you for an
+upgrade.
 
 ## ERROR
 

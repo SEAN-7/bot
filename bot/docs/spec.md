@@ -46,8 +46,8 @@ never both.
   files in spools, a subagent is a directory holding a `config.json`, and
   journals, providers and the manual are files to read. The binary is the
   daemon, its file helper and root's plugin installer.
-- **Upgrades are reported, not announced.** An agent learns what changed
-  at its next run; nothing wakes it for an upgrade.
+- **Upgrades are not announced.** Nothing is written to an agent for an
+  upgrade; the manual and each run's `start` record carry the version.
 - **The repository is public.** Installs download release assets without
   credentials and trust only the checksums pinned in `install.sh`.
 - **Conversations are pull, not push.** The daemon logs both directions in
@@ -224,15 +224,6 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
   copied into the journal directory first; one whose copy cannot be saved
   is not shown. The anthropic API's 32 MB request limit is reported by its
   plugin as `context_overflow`.
-- **Upgrades.** Before collecting the inbox, the daemon reads the first
-  line of the agent's newest run file (the `start` record) for its
-  `version`. When the running version and that one are both release
-  versions and the previous is older, it writes the upgrade note through
-  the agent's helper, holding the `## X.Y.Z` sections of the embedded
-  release notes newer than the previous version, up to the running one; no
-  recorded version counts as 0.5.1, the last release that delivered notes.
-  The note is written before the new run's `start` record, so a crash
-  between them can only repeat it. No state is kept outside the journal.
 - **First-call guard.** A `context_overflow` on a run's first call writes
   `ERROR` instead of the reset note and waits for new input, so resets
   cannot loop.

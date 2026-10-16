@@ -110,7 +110,6 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
 		return
 	}
-	a.d.upgradeNote(a, jdir)
 	j, err := journal.Create(jdir, time.Now(), a.gid())
 	if err != nil {
 		a.logf("journal: %v", err)

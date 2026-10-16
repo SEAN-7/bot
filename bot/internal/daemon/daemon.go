@@ -49,9 +49,8 @@ type Config struct {
 	ImageBudget    int // bytes of image data one run may show
 	Logger         *log.Logger
 
-	Version      string            // this harness's version, recorded in each run's start record
-	ReleaseNotes string            // the release notes, for the upgrade note
-	ManualFiles  map[string]string // written to the manual directory at startup, by name
+	Version     string            // this harness's version, recorded in each run's start record
+	ManualFiles map[string]string // written to the manual directory at startup, by name
 }
 
 func DefaultConfig(self string) Config {
@@ -75,7 +74,6 @@ func DefaultConfig(self string) Config {
 		ImageBudget:    20 << 20,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
 		Version:        version.Version,
-		ReleaseNotes:   notes.Text,
 		ManualFiles:    map[string]string{"manual.md": docs.Manual, "notes.md": notes.Text, "version": version.Version + "\n"},
 	}
 }

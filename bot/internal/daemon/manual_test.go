@@ -14,140 +14,31 @@ import (
 	"github.com/SEAN-7/bot/internal/proto"
 )
 
-const testNotes = "# Release notes\n\nintro\n\n## 0.6.0\n- new thing\n\n### detail\nmore\n\n## 0.5.2\n- old thing\n\n## 0.5.1\n- older thing\n"
-
-// upgradeHarness runs version 0.6.0 for a main agent whose previous run was
-// recorded by version prev ("" for a run from before versions were recorded,
-// "none" for no previous run).
-func upgradeHarness(t *testing.T, prev string, steps ...string) *harness {
-	t.Helper()
-	h := newHarness(t, steps...)
-	h.cfg.Version, h.cfg.ReleaseNotes = "0.6.0", testNotes
-	if prev != "none" {
-		w, err := journal.Create(h.cfg.JournalDir(h.mainID), time.Now().Add(-time.Hour), -1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		start := map[string]any{"agent": h.mainID}
-		if prev != "" {
-			start["version"] = prev
-		}
-		w.Record("start", start)
-		w.End("done")
-		// An agent that has run is in pool.json, which a journal without it
-		// would make the daemon refuse to start.
-		if err := os.WriteFile(h.cfg.PoolFile(), []byte(`[{"user":"agent-1","agent":"main","state":"active"}]`), 0o600); err != nil {
-			t.Fatal(err)
-		}
+// The harness writes nothing to an agent for an upgrade: the start record
+// and ~/manual/ carry the version, and the agent decides what to do with it.
+func TestNoUpgradeNoteWritten(t *testing.T) {
+	h := newHarness(t, done())
+	h.cfg.Version = "0.8.0"
+	w, err := journal.Create(h.cfg.JournalDir(h.mainID), time.Now().Add(-time.Hour), -1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	return h
-}
-
-// upgradeNoteIn returns the content of the upgrade note among records, and
-// its label.
-func upgradeNoteIn(records []map[string]any) (string, any) {
-	for _, r := range records {
+	w.Record("start", map[string]any{"agent": h.mainID, "version": "0.5.2"})
+	w.End("done")
+	// An agent that has run is in pool.json, which a journal without it
+	// would make the daemon refuse to start.
+	if err := os.WriteFile(h.cfg.PoolFile(), []byte(`[{"user":"agent-1","agent":"main","state":"active"}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.start()
+	h.sendOwner("hello")
+	for _, r := range h.waitEnds(h.mainID, 2) {
 		if f, _ := r["file"].(string); r["type"] == "inbox" && strings.HasSuffix(f, "-harness-upgrade.md") {
-			content, _ := r["content"].(string)
-			return content, r["from"]
+			t.Fatalf("upgrade note delivered: %v", r)
 		}
 	}
-	return "", nil
-}
-
-func TestNotesSince(t *testing.T) {
-	got := notesSince(testNotes, [3]int{0, 5, 1}, [3]int{0, 6, 0})
-	want := []string{"## 0.6.0\n- new thing\n\n### detail\nmore", "## 0.5.2\n- old thing"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("got %q", got)
-	}
-	if got := notesSince(testNotes, [3]int{0, 5, 1}, [3]int{0, 5, 9}); len(got) != 1 || !strings.HasPrefix(got[0], "## 0.5.2") {
-		t.Fatalf("capped at the running version: %q", got)
-	}
-	if got := notesSince(testNotes, [3]int{0, 6, 0}, [3]int{0, 6, 0}); len(got) != 0 {
-		t.Fatalf("nothing newer: %q", got)
-	}
-}
-
-func TestUpgradeNoteWithNextRun(t *testing.T) {
-	h := upgradeHarness(t, "0.5.2", done(), done())
-	h.start()
-	h.sendOwner("wake up")
-	records := h.waitEnds(h.mainID, 2)
-	note, from := upgradeNoteIn(records)
-	if from != "data" {
-		t.Fatalf("from %v", from)
-	}
-	if !strings.HasPrefix(note, "The harness was upgraded from v0.5.2 to v0.6.0. What changed for you, newest first (~/manual/notes.md has every release):\n\n## 0.6.0\n") ||
-		!strings.Contains(note, "new thing") || strings.Contains(note, "## 0.5.2") {
-		t.Fatalf("note %q", note)
-	}
-	if !h.sawRecord("-harness-upgrade.md", "## 0.6.0") {
-		t.Fatal("the model did not see the note in its first request")
-	}
-	if records[0]["type"] != "start" || records[0]["version"] != "0.6.0" {
-		t.Fatalf("start record %v", records[0])
-	}
-	// The next run is on the same version: no note.
-	h.sendOwner("again")
-	if note, _ := upgradeNoteIn(h.waitEnds(h.mainID, 3)); note != "" {
-		t.Fatalf("second run got a note: %q", note)
-	}
-	if n := countNotes(h.mainHome, "-harness-upgrade.md"); n != 1 {
-		t.Fatalf("%d notes", n)
-	}
-}
-
-// A run from before versions were recorded gets every section since 0.5.1,
-// the last release that delivered notes.
-func TestUpgradeNoteForUnversionedRun(t *testing.T) {
-	h := upgradeHarness(t, "", done())
-	h.start()
-	h.sendOwner("wake up")
-	note, _ := upgradeNoteIn(h.waitEnds(h.mainID, 2))
-	if !strings.HasPrefix(note, "The harness was upgraded to v0.6.0. What changed for you since v0.5.1, newest first (~/manual/notes.md has every release):\n\n## 0.6.0\n") ||
-		!strings.Contains(note, "## 0.5.2\n- old thing") || strings.Contains(note, "## 0.5.1") {
-		t.Fatalf("note %q", note)
-	}
-}
-
-// Nothing wakes an idle agent for an upgrade.
-func TestUpgradeNoteWaitsForARun(t *testing.T) {
-	h := upgradeHarness(t, "0.5.2")
-	h.start()
-	time.Sleep(200 * time.Millisecond)
 	if n := countNotes(h.mainHome, "-harness-upgrade.md"); n != 0 {
-		t.Fatalf("%d notes written for an idle agent", n)
-	}
-	if runs := h.runs(h.mainID); len(runs) != 1 {
-		t.Fatalf("runs %v", runs)
-	}
-}
-
-func TestNoUpgradeNote(t *testing.T) {
-	for _, c := range []struct {
-		name, prev, version string
-	}{
-		{"never ran", "none", "0.6.0"},
-		{"same version", "0.6.0", "0.6.0"},
-		{"downgrade", "0.7.0", "0.6.0"},
-		{"previous run was a dev build", "dev", "0.6.0"},
-		{"dev build", "0.5.2", "dev"},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			h := upgradeHarness(t, c.prev, done())
-			h.cfg.Version = c.version
-			h.start()
-			h.sendOwner("hello")
-			n := 1
-			if c.prev != "none" {
-				n = 2
-			}
-			h.waitEnds(h.mainID, n)
-			if n := countNotes(h.mainHome, "-harness-upgrade.md"); n != 0 {
-				t.Fatalf("%d notes", n)
-			}
-		})
+		t.Fatalf("%d upgrade notes in the inbox", n)
 	}
 }
 
@@ -225,7 +116,6 @@ func TestManualQuotesTheHarness(t *testing.T) {
 		"MsgImageUndecodableFmt": MsgImageUndecodableFmt, "MsgImageTypeFmt": MsgImageTypeFmt,
 		"MsgImageNoModelFmt": MsgImageNoModelFmt, "MsgImageJournalFmt": MsgImageJournalFmt,
 		"MsgImageBudgetFmt": MsgImageBudgetFmt, "MsgBinaryFmt": MsgBinaryFmt,
-		"MsgUpgradeFmt": MsgUpgradeFmt, "MsgUpgradeSinceFmt": MsgUpgradeSinceFmt,
 	}
 	verb := regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z%]`)
 	for name, s := range strs {
