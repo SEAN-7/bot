@@ -1,8 +1,8 @@
 {
-  "version": "0.5.8",
+  "version": "0.6.0",
   "plugins": {
-    "anthropic": {"linux-amd64": "d4fbff2a5d9ffaa39ab0f51d55866dee74ca37511e79b97b91bbbcbf6c787803", "linux-arm64": "f3c6b3d86288820a740fe191cb8f5f5484de4a78bc862f25cf9572ca5eed6651"},
-    "openai-compatible": {"linux-amd64": "2a79933b30648c205051859bdfaf0b14fc72e4a73c90ceb68012395207b14434", "linux-arm64": "32fe4bea6968f22cf137f8f96f277bda8a632b2b5bd11481856f8898db4e8a5c"},
-    "replay": {"linux-amd64": "fb699ae510b64e7a59c9bba469aeb40c94eadf6a101944fe980fb202f92af791", "linux-arm64": "1c9e41f886717fcb3f9626f2cb1ec3fd6736e95604f5514720726a74c229b4dc"}
+    "anthropic": {"linux-amd64": "12ba766fbc61e96d7b3874087be0ed0ab00cf304262c9ff13590afbc604b4b1f", "linux-arm64": "d1f8205cc2ec53e06ad40279dbbb0b9d29cab6f7aa12dc578acbde11fc5a0dce"},
+    "openai-compatible": {"linux-amd64": "84458312294938838f933f826830941937fe6e73768cd4fdccf73d28bc663c6e", "linux-arm64": "234cd7c934a1c78d2375b4d70372ce30d29b4e88278b698d13e2181954312f39"},
+    "replay": {"linux-amd64": "4a47dad548e4beea712ad03cf6960b391cb2941092c01805ff2759e8ced12965", "linux-arm64": "d809032dfffbebfbd6d52063ae1af05860338c35eeaf04d2749333f2f51a0e48"}
   }
 }
