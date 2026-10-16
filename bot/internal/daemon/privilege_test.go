@@ -577,8 +577,9 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	}
 	os.RemoveAll(ctrl)
 	h.waitReclaimed(user)
-	if code := exitCode(t, "pgrep", "-u", user); code != 1 {
-		t.Fatalf("pgrep -u %s exited %d: processes survived", user, code)
+	// By uid: the user no longer exists for pgrep to look up.
+	if code := exitCode(t, "pgrep", "-u", strconv.Itoa(uid)); code != 1 {
+		t.Fatalf("pgrep -u %d exited %d: processes survived", uid, code)
 	}
 	if code := exitCode(t, "crontab", "-l", "-u", user); code == 0 {
 		t.Fatal("crontab kept")

@@ -108,6 +108,9 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		// The inbox is outside the home, under root's directory, so
 		// userdel does not take it: root does, following no link.
 		{"inbox", func() error { return os.RemoveAll(d.cfg.Inbox(user)) }},
+		// userdel leaves a group that still has members (the ancestors),
+		// and the name could not be used again while it stays.
+		{"group members", func() error { return sys.SetMembers(user, nil) }},
 		{"userdel", func() error { return sys.DeleteUser(user) }},
 	}
 	for _, s := range steps {
