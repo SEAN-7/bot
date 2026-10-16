@@ -58,7 +58,7 @@ func (a *agent) gate() (plugin.Config, proto.DescribeResponse, bool) {
 		text := MsgConfigPrefix + err.Error()
 		// Root has no inbox: the service log reports its children's errors.
 		if text != a.lastError && a.parent != d.root {
-			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, a.name, text)); err != nil {
+			if err := d.writeNote(a.parent, "subagent-error", fmt.Sprintf(MsgSubagentFmt, filepath.Base(a.ctrl), text)); err != nil {
 				a.logf("notify parent: %v", err)
 			}
 		}

@@ -91,6 +91,9 @@ func (a *agent) deliverable() ([]fsio.Entry, error) {
 	return files, nil
 }
 
+// moveInbox moves a collected inbox file into processed/; tests replace it.
+var moveInbox = func(a *agent, from, to string) error { return a.fs.Rename(from, to) }
+
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
 // order, the images shown with them. imageTypes is the image media types the
@@ -159,10 +162,16 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 		if image != nil {
 			fields["image"] = image
 		}
-		j.Record("inbox", fields)
-		if err := a.fs.Rename(path, filepath.Join(processed, target)); err != nil {
-			return records, shown, err
+		if err := moveInbox(a, path, filepath.Join(processed, target)); err != nil {
+			if len(records) == 0 {
+				return nil, nil, err
+			}
+			// The model gets what was moved; this file waits for the next
+			// collection, and nothing is journaled for it yet.
+			a.logf("inbox: %v", err)
+			return records, shown, nil
 		}
+		j.Record("inbox", fields)
 		records = append(records, r)
 		if img != nil {
 			img.File = file

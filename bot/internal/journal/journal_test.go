@@ -194,6 +194,32 @@ func TestLatest(t *testing.T) {
 	}
 }
 
+// Latest reads only the tail of a run file, and still finds the end record
+// when the last line is longer than the tail it reads first, or the file
+// holds a single long line.
+func TestLatestReadsLongTail(t *testing.T) {
+	dir := t.TempDir()
+	w, _ := Create(dir, time.Unix(300, 0), -1)
+	w.Record("start", nil)
+	w.Record("result", map[string]any{"output": strings.Repeat("x", 3<<20)})
+	w.End("done")
+	if _, clean, err := Latest(dir); !clean || err != nil {
+		t.Fatalf("long middle line: %v %v", clean, err)
+	}
+	w, _ = Create(dir, time.Unix(400, 0), -1)
+	w.Record("note", map[string]any{"text": strings.Repeat("y", 3<<20)})
+	w.Close()
+	if _, clean, err := Latest(dir); clean || err != nil {
+		t.Fatalf("long last line, unclean: %v %v", clean, err)
+	}
+	w, _ = Create(dir, time.Unix(500, 0), -1)
+	w.Record("end", map[string]any{"reason": "done", "pad": strings.Repeat("z", 3<<20)})
+	w.Close()
+	if _, clean, err := Latest(dir); !clean || err != nil {
+		t.Fatalf("long end line: %v %v", clean, err)
+	}
+}
+
 // childRun makes dir/agents/x holding a run file with loose modes, as a
 // subagent's journal directory nested in its parent's.
 func childRun(t *testing.T, dir string) (string, string) {

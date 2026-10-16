@@ -221,7 +221,7 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 // max_agents, or as the pool users there are, already exist.
 func (d *daemon) holdBack(parent *agent, ctrl, name string) {
 	n := d.settings.MaxAgents
-	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
+	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, filepath.Base(ctrl), n))
 }
 
 // notStarted reports an agent that is not admitted for a reason its parent

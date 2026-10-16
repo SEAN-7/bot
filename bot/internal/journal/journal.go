@@ -2,8 +2,10 @@
 package journal
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -192,16 +194,47 @@ func Latest(dir string) (string, bool, error) {
 	}
 	sort.Strings(names)
 	path := filepath.Join(dir, names[len(names)-1])
-	data, err := os.ReadFile(path)
+	line, err := lastLine(path)
 	if err != nil {
 		return "", false, err
 	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
 	var last struct {
 		Type string `json:"type"`
 	}
-	json.Unmarshal([]byte(lines[len(lines)-1]), &last)
+	json.Unmarshal(line, &last)
 	return path, last.Type == "end", nil
+}
+
+// lastLine returns the last non-empty line of the file, reading only its
+// tail: a run file can hold hundreds of megabytes. The window doubles
+// until it holds the whole line.
+func lastLine(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	size := info.Size()
+	for window := int64(64 << 10); ; window *= 2 {
+		if window > size {
+			window = size
+		}
+		buf := make([]byte, window)
+		if _, err := f.ReadAt(buf, size-window); err != nil && err != io.EOF {
+			return nil, err
+		}
+		tail := bytes.TrimRight(buf, "\n")
+		if i := bytes.LastIndexByte(tail, '\n'); i >= 0 {
+			return tail[i+1:], nil
+		}
+		if window == size {
+			return tail, nil
+		}
+	}
 }
 
 // MarkInterrupted appends an end record to a run that never finished, so

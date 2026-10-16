@@ -296,6 +296,10 @@ func TestConfigErrorGoesToControlDir(t *testing.T) {
 	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
+	// The parent knows its child as c, not by the child's path from root.
+	if notes := noteTexts(h.mainHome, "-subagent-error.md"); !strings.HasPrefix(notes[0], "Subagent c did not start: config.json: ") {
+		t.Fatalf("parent note %q", notes[0])
+	}
 	if _, err := os.Stat(filepath.Join(home, "ERROR")); !os.IsNotExist(err) {
 		t.Fatal("ERROR written into the subagent's home")
 	}
@@ -695,7 +699,7 @@ func TestInvalidOwnConfigReportsInControlDir(t *testing.T) {
 	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
 		t.Fatalf("parent notified %d times", n)
 	}
-	want := fmt.Sprintf(MsgSubagentFmt, childID("x"), `config.json: unknown model "nope"`)
+	want := fmt.Sprintf(MsgSubagentFmt, "x", `config.json: unknown model "nope"`)
 	if notes := noteTexts(h.mainHome, "-subagent-error.md"); len(notes) != 1 || !strings.HasPrefix(notes[0], want) {
 		t.Fatalf("parent note %q, want %q", notes, want)
 	}

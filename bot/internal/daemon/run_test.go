@@ -276,6 +276,44 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	}
 }
 
+// A file that cannot be moved into processed/ after others were does not
+// cost the model the ones that were: the run goes on with what it has, the
+// failure is logged, and the file waits for the next collection.
+func TestLateRenameFailureKeepsRecords(t *testing.T) {
+	defer func(f func(*agent, string, string) error) { moveInbox = f }(moveInbox)
+	calls := 0
+	moveInbox = func(a *agent, from, to string) error {
+		if calls++; calls == 2 {
+			return errors.New("boom")
+		}
+		return a.fs.Rename(from, to)
+	}
+	h := newHarness(t, done(), done())
+	h.start()
+	h.drop(h.mainHome, "a.md", "first")
+	h.drop(h.mainHome, "b.md", "second")
+	records := h.waitEnds(h.mainID, 1)
+	var files []string
+	for _, r := range records {
+		if r["type"] == "inbox" {
+			files = append(files, r["file"].(string))
+		}
+	}
+	if strings.Join(files, " ") != "inbox/processed/a.md" || lastEnd(records) != "done" {
+		t.Fatalf("first run: files %v, end %q", files, lastEnd(records))
+	}
+	if !strings.Contains(h.logs.String(), "inbox: boom") {
+		t.Fatalf("failure not logged:\n%s", h.logs)
+	}
+	if !h.sawRecord(`"content":"first"`) {
+		t.Fatal("the model did not get the file that was moved")
+	}
+	records = h.waitEnds(h.mainID, 2)
+	if inboxRecordFrom(records, "second") == "" {
+		t.Fatalf("second run did not collect b.md: %v", records)
+	}
+}
+
 func TestVanishedInboxDoesNotCallModel(t *testing.T) {
 	h := newHarness(t, step("echo never", 100))
 	d := &daemon{cfg: h.cfg, runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
