@@ -94,8 +94,8 @@ its own.
 
 **Groups.** Each agent user has its own group, whose members are the
 agent's ancestors other than root, kept current in `/etc/group`. A process
-started while in a reclaimed user's group keeps read access to the next
-holder's home until it restarts.
+started while in a deleted user's group keeps that gid, which a later user
+may be given, until it restarts.
 
 **File access through helpers.** The daemon never opens a path inside an
 agent home or control directory as root. It runs one long-lived helper per
@@ -196,7 +196,7 @@ control directories but no loop, inbox, journal or owner.
 
 - While stat fails on a not-yet-running child's control directory, messages
   for it wait.
-- Reclaim leaves links in `/home`. An installation upgraded from 0.3 has
+- Deletion leaves links in `/home`. An installation upgraded from 0.3 has
   `/home/agent` leading to main's home, which nothing removes.
 
 ## The loop

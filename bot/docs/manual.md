@@ -88,12 +88,11 @@ complete.
 1. `config.json` and your owner's `OWNER.md` are read and checked (see
    Configuration and Owner's instructions). If either fails, the run does
    not start and the inbox is left alone.
-2. If the harness was upgraded since your previous run, the upgrade note is
-   written to your inbox (see Upgrades).
-3. The run's journal file is created, with its `start` record.
-4. `~/journal` and `~/manual` are linked.
-5. `README.md` is read.
-6. The inbox is collected: every regular file in name order, dot-files
+2. The run's journal file is created, with its `start` record.
+3. `~/journal`, `~/manual` and, when your owner is an agent, `~/owner` are
+   linked.
+4. `README.md` is read.
+5. The inbox is collected: every regular file in name order, dot-files
    included; directories are skipped. Each is journaled and moved to `inbox/processed/`
    (with a numeric suffix if that name is taken).
 
