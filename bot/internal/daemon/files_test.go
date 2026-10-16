@@ -42,9 +42,8 @@ func TestInvalidStartingConfigHeldBack(t *testing.T) {
 	}
 	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(testConfig), 0o644)
 	h.childHome(ctrl)
-	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
-		t.Fatal("ERROR not cleared at admission")
-	}
+	// Admission clears it just after writing the home link.
+	waitFor(t, "ERROR cleared at admission", func() bool { _, err := os.Stat(errorFile); return os.IsNotExist(err) })
 }
 
 // Without a providers cache the starting config is not checked: the first
