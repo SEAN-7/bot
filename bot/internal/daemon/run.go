@@ -264,7 +264,7 @@ func (a *agent) reportError(text string) {
 func (a *agent) clearError() {
 	a.lastError = ""
 	parent, path := a.errorFile()
-	parent.Remove(path)
+	parent.Unlink(path)
 }
 
 // commandWait interprets the model's wait argument: seconds as a JSON number,

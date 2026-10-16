@@ -71,7 +71,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if fresh {
 		// A home directory left under this name (a userdel that could not
 		// remove it) must not reach the new user.
-		if err := c.fs.Clear(c.home); err != nil {
+		if err := d.clearHome(user); err != nil {
 			return fail("clear home", err)
 		}
 	}
@@ -250,5 +250,5 @@ func (d *daemon) notStarted(parent *agent, ctrl, name, text, note string) {
 // wrong.
 func (d *daemon) clearHeldBack(parent *agent, ctrl string) {
 	delete(d.heldBack, ctrl)
-	parent.fs.Remove(filepath.Join(ctrl, "ERROR"))
+	parent.fs.Unlink(filepath.Join(ctrl, "ERROR"))
 }

@@ -104,12 +104,12 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 	processed := filepath.Join(a.home, "inbox", "processed")
 	// Created again if the agent removed it. One the agent replaced with a
 	// link is left alone and followed, but it must lead to a directory.
-	if skipped, err := a.fs.Private(processed); err != nil {
-		return nil, nil, err
-	} else if len(skipped) > 0 {
+	if err := a.fs.Mkdir(processed, 0o750); errors.Is(err, fs.ErrExist) {
 		if _, err := a.fs.Stat(processed + "/."); err != nil {
 			return nil, nil, err
 		}
+	} else if err != nil {
+		return nil, nil, err
 	}
 	var records []inboxRecord
 	var shown []proto.Image

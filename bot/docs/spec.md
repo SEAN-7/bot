@@ -106,11 +106,13 @@ through its agent's helper, a control directory through its parent's, and
 `/etc/agent` through a root helper. A helper that dies is restarted and the
 affected run retried. Operations: `list`, `read` (regular files, byte
 limit), `write` (atomic: a temporary dot-file in the target's directory, or
-in a staging directory the caller names, then a rename), `private` (create a missing
-directory 0750; leave anything else alone), `rename`, `remove` and `clear`
-(never following symlinks), `unlink`, `symlink`, `purge_owned` (the user's
-files in shared temporary directories) and `stat` (lstat of the final
-component).
+in a staging directory the caller names, then a rename), `mkdir` (create
+with a mode; an existing directory of the user's is left alone, anything
+else is an error), `rename`, `unlink` (never following symlinks),
+`symlink` (remove, then create) and `stat` (lstat of the final component).
+Removing what a user left behind, in its home or the shared temporary
+directories, is `rm -rf` run as that user through `shell.Run`, after its
+processes are dead.
 
 **Shell commands.** Credentials are set before exec. When a command
 finishes, every live process in the daemon's own cgroup whose real or

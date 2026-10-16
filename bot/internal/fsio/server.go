@@ -15,7 +15,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 )
 
@@ -34,26 +33,24 @@ type Entry struct {
 }
 
 type request struct {
-	Op    string   `json:"op"`
-	Path  string   `json:"path"`
-	Path2 string   `json:"path2,omitempty"`
-	Data  []byte   `json:"data,omitempty"`
-	Limit int64    `json:"limit,omitempty"`
-	Paths []string `json:"paths,omitempty"`
-	Mode  uint32   `json:"mode,omitempty"`  // write's permission bits; mkdir's whole mode
-	Stage string   `json:"stage,omitempty"` // write's staging directory; "" is the target's own
+	Op    string `json:"op"`
+	Path  string `json:"path"`
+	Path2 string `json:"path2,omitempty"`
+	Data  []byte `json:"data,omitempty"`
+	Limit int64  `json:"limit,omitempty"`
+	Mode  uint32 `json:"mode,omitempty"`  // write's permission bits; mkdir's whole mode
+	Stage string `json:"stage,omitempty"` // write's staging directory; "" is the target's own
 }
 
 type response struct {
-	Err        string   `json:"err,omitempty"`
-	NotExist   bool     `json:"notexist,omitempty"`
-	Permission bool     `json:"permission,omitempty"`
-	Exist      bool     `json:"exist,omitempty"`
-	Data       []byte   `json:"data,omitempty"`
-	Size       int64    `json:"size,omitempty"`
-	Entries    []Entry  `json:"entries,omitempty"`
-	Entry      *Entry   `json:"entry,omitempty"`
-	Paths      []string `json:"paths,omitempty"`
+	Err        string  `json:"err,omitempty"`
+	NotExist   bool    `json:"notexist,omitempty"`
+	Permission bool    `json:"permission,omitempty"`
+	Exist      bool    `json:"exist,omitempty"`
+	Data       []byte  `json:"data,omitempty"`
+	Size       int64   `json:"size,omitempty"`
+	Entries    []Entry `json:"entries,omitempty"`
+	Entry      *Entry  `json:"entry,omitempty"`
 }
 
 // Serve answers JSON-line requests until r is closed.
@@ -84,10 +81,6 @@ func Serve(r io.Reader, w io.Writer) error {
 
 func handle(req request) (response, error) {
 	switch req.Op {
-	case "clear":
-		return response{}, clearDir(req.Path)
-	case "purge_owned":
-		return response{}, purgeOwned(req.Paths)
 	case "list":
 		items, err := os.ReadDir(req.Path)
 		if err != nil {
@@ -120,30 +113,22 @@ func handle(req request) (response, error) {
 		return response{Data: data, Size: info.Size()}, err
 	case "write":
 		return response{}, write(req.Path, req.Data, os.FileMode(req.Mode).Perm(), req.Stage)
-	case "private":
-		skipped, err := private(req.Paths)
-		return response{Paths: skipped}, err
 	case "mkdir":
 		return response{}, mkdir(req.Path, os.FileMode(req.Mode))
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
-	case "remove":
-		return response{}, os.RemoveAll(req.Path)
 	case "unlink":
 		if err := syscall.Unlink(req.Path); err != nil {
 			return response{}, &fs.PathError{Op: "unlink", Path: req.Path, Err: err}
 		}
 		return response{}, nil
 	case "symlink":
-		temp := filepath.Join(filepath.Dir(req.Path2), "."+filepath.Base(req.Path2)+"."+random()+".tmp")
-		if err := os.Symlink(req.Path, temp); err != nil {
+		// Remove, then create: the only readers are the agent's own
+		// commands, and a run starts with these links.
+		if err := os.Remove(req.Path2); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return response{}, err
 		}
-		if err := os.Rename(temp, req.Path2); err != nil {
-			os.Remove(temp)
-			return response{}, err
-		}
-		return response{}, nil
+		return response{}, os.Symlink(req.Path, req.Path2)
 	case "stat":
 		info, err := os.Lstat(req.Path)
 		if err != nil {
@@ -234,110 +219,9 @@ func mkdir(path string, mode os.FileMode) error {
 	return nil
 }
 
-// private creates each of paths that is missing as a directory without
-// permissions for others (see Client.Private), and returns those it left
-// alone.
-func private(paths []string) ([]string, error) {
-	var skipped []string
-	below := func(path string) bool {
-		for _, s := range skipped {
-			if strings.HasPrefix(path, s+"/") {
-				return true
-			}
-		}
-		return false
-	}
-	for _, path := range paths {
-		if below(path) {
-			continue
-		}
-		// mkdir never follows a link in the last component.
-		if err := os.Mkdir(path, 0o750); err != nil && !errors.Is(err, fs.ErrExist) {
-			return skipped, err
-		}
-		info, err := os.Lstat(path)
-		if err != nil {
-			return skipped, err
-		}
-		if !info.IsDir() || owner(info) != os.Getuid() {
-			skipped = append(skipped, path)
-		}
-	}
-	return skipped, nil
-}
-
 func owner(info fs.FileInfo) int {
 	if st, ok := info.Sys().(*syscall.Stat_t); ok {
 		return int(st.Uid)
 	}
 	return -1
-}
-
-// clearDir removes everything inside dir and keeps dir itself. It goes on
-// past an entry it cannot remove and reports every failure.
-func clearDir(dir string) error {
-	items, err := os.ReadDir(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	var errs []error
-	for _, item := range items {
-		errs = append(errs, removeAll(filepath.Join(dir, item.Name())))
-	}
-	return errors.Join(errs...)
-}
-
-// purgeOwned removes each top-level entry of dirs that this user owns, leaving
-// entries owned by others (the daemon's, or another agent's) in place. It goes
-// on past a directory or entry it cannot remove and reports every failure.
-func purgeOwned(dirs []string) error {
-	var errs []error
-	for _, dir := range dirs {
-		items, err := os.ReadDir(dir)
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			errs = append(errs, err)
-			continue
-		}
-		for _, item := range items {
-			path := filepath.Join(dir, item.Name())
-			info, err := os.Lstat(path)
-			if err != nil || owner(info) != os.Getuid() {
-				continue // vanished, or not ours
-			}
-			errs = append(errs, removeAll(path))
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// removeAll is os.RemoveAll for a tree that may hold directories without
-// write or search permission for their owner (a module cache is read-only,
-// for example): it first gives every directory this user owns u+rwx, never
-// following symlinks, then removes the tree.
-func removeAll(path string) error {
-	writable(path)
-	return os.RemoveAll(path)
-}
-
-func writable(path string) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.IsDir() || owner(info) != os.Getuid() {
-		return // not a directory (links included), or not ours to change
-	}
-	if info.Mode().Perm()&0o700 != 0o700 {
-		os.Chmod(path, info.Mode().Perm()|0o700)
-	}
-	items, err := os.ReadDir(path)
-	if err != nil {
-		return // RemoveAll reports it
-	}
-	for _, item := range items {
-		if item.IsDir() {
-			writable(filepath.Join(path, item.Name()))
-		}
-	}
 }

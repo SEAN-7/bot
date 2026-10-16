@@ -158,16 +158,29 @@ func (d *daemon) sweepTmp(user string) error {
 	if len(d.cfg.TmpDirs) == 0 {
 		return nil
 	}
-	cred, err := d.cfg.LookupUser(user)
-	if err != nil {
-		return err
-	}
 	var b strings.Builder
 	for _, dir := range d.cfg.TmpDirs {
 		fmt.Fprintf(&b, "[ -d %[1]s ] && find %[1]s -mindepth 1 -maxdepth 1 -user \"$(id -un)\" -exec sh -c 'chmod -R u+rwX \"$@\" 2>/dev/null; rm -rf \"$@\"' sh {} +; ", shellQuote(dir))
 	}
+	return d.runAs(user, b.String()+"true")
+}
+
+// clearHome empties the user's home, as the user: what a previous user of
+// the name left behind must not reach a new one. Directories are made
+// writable first, since a module cache is read-only.
+func (d *daemon) clearHome(user string) error {
+	return d.runAs(user, `find "$HOME" -mindepth 1 -maxdepth 1 -exec sh -c 'chmod -R u+rwX "$@" 2>/dev/null; rm -rf "$@"' sh {} +`)
+}
+
+// runAs runs a shell command as user, in its home, and reports a non-zero
+// exit as an error with the output.
+func (d *daemon) runAs(user, command string) error {
+	cred, err := d.cfg.LookupUser(user)
+	if err != nil {
+		return err
+	}
 	home := d.cfg.Home(user)
-	result, err := shell.Run(context.Background(), b.String()+"true", shell.Options{
+	result, err := shell.Run(context.Background(), command, shell.Options{
 		Dir: "/", Home: home, Env: shell.Env(home, user, credUID(cred)), User: cred, Timeout: 2 * time.Minute,
 	})
 	if err != nil {
