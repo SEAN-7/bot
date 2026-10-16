@@ -14,9 +14,10 @@ when changing the site).
 - Go standard library only. Run `go vet ./...` and `go test ./...` before
   committing; CI also runs the root privilege tests and the reproducible
   release check (`scripts/release_test.sh`).
-- Work on `main` directly; don't create feature branches.
-- Commit and push completed changes by default. Verify the working tree is
-  clean and the branch matches its remote before reporting completion.
+- Changes reach `main` through a pull request: commit on a branch, push it,
+  open a PR, and merge it once CI passes. Do this by default for completed
+  changes, then delete the branch. Verify the working tree is clean and
+  local `main` matches its remote before reporting completion.
 - Record agent-facing changes in `internal/notes/notes.md` under the release's
   version (facts, not instructions). The file is embedded; agents read it at
   `~/manual/notes.md` and get the unseen sections with their next run.
@@ -24,8 +25,9 @@ when changing the site).
   it at `~/manual/manual.md`); `docs/spec.md` holds only what agents cannot
   see. A fact lives in one of them, never both. `TestManualQuotesTheHarness`
   fails until the manual quotes every string the harness shows agents.
-- Releases: run `scripts/release.sh X.Y.Z`, commit the updated
-  `plugins/index.json` and `install.sh`, then tag `vX.Y.Z` and push the tag.
+- Releases: run `scripts/release.sh X.Y.Z` and merge the updated
+  `plugins/index.json` and `install.sh` through a PR, then tag the merge
+  commit `vX.Y.Z` and push the tag.
   The release workflow rebuilds and refuses to publish if any checksum differs.
 - Deploy to the VM (SSH host `bot`) by running the release's `install.sh`
   there; on an existing installation it upgrades in place and keeps the
