@@ -330,9 +330,11 @@ accepts only a file matching the index.
 
 - **anthropic**: Messages API, `ANTHROPIC_API_KEY`. Cache markers on each
   system segment (at most the last three) and the latest message. Declares
-  JPEG, PNG, GIF and WebP (WebP still arrives as a note); each image follows
-  its message's text as a text block naming the file and an image block.
-  HTTP 413 is `context_overflow`. Exposes the models' reasoning settings as
+  JPEG, PNG and GIF; each image follows its message's text as a text block
+  naming the file and an image block. An image over 5 MiB, undecodable, or
+  over 8000 px a side is replaced by a text block saying so and naming the
+  file, so the request still goes through. HTTP 413 is `context_overflow`
+  and a 400 that is not an overflow is `invalid_request`. Exposes the models' reasoning settings as
   options, taken from the current Anthropic documentation. Its `caching`
   text gives the 5-minute lifetime, the read and write multipliers and each
   model's minimum cacheable prompt, from the current documentation.

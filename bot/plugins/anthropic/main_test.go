@@ -3,7 +3,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
+	"hash/crc32"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -523,10 +529,26 @@ func TestDescribeDeclaresImages(t *testing.T) {
 		t.Fatal("no models")
 	}
 	for _, m := range d.Models {
-		if !reflect.DeepEqual(m.ImageTypes, []string{"image/jpeg", "image/png", "image/gif", "image/webp"}) {
+		if !reflect.DeepEqual(m.ImageTypes, []string{"image/jpeg", "image/png", "image/gif"}) {
 			t.Errorf("model %s declares image types %v", m.ID, m.ImageTypes)
 		}
 	}
+}
+
+func encodePNG(w, h int) []byte {
+	var b bytes.Buffer
+	if err := png.Encode(&b, image.NewRGBA(image.Rect(0, 0, w, h))); err != nil {
+		panic(err)
+	}
+	return b.Bytes()
+}
+
+func encodeJPEG(w, h int) []byte {
+	var b bytes.Buffer
+	if err := jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, w, h)), nil); err != nil {
+		panic(err)
+	}
+	return b.Bytes()
 }
 
 // A user message's images follow its text, each behind a label naming its
@@ -534,11 +556,12 @@ func TestDescribeDeclaresImages(t *testing.T) {
 func TestImageBlocks(t *testing.T) {
 	api := &fakeAPI{status: 200, body: okBody}
 	srv := api.serve(t)
+	a, b := encodePNG(1, 1), encodeJPEG(1, 1)
 	complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{
 		Role: "user", Content: "records",
 		Images: []proto.Image{
-			{File: "inbox/processed/a.png", MediaType: "image/png", Data: []byte{1, 2, 3}},
-			{File: "inbox/processed/b.jpg", MediaType: "image/jpeg", Data: []byte{4}},
+			{File: "inbox/processed/a.png", MediaType: "image/png", Data: a},
+			{File: "inbox/processed/b.jpg", MediaType: "image/jpeg", Data: b},
 		},
 	}}})
 	msgs := api.requests[0].body["messages"].([]any)
@@ -548,11 +571,57 @@ func TestImageBlocks(t *testing.T) {
 	got, _ := json.Marshal(msgs[0].(map[string]any)["content"])
 	want := `[{"type":"text","text":"records"},` +
 		`{"type":"text","text":"inbox/processed/a.png:"},` +
-		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AQID"}},` +
+		`{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + base64.StdEncoding.EncodeToString(a) + `"}},` +
 		`{"type":"text","text":"inbox/processed/b.jpg:"},` +
-		`{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"BA=="},"cache_control":{"type":"ephemeral"}}]`
+		`{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"` + base64.StdEncoding.EncodeToString(b) + `"},"cache_control":{"type":"ephemeral"}}]`
 	if !jsonEqual(t, got, []byte(want)) {
 		t.Fatalf("content\n got %s\nwant %s", got, want)
+	}
+}
+
+// The plugin applies the API's image limits: an image over 5 MiB, one it
+// cannot decode, or one over 8000 px a side becomes a text block saying so,
+// and the request still goes through.
+func TestImageLimits(t *testing.T) {
+	api := &fakeAPI{status: 200, body: okBody}
+	srv := api.serve(t)
+	huge := encodePNG(4, 4)
+	binary.BigEndian.PutUint32(huge[16:], 9000)
+	binary.BigEndian.PutUint32(huge[20:], 10)
+	binary.BigEndian.PutUint32(huge[29:], crc32.ChecksumIEEE(huge[12:29]))
+	complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{
+		Role: "user", Content: "records",
+		Images: []proto.Image{
+			{File: "inbox/processed/big.png", MediaType: "image/png", Data: make([]byte, 6<<20)},
+			{File: "inbox/processed/bad.png", MediaType: "image/png", Data: []byte{1, 2, 3}},
+			{File: "inbox/processed/wide.png", MediaType: "image/png", Data: huge},
+			{File: "inbox/processed/ok.png", MediaType: "image/png", Data: encodePNG(1, 1)},
+		},
+	}}})
+	content := api.requests[0].body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	var texts []string
+	images := 0
+	for _, block := range content {
+		b := block.(map[string]any)
+		if b["type"] == "image" {
+			images++
+		} else {
+			texts = append(texts, b["text"].(string))
+		}
+	}
+	if images != 1 {
+		t.Fatalf("%d image blocks, want 1: %v", images, texts)
+	}
+	joined := strings.Join(texts, "\n")
+	for _, want := range []string{
+		"[image not shown: 6291456 bytes is over 5 MiB. File: inbox/processed/big.png]",
+		"[image not shown: could not decode it: ",
+		". File: inbox/processed/bad.png]",
+		"[image not shown: 9000x10 is over 8000 px a side. File: inbox/processed/wide.png]",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("text blocks lack %q:\n%s", want, joined)
+		}
 	}
 }
 
