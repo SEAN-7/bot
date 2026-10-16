@@ -225,12 +225,17 @@ func TestAdmissionSeedsHome(t *testing.T) {
 	}
 	// The harness's directories are its ancestors' to read (the home's
 	// group), not its children's, should it let them through its home. The
-	// inbox is also its ancestors' to write into, and sticky.
-	if info, err := os.Lstat(filepath.Join(home, "inbox")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&fs.ModeSticky == 0 {
+	// inbox, outside the home, is also its ancestors' to write into, and
+	// sticky; ~/inbox links to it.
+	inbox := h.cfg.Inbox("agent-2")
+	if info, err := os.Lstat(inbox); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&fs.ModeSticky == 0 {
 		t.Fatalf("inbox: %v %v", info, err)
 	}
-	for _, p := range []string{"inbox/processed", "agents"} {
-		if info, err := os.Lstat(filepath.Join(home, p)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
+	if target, err := os.Readlink(filepath.Join(home, "inbox")); err != nil || target != inbox {
+		t.Fatalf("~/inbox %q %v", target, err)
+	}
+	for _, p := range []string{filepath.Join(inbox, "processed"), filepath.Join(home, "agents")} {
+		if info, err := os.Lstat(p); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
 			t.Fatalf("%s: %v %v", p, info, err)
 		}
 	}
@@ -259,7 +264,7 @@ func TestHarnessDirNotADirectoryHoldsAdmission(t *testing.T) {
 	h := newHarness(t)
 	h.start()
 	h.stop()
-	processed := filepath.Join(h.mainHome, "inbox", "processed")
+	processed := filepath.Join(h.cfg.Inbox("agent-1"), "processed")
 	outside := t.TempDir()
 	os.Chmod(outside, 0o755)
 	os.RemoveAll(processed)

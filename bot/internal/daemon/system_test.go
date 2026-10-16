@@ -135,7 +135,7 @@ func TestExecSystemUsersParsesPasswd(t *testing.T) {
 		"root:x:0:0:root:/root:/bin/bash",
 		"agent-1:x:1001:1001:main:/home/agent-1:/bin/bash",
 		"agent-provider:x:998:998::/:/usr/sbin/nologin",
-		"agent-7:x:1007:1007:main/agents/r,extra:/home/agent-7:/bin/bash",
+		"agent-7:x:1007:1007:main/agents/r,extra:/home/agent-7:/bin/bash", // the whole field is the id
 		"agent-x:x:1008:1008:not an agent:/home/agent-x:/bin/bash",
 		"agent-3:x:1003:1003::/home/agent-3:/bin/bash",
 		"",
@@ -145,7 +145,7 @@ func TestExecSystemUsersParsesPasswd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []User{{"agent-1", "main"}, {"agent-3", ""}, {"agent-7", "main/agents/r"}}
+	want := []User{{"agent-1", "main"}, {"agent-3", ""}, {"agent-7", "main/agents/r,extra"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}

@@ -69,14 +69,13 @@ main() {
 			die "this machine runs ${installed:+v$installed, }a release before 0.4.1; upgrade with the v0.4.1 install.sh first"
 	fi
 
-	# Agents share files with each other through setfacl, from the acl package.
+	# A subagent reaches its owner's inbox through an ACL: the daemon runs
+	# setfacl, from the acl package, at every admission.
 	if ! command -v setfacl >/dev/null 2>&1; then
 		if command -v apt-get >/dev/null 2>&1; then
-			DEBIAN_FRONTEND=noninteractive apt-get install -y acl >/dev/null ||
-				say "warning: could not install the acl package; agents cannot share files with setfacl until it is installed"
-		else
-			say "warning: setfacl is missing; install the acl package so agents can share files"
+			DEBIAN_FRONTEND=noninteractive apt-get install -y acl >/dev/null || true
 		fi
+		command -v setfacl >/dev/null 2>&1 || die "setfacl is missing and could not be installed; install the acl package, without which no subagent can be admitted"
 	fi
 
 	case $(uname -m) in

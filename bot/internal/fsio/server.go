@@ -96,8 +96,11 @@ func handle(req request) (response, error) {
 		}
 		return response{Entries: entries}, nil
 	case "read":
-		// Non-blocking open: a FIFO planted by the agent must not hang the helper.
-		f, err := os.OpenFile(req.Path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+		// Non-blocking open: a FIFO planted by the agent must not hang the
+		// helper. Never through a link: another user may create files
+		// where the helper reads (an inbox), and a link there must not
+		// make the helper read what it points at.
+		f, err := os.OpenFile(req.Path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW, 0)
 		if err != nil {
 			return response{}, err
 		}

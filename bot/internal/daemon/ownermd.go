@@ -25,9 +25,9 @@ func ownerSegment(text string) string {
 
 // readOwner returns the agent's OWNER.md, in its control directory, read
 // through its parent's helper: the directory is the parent's, and the agent
-// has no way into it. A missing file is no instructions; a regular file, or
-// a link to one, is used; anything else is an error and the agent must not
-// start.
+// has no way into it. A missing file is no instructions; a regular file is
+// used; anything else, a link included (the helper reads through none), is
+// an error and the agent must not start.
 func (a *agent) readOwner() (string, error) {
 	path := filepath.Join(a.ctrl, "OWNER.md")
 	e, err := a.parent.fs.Stat(path)
@@ -36,7 +36,7 @@ func (a *agent) readOwner() (string, error) {
 	} else if err != nil {
 		return "", err
 	}
-	if e.Type != "file" && e.Type != "symlink" {
+	if e.Type != "file" {
 		return "", fmt.Errorf("%s is not a regular file", path)
 	}
 	data, _, err := a.parent.fs.Read(path, segmentLimit)

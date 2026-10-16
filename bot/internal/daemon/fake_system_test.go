@@ -135,7 +135,18 @@ func (s *fakeSystem) PrepareHome(user, home string) error {
 	return os.MkdirAll(home, 0o755)
 }
 
-func (s *fakeSystem) ShareInbox(user, home string, uid int, grant bool) error {
+// PrepareInbox creates the inbox 1770 as root would; it cannot chown.
+func (s *fakeSystem) PrepareInbox(user, inbox string) error {
+	if err := s.record("inbox " + user); err != nil {
+		return err
+	}
+	if err := os.Mkdir(inbox, 0o770|fs.ModeSticky); err != nil && !os.IsExist(err) {
+		return err
+	}
+	return os.Chmod(inbox, 0o770|fs.ModeSticky)
+}
+
+func (s *fakeSystem) ShareInbox(user, inbox string, uid int, grant bool) error {
 	verb := "revoke"
 	if grant {
 		verb = "grant"

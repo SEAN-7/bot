@@ -36,6 +36,15 @@ func (l Layout) RootHome() string { return l.Etc }
 // Home is the home directory of an agent user.
 func (l Layout) Home(user string) string { return filepath.Join(l.Homes, user) }
 
+// Inboxes is the root-owned directory holding every agent's inbox, which
+// any user may traverse but not list: a subagent reaches its owner's inbox
+// without entering the owner's home. It shares a filesystem with the homes,
+// so a file staged in a home is renamed in.
+func (l Layout) Inboxes() string { return filepath.Join(l.Homes, ".inbox") }
+
+// Inbox is an agent user's inbox directory, which ~/inbox links to.
+func (l Layout) Inbox(user string) string { return filepath.Join(l.Inboxes(), user) }
+
 // JournalDir mirrors the agent's id, its path from root (main,
 // main/agents/research), under the log root.
 func (l Layout) JournalDir(agentID string) string { return filepath.Join(l.Log, agentID) }

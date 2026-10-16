@@ -509,10 +509,10 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		}
 	}
 	homeG := h.childHome(ctrlG)
-	statIs(t, filepath.Join(homeA, "inbox"), uidA, gidA, fs.ModeDir|fs.ModeSetgid|fs.ModeSticky|0o770)
-	for _, dir := range []string{"inbox/processed", "agents"} {
-		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
-	}
+	inboxA := h.cfg.Inbox(ownerName(t, homeA))
+	statIs(t, inboxA, uidA, gidA, fs.ModeDir|fs.ModeSticky|0o770)
+	statIs(t, filepath.Join(inboxA, "processed"), uidA, gidA, fs.ModeDir|0o750)
+	statIs(t, filepath.Join(homeA, "agents"), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
 	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
 		t.Fatal(err)
 	}

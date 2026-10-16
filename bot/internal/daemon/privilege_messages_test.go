@@ -65,7 +65,7 @@ func TestPrivilegeLabels(t *testing.T) {
 // where it can create files but neither list them nor read the owner's.
 func TestPrivilegeOwnerLink(t *testing.T) {
 	h, _ := rootHarness(t, doneFor(parentMark))
-	h.setScript(matchStep("task-for-c", "ls ~/owner; echo ls=$?; cat ~/owner/../README.md; echo cat=$?; printf hi > ~/.m && mv ~/.m ~/owner/hi.md; echo mv=$?", 100))
+	h.setScript(matchStep("task-for-c", "ls ~/owner; echo ls=$?; cat "+h.mainHome+"/README.md; echo cat=$?; ls "+h.cfg.Inboxes()+"; echo lsall=$?; printf hi > ~/.m && mv ~/.m ~/owner/hi.md; echo mv=$?", 100))
 	h.start()
 	h.markParent()
 	ctrl := rootChild(t, h, "c")
@@ -73,15 +73,15 @@ func TestPrivilegeOwnerLink(t *testing.T) {
 	h.drop(home, "task.md", "task-for-c")
 	h.waitEnds(childID("c"), 1)
 	out := h.toolOutput("mv=")
-	exitCodes(t, out, false, "ls", "cat")
+	exitCodes(t, out, false, "ls", "cat", "lsall")
 	exitCodes(t, out, true, "mv")
-	if target, err := os.Readlink(filepath.Join(home, "owner")); err != nil || target != filepath.Join(h.mainHome, "inbox") {
+	if target, err := os.Readlink(filepath.Join(home, "owner")); err != nil || target != h.cfg.Inbox(h.cfg.UserPrefix+"1") {
 		t.Fatalf("owner link %q %v", target, err)
 	}
 	if !strings.Contains(h.logs.String(), "main: admitted") {
 		t.Fatal(h.logs)
 	}
-	if _, err := os.Stat(filepath.Join(h.mainHome, "inbox", "hi.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(h.cfg.Inbox(h.cfg.UserPrefix+"1"), "hi.md")); err != nil {
 		t.Fatalf("message not in main's inbox: %v", err)
 	}
 }

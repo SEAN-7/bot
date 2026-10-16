@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -32,10 +33,13 @@ type System interface {
 	Users(prefix string) ([]User, error)
 	// PrepareHome creates home if missing and makes the user own it, setgid.
 	PrepareHome(user, home string) error
+	// PrepareInbox creates the user's inbox directory if missing, 1770 and
+	// owned by the user, under the root-owned inboxes directory.
+	PrepareInbox(user, inbox string) error
 	// ShareInbox grants (or revokes) uid write and search access to the
-	// inbox in home, as user, who owns it: setfacl, run as the owner so
-	// that a planted link reaches nothing root could.
-	ShareInbox(user, home string, uid int, grant bool) error
+	// user's inbox, as user, who owns it: setfacl, run as the owner so that
+	// a planted link reaches nothing root could.
+	ShareInbox(user, inbox string, uid int, grant bool) error
 	// SetMembers makes members the whole membership of group.
 	SetMembers(group string, members []string) error
 	EnableLinger(user string) error
@@ -86,7 +90,8 @@ func (s *execSystem) SetComment(name, id string) error {
 }
 
 // Users reads the passwd file: agents are local users, and the file is the
-// record. The comment is the GECOS field up to its first comma.
+// record. The comment is the whole GECOS field, as the daemon wrote it
+// (cleanName keeps commas and colons out of ids, so it round-trips).
 func (s *execSystem) Users(prefix string) ([]User, error) {
 	data, err := os.ReadFile(s.passwd)
 	if err != nil {
@@ -98,8 +103,7 @@ func (s *execSystem) Users(prefix string) ([]User, error) {
 		if len(f) < 5 || !isAgentUser(f[0], prefix) {
 			continue
 		}
-		comment, _, _ := strings.Cut(f[4], ",")
-		users = append(users, User{f[0], comment})
+		users = append(users, User{f[0], f[4]})
 	}
 	sort.Slice(users, func(i, j int) bool { return users[i].Name < users[j].Name })
 	return users, nil
@@ -150,17 +154,44 @@ func (s *execSystem) PrepareHome(user, home string) error {
 	return os.Chmod(home, 0o750|fs.ModeSetgid)
 }
 
-func (s *execSystem) ShareInbox(user, home string, uid int, grant bool) error {
+func (s *execSystem) PrepareInbox(user, inbox string) error {
 	cred, err := s.lookup(user)
 	if err != nil {
 		return err
 	}
-	command := fmt.Sprintf("setfacl -x u:%d ~/inbox", uid)
-	if grant {
-		command = fmt.Sprintf("setfacl -m u:%d:wx ~/inbox", uid)
+	if cred == nil {
+		return fmt.Errorf("no such user %q", user)
 	}
+	// The parent directory is root's and nobody else creates entries in
+	// it, so the path cannot have been swapped for a link.
+	if err := os.Mkdir(inbox, 0o770|fs.ModeSticky); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, err := os.Lstat(inbox)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a directory", inbox)
+	}
+	if err := os.Lchown(inbox, int(cred.Uid), int(cred.Gid)); err != nil {
+		return err
+	}
+	return os.Chmod(inbox, 0o770|fs.ModeSticky)
+}
+
+func (s *execSystem) ShareInbox(user, inbox string, uid int, grant bool) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	command := fmt.Sprintf("setfacl -x u:%d %s", uid, shellQuote(inbox))
+	if grant {
+		command = fmt.Sprintf("setfacl -m u:%d:wx %s", uid, shellQuote(inbox))
+	}
+	home := filepath.Dir(filepath.Dir(inbox)) // not entered: the command runs from /
 	result, err := shell.Run(context.Background(), command, shell.Options{
-		Dir: home, Home: home, Env: shell.Env(home, user, credUID(cred)), User: cred, Timeout: 30 * time.Second,
+		Dir: "/", Home: home, Env: shell.Env(home, user, credUID(cred)), User: cred, Timeout: 30 * time.Second,
 	})
 	if err != nil {
 		return err

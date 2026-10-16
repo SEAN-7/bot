@@ -25,7 +25,7 @@ The harness uses these names in your home; everything else is yours.
 | --- | --- |
 | `README.md` | Loaded into every model call of every run (first 1 MiB). Yours to edit; missing means empty. |
 | `config.json` | Your provider, model and options (see Configuration). Yours to edit. |
-| `inbox/` | Files that wake you and are delivered to you (see Runs). |
+| `inbox` | Link to your inbox, `/home/.inbox/<your user>/`: the files that wake you and are delivered to you (see Runs). It is outside your home so that your subagents can reach it without entering your home. |
 | `inbox/processed/` | Where delivered inbox files are moved. |
 | `agents/` | Your subagents' control directories (see Subagents). |
 | `owner` | Link to your owner's inbox, where your messages go (see Messages); absent when your owner is the human. |
@@ -35,13 +35,15 @@ The harness uses these names in your home; everything else is yours.
 Your home is setgid and commands run with umask 022, so the agents above
 you (your owner and its ancestors, other than root) can read what you
 write; nobody else can enter it. You can tighten your own files' modes. The
-harness creates `inbox/` 1770 (your owner and its ancestors write messages
-straight into it, your subagents by a grant, and nobody removes or renames
-another's file), `inbox/processed/`, `agents/` and control directories
-0750, and the notes it writes into your inbox and `config.json` 0640. A
-file someone else wrote into your inbox has the mode they gave it. Where a
-name the harness uses already exists as a directory you own, it is left as
-it is; anything else of that name keeps you from starting.
+harness creates your inbox 1770 (your owner and its ancestors write
+messages straight into it, your subagents by a grant, and nobody removes
+or renames another's file), `inbox/processed/`, `agents/` and control
+directories 0750, and the notes it writes into your inbox and `config.json`
+0640. A file someone else wrote into your inbox has the mode they gave it.
+Where a name the harness uses already exists as a directory you own, it is
+left as it is; anything else of that name keeps you from starting. An
+`inbox/` directory from a release before 0.9.0 is moved to `inbox.0.8.0/`
+once, its pending files into your inbox.
 
 ## Commands
 
@@ -225,9 +227,8 @@ is the system prompt, a blank line, this header and the content:
 > context.
 
 It is read at the start of each run (first 1 MiB), so an edit takes effect
-on the next run. It is used if it is a regular file (a link to one
-counts). Missing means no instructions. Anything else, or unreadable,
-means you do not run: "OWNER.md: " and the reason go to your `ERROR`, the
+on the next run. It is used if it is a regular file, not a link. Missing
+means no instructions. Anything else, or unreadable, means you do not run: "OWNER.md: " and the reason go to your `ERROR`, the
 inbox is left alone, and it is checked again each poll. The harness states
 this precedence; it does not enforce it.
 
@@ -273,7 +274,7 @@ this precedence; it does not enforce it.
 - A subagent is a directory: `~/agents/NAME/`, a real directory you own,
   holding a regular file `config.json` (see Configuration).
   `cp ~/config.json ~/agents/NAME/` gives it a copy of yours. NAME is one
-  plain directory name, not starting with a dot, without control
+  plain directory name, not starting with a dot, without commas, colons or control
   characters. A directory without a `config.json` is not a subagent, and
   nothing happens.
 - Its `config.json` is checked at its first run, as yours is at each of
@@ -299,8 +300,9 @@ this precedence; it does not enforce it.
   not write to it. It cannot read yours unless you grant access, and even
   then cannot list or read `~/inbox` or `~/agents` unless a default ACL on
   `~` names its user, which harness directories created later would
-  inherit. It can create files in `~/inbox` (that is how it messages you)
-  but not list it, read others' files there, or remove them.
+  inherit. It can create files in your inbox, which is outside your home
+  (that is how it messages you), but not list it, read others' files
+  there, or remove them.
 - **Sharing** is by `setfacl` on files and directories you own. Granting
   its user `x` on `~` lets it reach any file there that others can read.
   Its user is `stat -L -c %U ~/agents/NAME/home`. User names and ids come

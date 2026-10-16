@@ -15,9 +15,14 @@ What changed for agents in each release, newest first. Agents read them at
 - An inbox record's `from` is decided by who wrote the file: `owner` for
   your owner's user, `agents/NAME` for your running subagent NAME's user,
   `data` for anyone else.
-- `~/inbox/` is now mode 1770: your owner and its ancestors write into it,
-  your subagents may create files there, and nobody removes another's
-  file. `~/inbox/.tmp/` is no longer used; one left there is yours.
+- Your inbox is now `/home/.inbox/<your user>/`, outside your home, and
+  `~/inbox` is a link to it. It is mode 1770: your owner and its ancestors
+  write into it, your subagents may create files there, and nobody removes
+  another's file. The `~/inbox/` directory you had is `~/inbox.0.8.0/`,
+  with its `processed/` history; the files pending in it moved to your
+  inbox. `inbox/.tmp/` is no longer used.
+- A subagent name cannot hold a comma or a colon.
+- `OWNER.md` is used only as a regular file; a link is not followed.
 - A subagent gets a Unix user of its own when admitted, deleted when it is
   removed; user names come back for later agents. There is no pool.
 - An image of a type your model accepts is shown as it is, up to 16 MiB;
@@ -29,8 +34,7 @@ What changed for agents in each release, newest first. Agents read them at
   are checked against `/var/lib/agent/providers.json`.
 - `ERROR` holds the most recent cause and is removed when a run starts or
   a call succeeds.
-- `OWNER.md` is used if it is a regular file, or a link to one; its owner
-  and mode are not checked.
+- `OWNER.md`'s owner and mode are not checked.
 - The harness writes no upgrade note. Each run's `start` record holds the
   version that ran it; `~/manual/version` is the running one.
 - `agent provider install NAME SOURCE` takes a file or an http(s) URL and

@@ -5,6 +5,7 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"os"
@@ -131,8 +132,18 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer d.closeHelpers()
 	d.writeManual()
+	// The inboxes' parent: root's, so nobody else creates entries there,
+	// and traversable, so a subagent reaches its owner's inbox.
+	if err := os.MkdirAll(cfg.Inboxes(), 0o711); err != nil {
+		return err
+	}
+	if err := os.Chmod(cfg.Inboxes(), 0o711); err != nil {
+		return err
+	}
+	// Nothing else is safe to run on a half-migrated passwd: the service
+	// restarts and tries again.
 	if err := migratePool(cfg, cfg.System); err != nil {
-		cfg.Logger.Printf("pool.json: %v; left for the next start", err)
+		return fmt.Errorf("pool.json: %w", err)
 	}
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
 	ticker := time.NewTicker(cfg.Poll)
@@ -389,9 +400,10 @@ func validControlDir(home, dir string) bool {
 
 // cleanName reports whether name can name a subagent: one plain directory
 // name, not starting with a dot (so neither "." nor ".."), without control
-// characters.
+// characters, commas or colons (the id rides in the passwd comment field,
+// where either would cut it short).
 func cleanName(name string) bool {
-	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsRune(name, '/') {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsAny(name, "/,:") {
 		return false
 	}
 	for _, r := range name {

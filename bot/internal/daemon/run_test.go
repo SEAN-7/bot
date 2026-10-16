@@ -195,10 +195,10 @@ func TestDotFilesWaitForARun(t *testing.T) {
 	}
 }
 
-// The harness stages what it writes into an inbox as a dot-file in the home
-// and renames it in, so nothing half-written is ever in the inbox and no
-// staging directory is needed there.
-func TestInboxWritesStagedInHome(t *testing.T) {
+// The harness stages what it writes into an inbox as a dot-file in
+// inbox/processed and renames it in, so nothing half-written is ever
+// collected and the inbox needs no staging directory of its own.
+func TestInboxWritesStagedInProcessed(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
 	h.sendOwner("hello")
@@ -208,15 +208,19 @@ func TestInboxWritesStagedInHome(t *testing.T) {
 			t.Fatalf("record %v", r)
 		}
 	}
-	if _, err := os.Lstat(filepath.Join(h.mainHome, "inbox", ".tmp")); !os.IsNotExist(err) {
+	if _, err := os.Lstat(filepath.Join(h.cfg.Inbox("agent-1"), ".tmp")); !os.IsNotExist(err) {
 		t.Fatalf("inbox/.tmp exists: %v", err)
 	}
-	entries, _ := os.ReadDir(h.mainHome)
+	entries, _ := os.ReadDir(filepath.Join(h.cfg.Inbox("agent-1"), "processed"))
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".tmp") {
-			t.Fatalf("temporary file left in the home: %s", e.Name())
+			t.Fatalf("temporary file left in processed: %s", e.Name())
 		}
 	}
+	// An agent that removes processed/ gets it back with the next note.
+	os.RemoveAll(filepath.Join(h.cfg.Inbox("agent-1"), "processed"))
+	h.sendOwner("again")
+	h.waitEnds(h.mainID, 2)
 }
 
 func TestJournalSymlinkRepaired(t *testing.T) {

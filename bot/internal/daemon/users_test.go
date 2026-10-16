@@ -129,7 +129,7 @@ func TestOwnerLinkForChild(t *testing.T) {
 	home := h.childHome(ctrl)
 	h.drop(home, "go.md", "go")
 	h.waitEnds(childID("c"), 1)
-	if target, err := os.Readlink(filepath.Join(home, "owner")); err != nil || target != filepath.Join(h.mainHome, "inbox") {
+	if target, err := os.Readlink(filepath.Join(home, "owner")); err != nil || target != h.cfg.Inbox("agent-1") {
 		t.Fatalf("owner link %q %v", target, err)
 	}
 	if _, err := os.Lstat(filepath.Join(h.mainHome, "owner")); !os.IsNotExist(err) {

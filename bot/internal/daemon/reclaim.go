@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -27,14 +28,17 @@ const removedMark = "removed:"
 // poll goroutine calls it.
 func (d *daemon) remove(gone []*agent) {
 	sort.SliceStable(gone, func(i, j int) bool { return depth(gone[i]) > depth(gone[j]) })
-	// All out of the tree first, so a child's deletion sees its parent
-	// as gone too and leaves the parent's inbox grants alone.
+	// All out of the tree and marked first, so a child's deletion sees its
+	// parent as gone too and leaves the parent's inbox grants alone.
 	d.mu.Lock()
 	for _, a := range gone {
 		a.cancel(errRemoved)
 		delete(d.agents, a.id)
 	}
 	d.mu.Unlock()
+	for _, a := range gone {
+		d.markRemoved(a.user, a.id) // a failure is retried by reclaim
+	}
 	for _, a := range gone {
 		<-a.done
 		a.fs.Close() // its children have stopped, so nothing uses it
@@ -89,12 +93,19 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		// label rule treats as data.
 		{"revoke", func() error { d.revokeInbox(user, agentID); return nil }},
 		{"journal", func() error {
+			dir := d.cfg.JournalDir(agentID)
+			if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+				return nil // never ran: nothing to hand on
+			}
 			gid, err := d.ancestorGid(agentID)
 			if err != nil {
 				return err
 			}
-			return journal.SecureTree(d.cfg.JournalDir(agentID), gid)
+			return journal.SecureTree(dir, gid)
 		}},
+		// The inbox is outside the home, under root's directory, so
+		// userdel does not take it: root does, following no link.
+		{"inbox", func() error { return os.RemoveAll(d.cfg.Inbox(user)) }},
 		{"userdel", func() error { return sys.DeleteUser(user) }},
 	}
 	for _, s := range steps {
@@ -107,24 +118,23 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 }
 
 // revokeInbox takes the user's write access to its parent's inbox away,
-// when the parent is running: one gone too has no inbox to keep.
+// when the parent still has a user (running or not; one being removed too
+// has no inbox to keep).
 func (d *daemon) revokeInbox(user, agentID string) {
 	pid := parentID(agentID)
 	if pid == "" {
 		return // root has no inbox
 	}
-	d.mu.Lock()
-	parent := d.agents[pid]
-	d.mu.Unlock()
-	if parent == nil {
+	parent := d.userOf(pid)
+	if parent == "" {
 		return
 	}
 	cred, err := d.cfg.LookupUser(user)
 	if err == nil {
-		err = d.cfg.System.ShareInbox(parent.user, parent.home, credUID(cred), false)
+		err = d.cfg.System.ShareInbox(parent, d.cfg.Inbox(parent), credUID(cred), false)
 	}
 	if err != nil {
-		d.cfg.Logger.Printf("%s: revoke inbox access of %s: %v", parent.name, user, err)
+		d.cfg.Logger.Printf("%s: revoke inbox access of %s: %v", parent, user, err)
 	}
 }
 

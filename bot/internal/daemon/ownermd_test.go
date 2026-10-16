@@ -162,9 +162,9 @@ func ownerAgents(t *testing.T, h *harness) (*agent, *agent) {
 	return main, child
 }
 
-// OWNER.md only has to be a regular file; a link to one is followed, as the
-// parent who wrote it could follow it. The control directory is the
-// parent's, so its modes and owners are not checked.
+// OWNER.md has to be a regular file, not a link: the helper never reads
+// through links. The control directory is the parent's, so its modes and
+// owners are not checked.
 func TestOwnerNotRegularFileIsError(t *testing.T) {
 	h := newHarness(t)
 	main, child := ownerAgents(t, h)
@@ -181,9 +181,14 @@ func TestOwnerNotRegularFileIsError(t *testing.T) {
 	if err := os.Symlink(target, h.mainOwner()); err != nil {
 		t.Fatal(err)
 	}
+	if text, err := main.readOwner(); err == nil || !strings.Contains(err.Error(), "is not a regular file") {
+		t.Fatalf("OWNER.md link: %q, %v", text, err)
+	}
+	os.Remove(h.mainOwner())
+	os.Rename(target, h.mainOwner())
 	os.Chmod(h.mainCtrl, 0o775)
 	if text, err := main.readOwner(); err != nil || text != "hi" {
-		t.Fatalf("OWNER.md link in a group-writable directory: %q, %v", text, err)
+		t.Fatalf("OWNER.md in a group-writable directory: %q, %v", text, err)
 	}
 }
 

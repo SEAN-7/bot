@@ -127,9 +127,12 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 	if err := a.fs.Symlink(d.cfg.Manual(), filepath.Join(a.home, "manual")); err != nil {
 		a.logf("manual link: %v", err)
 	}
+	if err := a.fs.Symlink(a.inbox, filepath.Join(a.home, "inbox")); err != nil {
+		a.logf("inbox link: %v", err)
+	}
 	// Where its messages go: its owner's inbox. Root has none.
 	if a.parent != d.root {
-		if err := a.fs.Symlink(filepath.Join(a.parent.home, "inbox"), filepath.Join(a.home, "owner")); err != nil {
+		if err := a.fs.Symlink(a.parent.inbox, filepath.Join(a.home, "owner")); err != nil {
 			a.logf("owner link: %v", err)
 		}
 	}

@@ -3,6 +3,7 @@ package daemon
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,16 +23,16 @@ func TestLegacyPoolMigrated(t *testing.T) {
 	if err := migratePool(h.cfg, sys); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"comment agent-1 main", "userdel agent-2", "userdel agent-3"} {
+	for _, want := range []string{"comment agent-1 main", "comment agent-2 " + removedMark + "main/agents/r", "comment agent-3 " + removedMark + "agent-3"} {
 		if !sys.called(want) {
 			t.Fatalf("missing %q: %v", want, sys)
 		}
 	}
-	if sys.called("userdel agent-1") {
-		t.Fatalf("live agent's user deleted: %v", sys)
+	if strings.Contains(sys.String(), "userdel") {
+		t.Fatalf("the migration deleted a user itself: %v", sys)
 	}
 	users, _ := sys.Users("agent-")
-	if len(users) != 1 || users[0] != (User{"agent-1", "main"}) {
+	if len(users) != 3 || users[0] != (User{"agent-1", "main"}) {
 		t.Fatalf("users %v", users)
 	}
 	if _, err := os.Stat(pool); !os.IsNotExist(err) {

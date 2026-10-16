@@ -20,7 +20,8 @@ jobs:
       - name: Privilege-separation tests (root)
         run: |
           # The real System shells out to these; the tests check with them.
-          for tool in pkill pgrep crontab gpasswd loginctl systemctl getent setsid; do
+          sudo apt-get install -y acl >/dev/null
+          for tool in pkill pgrep crontab gpasswd loginctl systemctl getent setsid useradd userdel setfacl; do
             command -v "$tool" >/dev/null || { echo "missing $tool" >&2; exit 1; }
           done
           sudo useradd --system --no-create-home --user-group agent-test

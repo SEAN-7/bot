@@ -50,16 +50,25 @@ func (d *daemon) writeNote(to *agent, kind, text string) error {
 }
 
 // writeInbox writes name into the agent's inbox, through its helper, with
-// the temporary file in the home directory: a run never collects a file
-// half written, and the inbox needs no staging directory.
+// the temporary file in inbox/processed, which is the agent's, closed to
+// others, never collected and on the inbox's filesystem: a run never
+// collects a file half written. An agent that removed processed/ gets it
+// back.
 func (a *agent) writeInbox(name string, data []byte) error {
-	return a.fs.WriteStaged(filepath.Join(a.home, "inbox", name), a.home, data, 0o640)
+	path, stage := filepath.Join(a.inbox, name), filepath.Join(a.inbox, "processed")
+	err := a.fs.WriteStaged(path, stage, data, 0o640)
+	if errors.Is(err, fs.ErrNotExist) {
+		if merr := a.fs.Mkdir(stage, 0o750); merr == nil {
+			err = a.fs.WriteStaged(path, stage, data, 0o640)
+		}
+	}
+	return err
 }
 
 // pending lists the inbox files that wake the agent: regular, not
 // dot-prefixed, by name.
 func (a *agent) pending() ([]string, error) {
-	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
+	entries, err := a.fs.List(a.inbox)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +86,7 @@ func (a *agent) pending() ([]string, error) {
 // dot-file too, by name, with the uid that wrote each. Directories
 // (processed/) are skipped.
 func (a *agent) deliverable() ([]fsio.Entry, error) {
-	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
+	entries, err := a.fs.List(a.inbox)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +113,7 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 	if err != nil || len(files) == 0 {
 		return nil, nil, err
 	}
-	processed := filepath.Join(a.home, "inbox", "processed")
+	processed := filepath.Join(a.inbox, "processed")
 	// Created again if the agent removed it. One the agent replaced with a
 	// link is left alone and followed, but it must lead to a directory.
 	if err := a.fs.Mkdir(processed, 0o750); errors.Is(err, fs.ErrExist) {
@@ -118,7 +127,7 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 	var shown []proto.Image
 	for _, e := range files {
 		name := e.Name
-		path := filepath.Join(a.home, "inbox", name)
+		path := filepath.Join(a.inbox, name)
 		data, size, err := a.fs.Read(path, inboxReadLimit)
 		readable := err == nil
 		if errors.Is(err, fs.ErrNotExist) {

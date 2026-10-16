@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 
 	"github.com/SEAN-7/bot/internal/fsio"
@@ -50,7 +49,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		}
 		d.users = append(d.users, User{user, id})
 	}
-	c := &agent{d: d, id: id, name: id, home: d.cfg.Home(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
+	c := &agent{d: d, id: id, name: id, home: d.cfg.Home(user), inbox: d.cfg.Inbox(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	fail := func(step string, err error) *agent {
 		d.admitFailed(ctrl, id, step, err)
 		if c.fs != nil {
@@ -60,6 +59,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	}
 	if err := d.cfg.System.PrepareHome(user, c.home); err != nil {
 		return fail("prepare home", err)
+	}
+	if err := d.cfg.System.PrepareInbox(user, c.inbox); err != nil {
+		return fail("prepare inbox", err)
 	}
 	cred, err := c.cred()
 	if err == nil {
@@ -88,7 +90,7 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	// Its messages are files it writes into its owner's inbox: the owner,
 	// who owns the inbox, grants it write access. Root has no inbox.
 	if parent != d.root {
-		if err := d.cfg.System.ShareInbox(parent.user, parent.home, c.uid(), true); err != nil {
+		if err := d.cfg.System.ShareInbox(parent.user, parent.inbox, c.uid(), true); err != nil {
 			return fail("share inbox", err)
 		}
 	}
@@ -135,26 +137,27 @@ func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 	return e.Type == "file", nil
 }
 
-// harnessDirs are the directories the harness keeps in a home, parents
-// first, with their modes. The inbox is group-writable and sticky: the
-// agent's owner and its ancestors, the home's group, write messages
-// straight into it, and nobody removes another's file. Its subagents get
-// write access by ACL at admission. The rest is closed to others, so a
-// child the agent lets through its home never reads its inbox or its
-// siblings' control directories.
-var harnessDirs = []struct {
-	name string
-	mode os.FileMode
-}{{"inbox", 0o770 | os.ModeSticky}, {"inbox/processed", 0o750}, {"agents", 0o750}}
-
-// seed creates the harness's directories and the seed files the home lacks,
-// through the agent's own helper. A directory that exists is left as it
-// is; anything else of that name is an error, and the agent does not start.
+// seed creates the harness's directories and the seed files the agent
+// lacks, through the agent's own helper: inbox/processed in the inbox
+// (closed to others, so a subagent with write access to the inbox never
+// reads what was collected) and agents/ in the home (closed to others, so
+// a child the agent lets through its home never reads its siblings'
+// control directories). A directory that exists is left as it is; anything
+// else of that name is an error, and the agent does not start. An inbox
+// from a release before 0.9.0, a real directory in the home, is moved
+// aside once, its pending files into the new inbox.
 func (a *agent) seed() error {
-	for _, dir := range harnessDirs {
-		if err := a.fs.Mkdir(filepath.Join(a.home, dir.name), dir.mode); err != nil {
-			return err
-		}
+	if err := a.fs.Mkdir(filepath.Join(a.inbox, "processed"), 0o750); err != nil {
+		return err
+	}
+	if err := a.fs.Mkdir(filepath.Join(a.home, "agents"), 0o750); err != nil {
+		return err
+	}
+	if err := a.moveLegacyInbox(); err != nil {
+		return err
+	}
+	if err := a.fs.Symlink(a.inbox, filepath.Join(a.home, "inbox")); err != nil {
+		return err
 	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}} {
 		path := filepath.Join(a.home, file.name)
@@ -166,6 +169,38 @@ func (a *agent) seed() error {
 			return err
 		}
 	}
+	return nil
+}
+
+// moveLegacyInbox handles a ~/inbox that is a real directory, left by a
+// release before 0.9.0: it is renamed to ~/inbox.0.8.0, keeping its
+// processed/ history, and its regular files, the pending ones, are moved
+// into the inbox, which shares the filesystem. Nothing happens otherwise.
+func (a *agent) moveLegacyInbox() error {
+	old := filepath.Join(a.home, "inbox")
+	e, err := a.fs.Stat(old)
+	if errors.Is(err, fs.ErrNotExist) || (err == nil && e.Type != "dir") {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	kept := old + ".0.8.0"
+	if err := a.fs.Rename(old, kept); err != nil {
+		return err
+	}
+	entries, err := a.fs.List(kept)
+	if err != nil {
+		return err
+	}
+	for _, f := range entries {
+		if f.Type != "file" {
+			continue
+		}
+		if err := a.fs.Rename(filepath.Join(kept, f.Name), filepath.Join(a.inbox, f.Name)); err != nil {
+			return err
+		}
+	}
+	a.logf("moved the pre-0.9.0 inbox aside as %s", kept)
 	return nil
 }
 

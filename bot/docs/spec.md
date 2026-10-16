@@ -81,6 +81,8 @@ never both.
 | `/var/lib/agent/version` | root, 0644 | Installed version, written by `install.sh` |
 | `/var/log/agent/` | root, 0755 | Journals |
 | `/home/agent-N/` | agent-N:agent-N, 2750 | An agent user's home, created at admission and removed with the user |
+| `/home/.inbox/` | root, 0711 | Every agent's inbox; traversable, not listable |
+| `/home/.inbox/agent-N/` | agent-N:agent-N, 1770 | The agent's inbox, which `~/inbox` links to; removed with the user |
 
 `settings.json` holds `max_agents` (default 16), which bounds the whole
 tree, main included. It is read when the daemon starts; a change takes
@@ -105,7 +107,7 @@ planted symlink reaches only what the user could. A home is accessed
 through its agent's helper, a control directory through its parent's, and
 `/etc/agent` through a root helper. A helper that dies is restarted and the
 affected run retried. Operations: `list`, `read` (regular files, byte
-limit), `write` (atomic: a temporary dot-file in the target's directory, or
+limit, never through a link), `write` (atomic: a temporary dot-file in the target's directory, or
 in a staging directory the caller names, then a rename), `mkdir` (create
 with a mode; an existing directory of the user's is left alone, anything
 else is an error), `rename`, `unlink` (never following symlinks),
@@ -133,16 +135,18 @@ keys journals, delivery records and the user's comment field. Root has
 control directories but no loop, inbox, journal or owner.
 
 - **Startup.** Require root. Resolve the provider user, start root's
-  helper, write the manual (see Manual), migrate a `pool.json` left by a
-  release before 0.9.0 (its active entries' users get their agent ids as
-  comments, every other `agent-N` user is deleted, and the file goes; the
-  code leaves in 0.10.0), then poll about once a second: read the agent
-  users from the passwd file, finish any deletion in progress, walk the
-  tree.
+  helper, write the manual (see Manual), create `/home/.inbox` (0711),
+  migrate a `pool.json` left by a release before 0.9.0 (its active
+  entries' users get their agent ids as comments, every other `agent-N`
+  user is marked removed for the sweep to delete, and the file goes; a
+  failure stops the daemon, so the service retries; the code leaves in
+  0.10.0), then poll about once a second: read the agent users from the
+  passwd file, finish any deletion in progress, walk the tree.
 - **Discovery.** Walk the tree breadth-first, listing each node's `agents/`
   through its own helper without following symlinks. A control directory is
   a real directory owned by the node's user in an `agents/` that is itself
-  one, named by one plain name not starting with `.` and without control
+  one, named by one plain name not starting with `.` and without commas,
+  colons (the id rides in the passwd comment field) or control
   characters. One not yet running whose id names a user is admitted with
   it (a restart: the home is kept), or else with a new user if it holds a
   regular `config.json`; otherwise it is left alone. Failures are logged once
@@ -151,14 +155,15 @@ control directories but no loop, inbox, journal or owner.
   is ignored.
 - **Admission.** Unless the agent already has a user: refuse when
   `max_agents` users exist, else create the user `agent-N` for the lowest
-  N no user has, its id in the comment. Prepare the home (2750, setgid);
-  start the user's helper; clear what a previous user of the name may have
-  left in the home; set the group's members; create the harness
-  directories where missing (`mkdir` with their modes: `inbox` 1770, the
-  rest 0750; an existing directory of the user's is left as it is,
-  anything else of that name fails the step); write the seed `README.md`
-  where missing; grant the user `wx` on its parent's inbox (see Messages;
-  not for root's children); move the starting `config.json` into the home
+  N no user has, its id in the comment. Prepare the home (2750, setgid)
+  and the inbox (1770, see Messages); start the user's helper; clear what
+  a previous user of the name may have left in the home; set the group's
+  members; create `inbox/processed` and `agents/` where missing (`mkdir`
+  0750; an existing directory of the user's is left as it is, anything
+  else of that name fails the step); move a pre-0.9.0 `~/inbox` directory
+  to `~/inbox.0.8.0` and its regular files into the inbox; link `~/inbox`;
+  write the seed `README.md` where missing; grant the user `wx` on its
+  parent's inbox (not for root's children); move the starting `config.json` into the home
   unless it already has one; enable lingering; create the journal
   directory; write the `home` link (never recreating a control directory
   that was removed). A failed step is retried next poll. The control directory's
@@ -187,7 +192,8 @@ control directories but no loop, inbox, journal or owner.
   rather than this one); disable lingering; remove its crontab; stop its
   user manager and kill its processes; remove its files in `/tmp`,
   `/var/tmp` and `/dev/shm`, as the user; move its journal directory to
-  the nearest remaining ancestor's group; `userdel -r`, which removes the
+  the nearest remaining ancestor's group; remove its inbox (as root, under
+  root's directory, following no link); `userdel -r`, which removes the
   home and the group and takes the user out of its descendants' groups. An
   interrupted deletion finishes on the next start, from the mark; a failed
   one is retried every poll.
@@ -237,19 +243,29 @@ What agents send and receive is the manual's "Messages". The daemon is not
 in the path: the sender writes the file into the recipient's inbox, and
 the kernel's record of who wrote it is the label (see Labels).
 
-- **Down.** An agent's `inbox/` is 1770 in its own group, whose members are
-  its ancestors (see Groups), so its parent writes straight into it; the
+- **Where.** An agent's inbox is `/home/.inbox/agent-N/`, outside its home,
+  under a root-owned directory anyone may traverse but not list: a
+  subagent reaches its owner's inbox without entering the owner's home,
+  which stays closed to it. The daemon creates it as root at admission
+  (the parent directory is root's, so the path cannot have been swapped
+  for a link), 1770 and the agent's; the agent's helper creates
+  `processed/` inside it, and each run links `~/inbox` to it. It shares a
+  filesystem with the homes, so a file staged in a home is renamed in.
+- **Down.** The inbox's group is the agent's own, whose members are its
+  ancestors (see Groups), so its parent writes straight into it; the
   sticky bit keeps anyone from removing or renaming another's file. Root
   writes into a top-level agent's inbox as root.
 - **Up.** At admission the daemon grants the child's uid `wx` on the
-  parent's `inbox/` by running `setfacl -m u:UID:wx ~/inbox` as the parent
-  through `shell.Run` (never as root: a planted link would reach nothing
-  the parent could not), and each run links `~/owner` in the child's home
-  to that inbox. A grant that fails holds admission, logged once and
-  retried. At removal the grant is revoked the same way, when the parent is
-  still running; a failure is logged and not retried, since a uid that
-  comes back for another agent is labelled `data` anyway. Root has no
-  inbox, so a top-level agent has no `~/owner`.
+  parent's inbox by running `setfacl -m u:UID:wx` on it as the parent
+  through `shell.Run` (never as root), and each run links `~/owner` in the
+  child's home to that inbox. A grant that fails holds admission, logged
+  once and retried. At deletion the grant is revoked the same way, as long
+  as the parent still has a user; a failure is logged and not retried,
+  since a uid that comes back for another agent is labelled `data` anyway.
+  Root has no inbox, so a top-level agent has no `~/owner`.
+- **Links.** The helper never reads through a symlink: a child that
+  swapped its own inbox file for a link cannot make its parent's harness
+  read what the link points at; the file is reported unreadable instead.
 - Nothing is logged: the inbound side is in the recipient's journal, with
   its label.
 

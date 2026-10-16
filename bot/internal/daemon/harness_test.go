@@ -158,7 +158,11 @@ func detachedMain(t *testing.T, h *harness, d *daemon) *agent {
 	}
 	t.Cleanup(func() { fs.Close() })
 	d.root = &agent{d: d, name: "root", home: h.cfg.RootHome(), user: h.cfg.RootUser, fs: fs, done: make(chan struct{})}
-	return &agent{d: d, id: h.mainID, name: h.mainID, home: h.mainHome, ctrl: h.mainCtrl, user: "agent-1", parent: d.root, fs: fs, done: make(chan struct{})}
+	inbox := h.cfg.Inbox("agent-1")
+	os.MkdirAll(inbox, 0o770)
+	os.MkdirAll(h.mainHome, 0o755)
+	os.Symlink(inbox, filepath.Join(h.mainHome, "inbox"))
+	return &agent{d: d, id: h.mainID, name: h.mainID, home: h.mainHome, inbox: inbox, ctrl: h.mainCtrl, user: "agent-1", parent: d.root, fs: fs, done: make(chan struct{})}
 }
 
 // syncBuffer collects the daemon's log; tests read it while the daemon writes.

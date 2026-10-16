@@ -339,6 +339,22 @@ func TestWriteStaged(t *testing.T) {
 	}
 }
 
+// read never follows a symlink: a link planted where another user may
+// create files must not make the helper read what the link points at.
+func TestReadDoesNotFollowLinks(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	secret := filepath.Join(dir, "secret")
+	os.WriteFile(secret, []byte("hidden"), 0o644)
+	link := filepath.Join(dir, "link")
+	os.Symlink(secret, link)
+	if data, _, err := c.Read(link, 100); err == nil {
+		t.Fatalf("read through a link: %q", data)
+	}
+	if data, _, err := c.Read(secret, 100); err != nil || string(data) != "hidden" {
+		t.Fatalf("plain read: %q %v", data, err)
+	}
+}
+
 // Mkdir creates a directory with exactly the mode given, the umask
 // notwithstanding, leaves an existing directory of ours as it is, and
 // refuses anything else at the path.
