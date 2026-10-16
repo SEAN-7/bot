@@ -5,18 +5,12 @@ import (
 	"fmt"
 	"io/fs"
 	"path/filepath"
-	"strings"
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/seed"
 )
-
-// heldBackPrefixes begin the ERRORs that say why an agent was not admitted
-// (see notStarted), which admission clears, including those an earlier
-// daemon wrote (only 0.4.1 and 0.5.0 wrote "No free agent user").
-var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix}
 
 // errConfigTooLarge: a starting config.json over configLimit.
 var errConfigTooLarge = errors.New(MsgConfigTooLarge)
@@ -313,21 +307,10 @@ func (d *daemon) notStarted(parent *agent, ctrl, name, text, note string) {
 	}
 }
 
-// clearHeldBack removes from an admitted agent's control directory the
-// ERROR that said why it was not admitted, including one an earlier daemon
-// wrote. (An oversized ~/config.json's ERROR, which reads the same, is
-// written again by the next run that finds it.)
+// clearHeldBack removes an admitted agent's ERROR, which said why it was not
+// admitted; the agent's first run writes it again if something is still
+// wrong.
 func (d *daemon) clearHeldBack(parent *agent, ctrl string) {
 	delete(d.heldBack, ctrl)
-	path := filepath.Join(ctrl, "ERROR")
-	data, _, err := parent.fs.Read(path, 4096)
-	if err != nil {
-		return
-	}
-	for _, prefix := range heldBackPrefixes {
-		if strings.HasPrefix(string(data), prefix) {
-			parent.fs.Remove(path)
-			return
-		}
-	}
+	parent.fs.Remove(filepath.Join(ctrl, "ERROR"))
 }

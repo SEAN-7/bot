@@ -27,8 +27,7 @@ type agent struct {
 	cancel context.CancelCauseFunc
 	done   chan struct{} // closed when loop returns; root has no loop
 
-	failedConfig string // hash of a config.json already reported invalid
-	failedOwner  string // the OWNER.md error already logged
+	lastError string // the ERROR text already logged, "" once cleared
 }
 
 // fileID identifies a file by device and inode.

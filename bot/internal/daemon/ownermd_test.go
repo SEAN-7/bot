@@ -187,6 +187,32 @@ func TestOwnerNotRegularFileIsError(t *testing.T) {
 	}
 }
 
+// ERROR holds the most recent cause, whatever kind it is, and goes when a
+// run starts.
+func TestErrorHoldsLatestCause(t *testing.T) {
+	h := newHarness(t, done())
+	os.WriteFile(filepath.Join(h.mainCtrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
+	startsWith := func(prefix string) bool {
+		data, err := os.ReadFile(errorFile)
+		return err == nil && strings.HasPrefix(string(data), prefix)
+	}
+	waitFor(t, "config ERROR", func() bool { return startsWith(MsgConfigPrefix) })
+	os.Mkdir(h.mainOwner(), 0o755)
+	os.WriteFile(filepath.Join(h.mainHome, "config.json"), []byte(testConfig), 0o644)
+	waitFor(t, "OWNER.md ERROR", func() bool { return startsWith(MsgOwnerPrefix) })
+	if fileContains(errorFile, MsgConfigPrefix) {
+		t.Fatalf("ERROR keeps a cause that is gone: %q", fileText(t, errorFile))
+	}
+	os.Remove(h.mainOwner())
+	h.waitEnds(h.mainID, 1)
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
+		t.Fatalf("ERROR after a run started: %v", err)
+	}
+}
+
 func TestOwnerErrorFromEarlierDaemonCleared(t *testing.T) {
 	h := newHarness(t, done())
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
@@ -199,15 +225,17 @@ func TestOwnerErrorFromEarlierDaemonCleared(t *testing.T) {
 	}
 }
 
-func TestOwnerSuccessKeepsOtherErrors(t *testing.T) {
+// A run starting removes ERROR whatever it holds, so one left by an earlier
+// release's daemon does not outlive its cause.
+func TestRunStartClearsAnyError(t *testing.T) {
 	h := newHarness(t, done())
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	os.WriteFile(errorFile, []byte("something else\n"), 0o644)
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")
 	h.waitEnds(h.mainID, 1)
-	if !fileContains(errorFile, "something else") {
-		t.Fatal("an ERROR that is not an OWNER.md error was cleared")
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
+		t.Fatal("an ERROR of unknown kind survived a run starting")
 	}
 }
 
@@ -221,26 +249,6 @@ func unsafeOwner(t *testing.T, h *harness) string {
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	waitFor(t, "OWNER.md ERROR", func() bool { return fileContains(errorFile, MsgOwnerPrefix) })
 	return errorFile
-}
-
-func TestOwnerErrorSurvivesConfigError(t *testing.T) {
-	h := newHarness(t)
-	errorFile := unsafeOwner(t, h)
-	want, _ := os.ReadFile(errorFile)
-	config := filepath.Join(h.mainHome, "config.json")
-	os.WriteFile(config, []byte(`{"provider":"replay","model":"nope"}`), 0o644)
-	waitFor(t, "config ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
-	os.WriteFile(config, []byte(testConfig), 0o644)
-	waitFor(t, "OWNER.md ERROR again", func() bool {
-		got, _ := os.ReadFile(errorFile)
-		return string(got) == string(want)
-	})
-	if n := len(h.requests()); n != 0 {
-		t.Fatalf("%d requests with an unsafe OWNER.md", n)
-	}
-	if n := strings.Count(h.logs.String(), "is not a regular file"); n != 1 {
-		t.Fatalf("OWNER.md error logged %d times:\n%s", n, h.logs)
-	}
 }
 
 func TestOwnerErrorRewrittenWhenDeleted(t *testing.T) {

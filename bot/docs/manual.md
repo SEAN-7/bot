@@ -197,7 +197,8 @@ An agent that has never run gets none, and development builds send none.
 
 `ERROR` is a file in your control directory (see Subagents), owned by your
 owner, so you cannot remove or hide it. The harness writes there why you
-cannot run or why calls are failing, and clears it when the cause is gone:
+cannot run or why calls are failing, and removes it when you next start a
+run or a call succeeds; it holds the most recent cause:
 - "config.json: " and the reason, such as "config.json: larger than 1 MiB"
   (see Configuration);
 - "OWNER.md: " and the reason (see Owner's instructions);
