@@ -131,7 +131,10 @@ keys journals, delivery records and the user's comment field. Root has
 control directories and spools but no loop, inbox, journal or owner.
 
 - **Startup.** Require root. Resolve the provider user, start root's
-  helper, write the manual (see Manual), create root's spools
+  helper, write the manual (see Manual), migrate a `pool.json` left by a
+  release before 0.9.0 (its active entries' users get their agent ids as
+  comments, every other `agent-N` user is deleted, and the file goes; the
+  code leaves in 0.10.0), create root's spools
   `/etc/agent/.messages` and `.messages/agents` where missing (`private`),
   then poll about once a second: read the agent users from the passwd
   file, finish any deletion in progress, walk the tree, collect messages.

@@ -145,6 +145,9 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer d.closeHelpers()
 	d.writeManual()
+	if err := migratePool(cfg, cfg.System); err != nil {
+		cfg.Logger.Printf("pool.json: %v; left for the next start", err)
+	}
 	// Root's spools, so a person writing a message never creates them open
 	// to agents.
 	if skipped, err := d.root.fs.Private(filepath.Join(cfg.RootHome(), ".messages"), filepath.Join(cfg.RootHome(), ".messages", "agents")); err != nil {
