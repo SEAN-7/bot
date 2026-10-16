@@ -2,8 +2,8 @@ package cli
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,7 +13,6 @@ import (
 
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
-	"github.com/SEAN-7/bot/plugins"
 )
 
 func buildReplay(t *testing.T) []byte {
@@ -26,7 +25,7 @@ func buildReplay(t *testing.T) []byte {
 	return data
 }
 
-// pluginFile writes body where install.sh would have downloaded it.
+// pluginFile writes body where a download would have put it.
 func pluginFile(t *testing.T, body []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "plugin-replay-linux-amd64")
@@ -36,42 +35,36 @@ func pluginFile(t *testing.T, body []byte) string {
 	return path
 }
 
-func installOptions(t *testing.T, sum string, prompt func(proto.Setting) (string, error)) (InstallOptions, string) {
+func installOptions(t *testing.T, prompt func(proto.Setting) (string, error)) (InstallOptions, string) {
 	l := tempLayout(t)
 	return InstallOptions{
-		Arch:   "amd64",
-		Index:  &plugins.Index{Version: "1.0.0", Plugins: map[string]map[string]string{"replay": {"linux-amd64": sum}}},
 		Prompt: prompt,
 		Runner: &plugin.Runner{PluginDir: l.Plugins(), CredDir: l.Credentials(), Timeout: 10 * time.Second, Stderr: os.Stderr},
 		Layout: l,
 	}, l.Plugins()
 }
 
-func TestInstallVerifiesChecksum(t *testing.T) {
-	opts, dir := installOptions(t, strings.Repeat("0", 64), nil)
-	err := Install(context.Background(), "replay", pluginFile(t, []byte("tampered")), opts)
-	if err == nil || !strings.Contains(err.Error(), "checksum mismatch for replay") || !strings.Contains(err.Error(), "nothing installed") {
-		t.Fatalf("got %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "replay")); !os.IsNotExist(err) {
-		t.Fatal("plugin written despite mismatch")
-	}
-}
-
-func TestInstallWritesPluginAndCreds(t *testing.T) {
-	bin := buildReplay(t)
-	sum := sha256.Sum256(bin)
-	file := pluginFile(t, bin)
+// replayPrompt answers the replay plugin's two settings.
+func replayPrompt(t *testing.T, asked *[]string) (func(proto.Setting) (string, error), string) {
+	t.Helper()
 	script := filepath.Join(t.TempDir(), "script.jsonl")
 	os.WriteFile(script, []byte(`{"models":[{"id":"replay-1","context_tokens":1000}]}`+"\n"), 0o644)
-	var asked []string
-	opts, dir := installOptions(t, hex.EncodeToString(sum[:]), func(s proto.Setting) (string, error) {
-		asked = append(asked, s.Name)
+	return func(s proto.Setting) (string, error) {
+		if asked != nil {
+			*asked = append(*asked, s.Name)
+		}
 		if s.Name == "REPLAY_SCRIPT" {
 			return script, nil
 		}
 		return filepath.Join(filepath.Dir(script), "log.jsonl"), nil
-	})
+	}, script
+}
+
+func TestInstallWritesPluginAndCreds(t *testing.T) {
+	file := pluginFile(t, buildReplay(t))
+	var asked []string
+	prompt, script := replayPrompt(t, &asked)
+	opts, dir := installOptions(t, prompt)
 	if err := Install(context.Background(), "replay", file, opts); err != nil {
 		t.Fatal(err)
 	}
@@ -95,23 +88,51 @@ func TestInstallWritesPluginAndCreds(t *testing.T) {
 	}
 }
 
-// A plugin the index does not list for this architecture, or an invalid
-// name, is refused before the file is read.
-func TestInstallRefusesUnlistedPlugin(t *testing.T) {
-	file := pluginFile(t, []byte("x"))
-	for name, want := range map[string]string{"other": `no plugin "other" for linux-amd64`, "../replay": "invalid plugin name"} {
-		opts, dir := installOptions(t, strings.Repeat("0", 64), nil)
-		if err := Install(context.Background(), name, file, opts); err == nil || !strings.Contains(err.Error(), want) {
-			t.Errorf("%s: got %v", name, err)
-		}
-		if entries, _ := os.ReadDir(dir); len(entries) != 0 {
-			t.Errorf("%s: wrote %v", name, entries)
-		}
+// An invalid name is refused before anything is read or written.
+func TestInstallRefusesBadName(t *testing.T) {
+	opts, dir := installOptions(t, nil)
+	if err := Install(context.Background(), "../replay", pluginFile(t, []byte("x")), opts); err == nil || !strings.Contains(err.Error(), "invalid plugin name") {
+		t.Fatalf("got %v", err)
 	}
-	opts, _ := installOptions(t, strings.Repeat("0", 64), nil)
-	opts.Arch = "arm64"
-	if err := Install(context.Background(), "replay", file, opts); err == nil || !strings.Contains(err.Error(), "linux-arm64") {
-		t.Errorf("arm64: got %v", err)
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("wrote %v", entries)
+	}
+}
+
+// A plugin installs from an http(s) URL as from a file: the binary is
+// fetched, installed for the provider group, described, and its settings
+// asked for. A failed fetch installs nothing.
+func TestInstallFromURL(t *testing.T) {
+	bin := buildReplay(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/plugin-replay-linux-amd64" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(bin)
+	}))
+	defer srv.Close()
+	prompt, script := replayPrompt(t, nil)
+	opts, dir := installOptions(t, prompt)
+	if err := Install(context.Background(), "replay", srv.URL+"/plugin-replay-linux-amd64", opts); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "replay")); err != nil || info.Mode().Perm() != 0o750 {
+		t.Fatalf("plugin %v %v", info, err)
+	}
+	if !fileContains(t, filepath.Join(opts.Layout.Credentials(), "replay.env"), "REPLAY_SCRIPT="+script) {
+		t.Fatal("settings not written")
+	}
+	if !fileContains(t, opts.Layout.ProvidersCache(), "replay-1") {
+		t.Fatal("cache not refreshed")
+	}
+	opts, dir = installOptions(t, prompt)
+	err := Install(context.Background(), "replay", srv.URL+"/missing", opts)
+	if err == nil || !strings.Contains(err.Error(), "404") {
+		t.Fatalf("missing URL: %v", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("installed despite the failed fetch: %v", entries)
 	}
 }
 

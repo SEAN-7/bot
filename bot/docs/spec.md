@@ -276,57 +276,25 @@ No plugin runs at a run's start; options are the plugin's to reject, with
 `kind: "invalid_request"`. On failure the reason also goes to the service
 log; root's children's failures go to the log only.
 
-## Plugin protocol (version 1)
+## Plugin protocol
 
-A plugin is an executable. Per call, the daemon writes one JSON request to
-its stdin and reads one JSON response from stdout; stderr goes to the
-service log. Every message carries `"protocol": 1`.
-
-**describe** (`{"protocol": 1, "type": "describe"}`, works without
-credentials) returns:
-- `settings`: `{name, description, secret}` for each environment variable
-  it needs; the installer prompts for them.
-- `models`: `{id, context_tokens, image_types, options}`. `context_tokens`
-  is the context window where known, for agents choosing a model.
-  `image_types` lists accepted image media types (a 0.5.0 boolean `images`
-  is ignored).
-  `options` maps names to `{description, values}` or
-  `{description, type: "integer", min, max}`.
-- `caching` (optional): text for agents on what the provider caches between
-  calls and for how long, the smallest prompt it caches, where the plugin
-  puts cache markers, and what cache reads and writes cost relative to
-  plain input. An older plugin omits it and an older daemon ignores it, so
-  the protocol version is unchanged.
-
-**complete** sends `model`, `options` (passed through), `system` (`{text}`
-segments, most stable first, for cache markers), `tools` (the `sh`
-definition) and `messages`:
-- `{role: "user", content, images}`, `images` being `{file, media_type,
-  data}` with `data` the raw bytes (base64 in JSON)
-- `{role: "assistant", text, command, wait, call_id, opaque}`
-- `{role: "tool", call_id, content}`
-
-The response is `{text, command, wait, usage: {input_tokens, output_tokens,
-cache_read_tokens, cache_write_tokens}, opaque}` or `{error: {message,
-kind}}`. `wait` is the model's argument passed through unchanged (absent
-means the default). `kind: "context_overflow"` is not retried: it ends the
-run with a reset, or triggers the first-call guard. `kind:
-"invalid_request"` (the provider rejected the request as malformed) is not
-retried either: it ends the run with reason `invalid` and the message goes
-to `ERROR`. The daemon assigns
-`call_id`; `opaque` is stored on the assistant message and returned in later
-requests (reasoning blocks, signatures). A plugin returns at most one
-command and disables parallel tool calls.
-
-The daemon interprets only `image_types`; `usage` is journaled and
-`caching` cached in `providers.json`, neither interpreted.
+The protocol (version 1) is a public contract, in [plugins.md](plugins.md)
+with what plugin authors need: `describe`, `complete`, the error kinds and
+the image rule. How the daemon acts on it: a `context_overflow` ends the
+run with a reset or triggers the first-call guard; an `invalid_request`
+ends the run with reason `invalid` and the message in `ERROR`; anything
+else is retried. The daemon interprets only `image_types` and the error
+kinds; `usage` is journaled and `caching` cached in `providers.json`,
+neither interpreted. An older plugin that omits `caching` still works, so
+the version is unchanged.
 
 ## Plugins
 
-Sources live in `plugins/<name>/`. `plugins/index.json` lists each plugin's
-version and per-architecture SHA-256 and is compiled into `agent`; releases
-publish each as `plugin-<name>-linux-<arch>`, and `agent provider install`
-accepts only a file matching the index.
+Sources live in `plugins/<name>/`; releases publish each as
+`plugin-<name>-linux-<arch>`, and `install.sh` verifies the ones it
+installs against the checksums pinned in it. `agent provider install`
+itself verifies nothing: root installs any plugin it chooses, from a file
+or a URL.
 
 - **anthropic**: Messages API, `ANTHROPIC_API_KEY`. Cache markers on each
   system segment (at most the last three) and the latest message. Declares
@@ -351,9 +319,9 @@ accepts only a file matching the index.
 ## The binary
 
 `agent daemon` (the service, root only), the hidden `agent _fsio` (the file
-helper), `agent provider install NAME FILE` (root: install a plugin binary
-whose SHA-256 matches the index for NAME and this architecture, prompt for
-missing settings and refresh `providers.json`; downloads nothing) and
+helper), `agent provider install NAME SOURCE` (root: install the plugin
+binary at SOURCE, a file or an http(s) URL of at most 64 MiB, as NAME,
+prompt for missing settings and refresh `providers.json`) and
 `agent help`. The commands 0.7.0 kept (`new`, `remove`, `send`, `message`,
 `messages`, `log`, `provider describe`, `version`) were removed in 0.8.0.
 
@@ -382,8 +350,8 @@ ordinary file of its own, which the harness neither reads nor writes.
 curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | sudo sh
 ```
 
-`install.sh` takes no options and pins its version and the `agent` binary's
-checksums (which pin the plugins'). It:
+`install.sh` takes no options and pins its version and the checksums of
+the `agent` binary and the release's plugins. It:
 1. Installs `acl` if `setfacl` is missing, downloads the binary from the
    release into a root-only temporary directory and verifies it.
 2. Treats a machine with `/var/lib/agent/version` or `/etc/agent/agents/main`
@@ -394,18 +362,19 @@ checksums (which pin the plugins'). It:
    creates `agent-provider` and the directories above, root's spools
    `/etc/agent/.messages` and `.messages/agents` included (0700).
 4. Creates missing pool users, each with its own group and an empty home.
-5. Fresh install: asks for a provider, downloads and installs it with
-   `agent provider install` (which prompts for its settings), and asks for a
-   model. Upgrade: reinstalls each installed plugin, keeping the old one
-   with a warning if that fails.
+5. Fresh install: asks for a provider, downloads it, verifies it against
+   the pinned checksum, installs it with `agent provider install` (which
+   prompts for its settings), and asks for a model. Upgrade: reinstalls
+   each installed plugin the same way, keeping the old one with a warning
+   if that fails.
 6. Installs and starts the service, then writes `/var/lib/agent/version`.
 7. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
    `config.json`, saying how to retry if that fails; the daemon admits it.
 
 **Releases** are reproducible (`CGO_ENABLED=0`, `-trimpath`, empty build ID,
 toolchain pinned in `go.mod`). `scripts/release.sh` builds everything and
-writes `plugins/index.json` and the checksums in `install.sh`; the tag's
-workflow rebuilds and refuses to publish if any checksum differs.
+writes the checksums in `install.sh`; the tag's workflow rebuilds and
+refuses to publish if any checksum differs.
 
 ## Tests
 

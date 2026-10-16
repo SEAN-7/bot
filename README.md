@@ -28,15 +28,13 @@ first. Releases up to 0.5.2 keep `install.sh` at the repository root
 (`.../vX.Y.Z/install.sh`), and releases up to 0.5.5 need a GitHub token, as
 their README says.
 
-To add another provider later, download its release asset
-`plugin-NAME-linux-ARCH` (`amd64` or `arm64`) and install it; `agent
-provider install` checks it against the checksums compiled into `agent` and
-prompts for its settings:
+To add another provider later, install it from a file or a URL; `agent
+provider install` prompts for its settings. This release's plugins are
+`plugin-NAME-linux-ARCH` (`amd64` or `arm64`) on the release page, and any
+plugin that speaks [the protocol](bot/docs/plugins.md) works:
 
 ```bash
-name=openai-compatible asset=plugin-openai-compatible-linux-amd64
-curl -fsSL -o "/tmp/$asset" "https://github.com/SEAN-7/bot/releases/download/v$(cat /var/lib/agent/version)/$asset"
-sudo agent provider install "$name" "/tmp/$asset"
+sudo agent provider install openai-compatible "https://github.com/SEAN-7/bot/releases/download/v$(cat /var/lib/agent/version)/plugin-openai-compatible-linux-amd64"
 ```
 
 ## Set a spend limit first

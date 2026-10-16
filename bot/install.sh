@@ -7,8 +7,14 @@ set -eu
 REPO=SEAN-7/bot
 # BEGIN CHECKSUMS
 VERSION=0.8.0
-SHA_agent_linux_amd64=fe51db3d209ae49e76d09b8ef3736f40657354d4c32b6eb122d9e4e00959fc40
-SHA_agent_linux_arm64=d4065277b34e39cd38567fb8970bb863cfccf3ccdbcf7b0c5c2b3360d1fdaf71
+SHA_agent_linux_amd64=050bb7e648e8dac4239f557d98b44a41d28e173bd7da469c14af69237c7618cb
+SHA_agent_linux_arm64=290fd4038e36534f8adfb0309dc175c3de79af2fe12ab8cc3fbc637e3bf910f7
+SHA_plugin_anthropic_linux_amd64=424a06c57ed80dcdce2dc67f1807556c1a0c75c74148270eac1534b543c8fb25
+SHA_plugin_anthropic_linux_arm64=816a76a805fcb1951c0d14bd5622613484b90470e8955ef9b9b10d53ba10582a
+SHA_plugin_openai_compatible_linux_amd64=bb1b85ac8501cbd5c92b306cffa07a7cf76b43d119ceccd7153e25b4edd00c0a
+SHA_plugin_openai_compatible_linux_arm64=8917fa94ba8052de2c7b7322d2c85eb8f868462d18d21aff457d415ec67500ec
+SHA_plugin_replay_linux_amd64=5ff88066908c7f0f52b3c92f17336bd273644969cb27f3670824bb5c2e7050db
+SHA_plugin_replay_linux_arm64=d0edf3895d2d8552b59abf10ed7e19b29a7895dc949fa822adc410de76f774f7
 # END CHECKSUMS
 
 ROLLBACK=no
@@ -84,12 +90,15 @@ main() {
 		curl -fsSL -o "$2" "https://github.com/$REPO/releases/download/v$VERSION/$1"
 	}
 
-	# plugin NAME: download provider plugin NAME from this release and install
-	# it. agent provider install checks it against the checksums compiled into
-	# the new binary and installs nothing on a mismatch.
+	# plugin NAME: download provider plugin NAME from this release, check it
+	# against the checksum pinned above and install it. A plugin from
+	# elsewhere installs with agent provider install alone.
 	plugin() {
-		download "plugin-$1-linux-$ARCH" "$tmp/plugin-$1" &&
-			/usr/local/bin/agent provider install "$1" "$tmp/plugin-$1"
+		download "plugin-$1-linux-$ARCH" "$tmp/plugin-$1" || return 1
+		eval "want=\$SHA_plugin_$(printf %s "$1" | tr - _)_linux_$ARCH"
+		got=$(sha256sum "$tmp/plugin-$1" | cut -d' ' -f1)
+		[ "$got" = "$want" ] || die "checksum mismatch for plugin-$1-linux-$ARCH: got $got, want $want"
+		/usr/local/bin/agent provider install "$1" "$tmp/plugin-$1"
 	}
 
 	say "Installing agent harness v$VERSION ($ARCH)"
