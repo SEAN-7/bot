@@ -335,8 +335,12 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 		var e apiError
 		if json.Unmarshal(respData, &e) == nil && e.Error.Message != "" {
 			resp = fail("anthropic: HTTP %d %s: %s", httpResp.StatusCode, e.Error.Type, e.Error.Message)
-			if httpResp.StatusCode == http.StatusBadRequest && isOverflow(e.Error.Message) {
-				resp.Error.Kind = proto.ErrContextOverflow
+			if httpResp.StatusCode == http.StatusBadRequest {
+				if isOverflow(e.Error.Message) {
+					resp.Error.Kind = proto.ErrContextOverflow
+				} else if e.Error.Type == "invalid_request_error" {
+					resp.Error.Kind = proto.ErrInvalidRequest
+				}
 			}
 		} else {
 			resp = fail("anthropic: HTTP %d: %s", httpResp.StatusCode, clip(string(respData), 2000))

@@ -454,9 +454,18 @@ func TestContextOverflowKind(t *testing.T) {
 			t.Fatalf("413 %s: got %+v", body, resp.Error)
 		}
 	}
+}
+
+// A request the API rejects as malformed (a bad option) is invalid_request,
+// which the daemon does not retry; other failures carry no kind.
+func TestInvalidRequestKind(t *testing.T) {
 	srv := (&fakeAPI{status: 400, body: `{"type":"error","error":{"type":"invalid_request_error","message":"max_tokens: must be positive"}}`}).serve(t)
+	if resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}}); resp.Error == nil || resp.Error.Kind != "invalid_request" || !strings.Contains(resp.Error.Message, "max_tokens: must be positive") {
+		t.Fatalf("other 400: %+v", resp.Error)
+	}
+	srv = (&fakeAPI{status: 500, body: `{"type":"error","error":{"type":"api_error","message":"overloaded"}}`}).serve(t)
 	if resp := complete(t, newHandler(srv), proto.CompleteRequest{Messages: []proto.Message{{Role: "user", Content: "go"}}}); resp.Error == nil || resp.Error.Kind != "" {
-		t.Fatalf("other 400 marked as overflow: %+v", resp.Error)
+		t.Fatalf("500 given a kind: %+v", resp.Error)
 	}
 }
 

@@ -241,10 +241,16 @@ func (h handler) Complete(ctx context.Context, req proto.CompleteRequest) proto.
 			resp := fail("HTTP %d: %s", httpResp.StatusCode, e.Error.Message)
 			if e.Error.overflow() {
 				resp.Error.Kind = proto.ErrContextOverflow
+			} else if httpResp.StatusCode == http.StatusBadRequest {
+				resp.Error.Kind = proto.ErrInvalidRequest
 			}
 			return resp
 		}
-		return fail("HTTP %d: %s", httpResp.StatusCode, clip(string(data), 2000))
+		resp := fail("HTTP %d: %s", httpResp.StatusCode, clip(string(data), 2000))
+		if httpResp.StatusCode == http.StatusBadRequest {
+			resp.Error.Kind = proto.ErrInvalidRequest
+		}
+		return resp
 	}
 	return parseResponse(data)
 }
