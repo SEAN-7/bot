@@ -29,7 +29,6 @@ type agent struct {
 
 	failedConfig string // hash of a config.json already reported invalid
 	failedOwner  string // the OWNER.md error already logged
-	linkErr      string // the home link error already logged; poll goroutine only
 }
 
 // fileID identifies a file by device and inode.

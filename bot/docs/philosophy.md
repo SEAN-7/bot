@@ -4,10 +4,11 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## Three ideas
 
-1. **An agent is a user and a home** holding `README.md` and `inbox/`. Its owner, root or another agent, creates it with `agent new`;
-   the harness gives it a user from a pool. `agent remove` stops it. Root is
-   the top of the tree and the main agent its first child, so the human
-   does exactly what an agent does.
+1. **An agent is a user and a home** holding `README.md` and `inbox/`. Its
+   owner, root or another agent, creates it by making a directory holding
+   its config; the harness gives it a user from a pool. Deleting the
+   directory stops it. Root is the top of the tree and the main agent its
+   first child, so the human does exactly what an agent does.
 2. **Everything that happens is a file in an inbox**: owner messages,
    schedules, heartbeats, child reports, crash recovery and context resets.
    There is no other event channel.

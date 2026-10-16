@@ -26,7 +26,7 @@ func testEnv(t *testing.T, euid int) (env, *bytes.Buffer) {
 		t.Fatal(err)
 	}
 	out := &bytes.Buffer{}
-	return env{l: l, euid: euid, home: home, in: strings.NewReader(""), out: out}, out
+	return env{l: l, euid: euid, home: home, in: strings.NewReader(""), out: out, err: io.Discard}, out
 }
 
 // captureStderr runs f and returns what it wrote to os.Stderr.
@@ -179,5 +179,31 @@ func TestProviderInstallUsage(t *testing.T) {
 	e, _ := testEnv(t, 1000)
 	if err := run([]string{"provider", "install", "replay", "f"}, e); err == nil || !strings.Contains(err.Error(), "needs root") {
 		t.Errorf("as an agent: %v", err)
+	}
+}
+
+// Each command that files replace says so on stderr and still runs.
+func TestReplacedCommandsSayWhere(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"version"}, "agent version: replaced by files; see /var/lib/agent/manual/manual.md (Runs, Upgrades). Removed in 0.8.0."},
+		{[]string{"provider", "describe"}, "agent provider describe: replaced by files; see /var/lib/agent/manual/manual.md (Configuration)."},
+		{[]string{"message"}, "agent message: replaced by files; see /var/lib/agent/manual/manual.md (Messages)."},
+		{[]string{"new"}, "(Subagents)"},
+		{[]string{"log", "a", "b"}, "(Journal)"},
+		{[]string{"help"}, ""},
+	} {
+		e, out := testEnv(t, 1000)
+		var stderr bytes.Buffer
+		e.err = &stderr
+		run(c.args, e)
+		if c.want == "" && stderr.Len() != 0 || !strings.Contains(stderr.String(), c.want) {
+			t.Errorf("%v: stderr %q", c.args, stderr.String())
+		}
+		if c.args[0] == "version" && out.String() == "" {
+			t.Errorf("version printed nothing")
+		}
 	}
 }

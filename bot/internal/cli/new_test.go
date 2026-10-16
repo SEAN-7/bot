@@ -20,7 +20,7 @@ import (
 // provider "p" with models "m" and "m2"; m takes an integer option budget.
 func installProviders(t *testing.T, l layout.Layout, providers ...string) {
 	t.Helper()
-	cache := providersCache{Providers: map[string]proto.DescribeResponse{}}
+	cache := plugin.ProvidersCache{Providers: map[string]proto.DescribeResponse{}}
 	for _, name := range providers {
 		cache.Providers[name] = proto.DescribeResponse{Models: []proto.Model{
 			{ID: "m", ContextTokens: 1000, Options: map[string]proto.Option{

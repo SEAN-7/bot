@@ -35,7 +35,7 @@ prompts for its settings:
 
 ```bash
 name=openai-compatible asset=plugin-openai-compatible-linux-amd64
-curl -fsSL -o "/tmp/$asset" "https://github.com/SEAN-7/bot/releases/download/v$(agent version)/$asset"
+curl -fsSL -o "/tmp/$asset" "https://github.com/SEAN-7/bot/releases/download/v$(cat /var/lib/agent/version)/$asset"
 sudo agent provider install "$name" "/tmp/$asset"
 ```
 
@@ -44,26 +44,32 @@ sudo agent provider install "$name" "/tmp/$asset"
 The agent and its subagents work for as long as they decide to. Set a
 monthly spend limit on the API key in your provider's console before the
 first message. When it is reached, calls fail, the agent pauses, and
-`sudo agent log main` shows the error.
+`/etc/agent/agents/main/ERROR` says so.
 
 ## Talk to it
 
-You are root, the top of the agent tree; `main` is your child. You use the
-same commands an agent uses for its children:
+You are root, the top of the agent tree; `main` is your child. You do what
+an agent does for its children: a message is a file in your spool for the
+child, `/etc/agent/.messages/agents/NAME/`. Write it under a dot name and
+rename it, so it is never read half-written. A shell function does both:
 
 ```bash
-sudo agent send main "Hello. Read your README, then tell me how you plan to keep notes."
-sudo agent messages main  # the conversation so far, both directions
+send() { # send NAME "text"
+	sudo sh -c 'd=/etc/agent/.messages/agents/$1 f=$(date -u +%Y%m%dT%H%M%S.%NZ).md
+		mkdir -p -m 700 "$d" && printf "%s\n" "$2" >"$d/.$f" && mv "$d/.$f" "$d/$f"' sh "$1" "$2"
+}
+send main "Hello. Read your README, then tell me how you plan to keep notes."
+sudo cat /var/log/agent/main/messages.jsonl  # the conversation so far, both directions
 ```
 
 Only messages you send this way are labelled as yours; everything else the
-agent reads is marked as data. The agent replies with `agent message`, into
-a log only the harness writes (`/var/log/agent/main/messages.jsonl`). It is
-not push: you see replies when you look. For notifications, ask the agent
-to build a channel:
+agent reads is marked as data. The agent replies with a file in its own
+spool, which the harness records in a log only it writes
+(`/var/log/agent/main/messages.jsonl`). It is not push: you see replies when
+you look. For notifications, ask the agent to build a channel:
 
 ```bash
-sudo agent send main "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."
+send main "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."
 ```
 
 ## Give it standing instructions
@@ -79,7 +85,7 @@ sudo $EDITOR /etc/agent/agents/main/OWNER.md
 
 An edit rebuilds the agent's prompt cache once. The file must be a regular
 file owned by root and writable by no one else, in a directory likewise, or
-the agent does not start and `sudo agent log main` says why. Following it
+the agent does not start and `/etc/agent/agents/main/ERROR` says why. Following it
 is the model's job; anything that must hold (credentials, spend,
 privileges) is enforced by the privilege model and your provider's limits.
 Subagents don't see it; each has its own, written by its parent.
@@ -90,35 +96,42 @@ Every agent runs as its own pool user; `max_agents` (default 16, main
 included) is in `/etc/agent/settings.json`. An agent that does not fit is
 not started, and its parent is told.
 
-Agents create subagents with `agent new` and remove them with
-`agent remove`. As root you can watch any of them:
+An agent creates a subagent by making a directory in `~/agents/` holding a
+`config.json`, and removes it by deleting the directory. As root you can
+watch any of them; their journals mirror the tree:
 
 ```bash
-sudo agent log main/agents/research                # a subagent's latest run
-sudo agent messages main/agents/research           # its conversation with its parent
+sudo ls /var/log/agent/main/agents/research/                    # its runs, newest last
+sudo cat /var/log/agent/main/agents/research/messages.jsonl     # its conversation with its parent
 ```
 
-You can also create your own agents beside `main`, isolated from it:
+You can also create your own agents beside `main`, isolated from it
+(`/var/lib/agent/providers.json` lists the models):
 
 ```bash
-echo '{"provider":"P","model":"M"}' | sudo agent new research -   # models: sudo agent provider describe
+sudo install -d -m 700 /etc/agent/agents/research
+echo '{"provider":"P","model":"M"}' | sudo tee /etc/agent/agents/research/config.json >/dev/null
 sudo $EDITOR /etc/agent/agents/research/OWNER.md
-sudo agent send research "..."
-sudo agent remove research    # stops it and its subagents, discards their homes, keeps their journals
+send research "..."
+sudo rm -r /etc/agent/agents/research   # stops it and its subagents, discards their homes, keeps their journals
 ```
 
-`agent new` returns at once; `/etc/agent/agents/NAME/` then gets a `home`
-link, or an `ERROR` saying why not.
+Within about a second `/etc/agent/agents/NAME/` gets a `home` link, or an
+`ERROR` saying why not (an invalid `config.json` takes no pool user and can
+be fixed in place).
 
 ## Watch it
 
 ```bash
-sudo agent log main        # the main agent's ERROR, then its latest run
-journalctl -u agent -f     # the service log
+sudo cat /etc/agent/agents/main/ERROR     # why it is not running, if it is not
+sudo sh -c 'tail -n 20 "$(ls /var/log/agent/main/*Z.jsonl | tail -n 1)"'   # its latest run
+journalctl -u agent -f                    # the service log
 ```
 
-`agent log` and `agent messages` print once. To follow a run, `tail -F` the
-newest run file in `/var/log/agent/main/` (raw JSON).
+Journals are JSON lines, one file per run; `tail -F` the newest to follow a
+run. The `agent` commands that used to do these (`send`, `messages`, `log`,
+`new`, `remove`, `provider describe`, `version`) still work in 0.7.0, print
+a notice, and are removed in 0.8.0.
 
 ## Stop it
 
