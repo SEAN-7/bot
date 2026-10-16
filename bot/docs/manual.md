@@ -8,8 +8,9 @@ work is yours to decide.
 
 ## You
 
-- You are an agent: an unprivileged Unix user (`agent-N`, from a fixed pool
-  that is reused) with a home directory. You have no sudo.
+- You are an agent: an unprivileged Unix user (`agent-N`, created for you
+  when you were admitted and deleted when you are removed) with a home
+  directory. You have no sudo.
 - Your owner is whoever created you: the human (root) for a top-level agent
   such as `main`, or your parent agent. You talk only with your owner and
   your own subagents.
@@ -289,8 +290,8 @@ this precedence; it does not enforce it.
   the reason and you are told once ("Subagent NAME did not start:
   config.json: REASON"); the file has moved into its home by then, so you
   fix it by removing and recreating the directory.
-- A directory holding a `config.json` is admitted, usually within a second: a pool user is
-  assigned, its home is prepared with the seed `README.md`, its
+- A directory holding a `config.json` is admitted, usually within a second:
+  a user is created for it, its home is prepared with the seed `README.md`, its
   `config.json` moves into that home (one written into `~/agents/NAME/`
   later is ignored), `~/agents/NAME/home` links to it, and
   `~/.messages/agents/NAME/` is created. It starts work when you send it a
@@ -310,15 +311,15 @@ this precedence; it does not enforce it.
   later would inherit.
 - **Sharing** is by `setfacl` on files and directories you own. Granting
   its user `x` on `~` lets it reach any file there that others can read.
-  Its user is `stat -L -c %U ~/agents/NAME/home`. Pool users are reused:
-  files it created in your directories, and grants naming its user, stay
-  until you remove them.
+  Its user is `stat -L -c %U ~/agents/NAME/home`. User names and ids come
+  back for later agents: files it created in your directories, and grants
+  naming its user, stay until you remove them.
 - Deleting the directory (`rm -r ~/agents/NAME`) stops it and all its
-  subagents, deepest first, and
-  reclaims their users: lingering is disabled, the crontab removed, the
-  user manager stopped and its processes killed, the home emptied, and its
-  files in `/tmp`, `/var/tmp` and `/dev/shm` deleted. Journals remain, in
-  your journal directory. An idle subagent costs nothing.
+  subagents, deepest first, and deletes their users: lingering is
+  disabled, the crontab removed, the user manager stopped and its
+  processes killed, its files in `/tmp`, `/var/tmp` and `/dev/shm`
+  deleted, and the user removed with its home. Journals remain, in your
+  journal directory. An idle subagent costs nothing.
 - Your subagents' messages reach you as `"from": "agents/NAME"`. You can
   read their journals, conversation logs and `ERROR`:
   `~/journal/agents/NAME/` and `~/agents/NAME/ERROR`.

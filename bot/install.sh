@@ -140,20 +140,6 @@ main() {
 	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16}\n' >/etc/agent/settings.json
 	chmod 600 /etc/agent/settings.json
 
-	# Pool users agent-1 to agent-<max_agents>, before the daemon starts.
-	# Their homes start empty (no skeleton files), as an agent's home does.
-	max_agents=$(sed -n 's/.*"max_agents": *\([0-9]*\).*/\1/p' /etc/agent/settings.json | head -n 1)
-	max_agents=${max_agents:-16}
-	i=1
-	while [ "$i" -le "$max_agents" ]; do
-		id "agent-$i" >/dev/null 2>&1 ||
-			useradd --no-create-home --home-dir "/home/agent-$i" --user-group --shell /bin/bash "agent-$i"
-		mkdir -p "/home/agent-$i"
-		chown "agent-$i:agent-$i" "/home/agent-$i"
-		chmod 2750 "/home/agent-$i"
-		i=$((i + 1))
-	done
-
 	if [ "$upgrade" = yes ]; then
 		# Upgrade: keep the configuration and refresh installed plugins.
 		for path in /etc/agent/plugins/*; do

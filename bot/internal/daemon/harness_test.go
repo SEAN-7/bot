@@ -105,7 +105,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	bin, _ := os.ReadFile(replayBin)
 	os.WriteFile(filepath.Join(l.Plugins(), "replay"), bin, 0o755)
 	h := &harness{t: t, root: root, script: filepath.Join(root, "script.jsonl"), reqLog: filepath.Join(root, "requests.jsonl"), logs: &syncBuffer{}}
-	h.mainID, h.mainHome = "main", l.PoolHome("agent-1")
+	h.mainID, h.mainHome = "main", l.Home("agent-1")
 	h.setScript(steps...)
 	os.WriteFile(filepath.Join(l.Credentials(), "replay.env"), plugin.FormatEnv(map[string]string{"REPLAY_SCRIPT": h.script, "REPLAY_LOG": h.reqLog}), 0o600)
 	// providers.json as `agent provider install` writes it: the gate checks
@@ -116,8 +116,7 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.cfg.Layout = l
 	h.mainCtrl = topLevel(t, h, "main")
 	h.cfg.RootUser, h.cfg.ProviderUser = "", ""
-	// Every pool user resolves to the current user, so all helpers run as us.
-	h.cfg.PoolUsers = []string{"agent-1", "agent-2", "agent-3", "agent-4"}
+	// Every agent user resolves to the current user, so all helpers run as us.
 	h.cfg.LookupUser = func(string) (*syscall.Credential, error) { return nil, nil }
 	h.cfg.System = &fakeSystem{}
 	h.cfg.TmpDirs = []string{tmp}
@@ -402,8 +401,6 @@ func (h *harness) sawRecord(fragments ...string) bool {
 	}
 	return false
 }
-
-func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
 // spoolCommand is the shell command an agent runs to queue text in dir
 // atomically: what `agent message` and `agent send` do.

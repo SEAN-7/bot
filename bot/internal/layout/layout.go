@@ -4,14 +4,13 @@ package layout
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
 
 type Layout struct {
-	Homes string // parent of the pool users' home directories
+	Homes string // parent of the agent users' home directories
 	Etc   string // root-only configuration, plugins, credentials and root's agents
 	Lib   string // daemon state
 	Log   string // journals
@@ -31,26 +30,13 @@ func (l Layout) ProvidersCache() string { return filepath.Join(l.Lib, "providers
 // the release notes of the running version.
 func (l Layout) Manual() string { return filepath.Join(l.Lib, "manual") }
 
-// PoolFile records which pool user each agent holds.
-func (l Layout) PoolFile() string { return filepath.Join(l.Lib, "pool.json") }
-
 // RootHome is root's place in the agent tree, where an agent has its home:
 // root's control directories are RootHome/agents/NAME and its spool for
 // child NAME is RootHome/.messages/agents/NAME.
 func (l Layout) RootHome() string { return l.Etc }
 
-// PoolHome is the home directory of a pool user.
-func (l Layout) PoolHome(user string) string { return filepath.Join(l.Homes, user) }
-
-// PoolUsers names the agent users for a max_agents setting, which bounds the
-// whole tree: agent-1 through agent-<maxAgents>.
-func PoolUsers(maxAgents int) []string {
-	var users []string
-	for i := 1; i <= maxAgents; i++ {
-		users = append(users, fmt.Sprintf("agent-%d", i))
-	}
-	return users
-}
+// Home is the home directory of an agent user.
+func (l Layout) Home(user string) string { return filepath.Join(l.Homes, user) }
 
 // ConversationFile is an agent's conversation with its owner, written only
 // by the daemon, in its journal directory.

@@ -9,7 +9,6 @@ import (
 	"reflect"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -212,7 +211,7 @@ func TestSettingsReadOnceAtStart(t *testing.T) {
 	}
 }
 
-func TestAdmissionSeedsPoolHome(t *testing.T) {
+func TestAdmissionSeedsHome(t *testing.T) {
 	h := newHarness(t, matchStep("inbox/processed/task.md", "pwd; cat README.md | head -1", 100), `{"match":"inbox/processed/task.md","text":"done"}`)
 	h.start()
 	ctrl := makeChild(t, h, "c", true)
@@ -306,7 +305,7 @@ func TestConfigErrorGoesToControlDir(t *testing.T) {
 	}
 }
 
-func TestMaxAgentsUsesPool(t *testing.T) {
+func TestMaxAgentsHoldsSubagentBack(t *testing.T) {
 	h := newHarness(t)
 	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
 	h.start()
@@ -371,11 +370,10 @@ func TestGrandchildAdmitted(t *testing.T) {
 		t.Fatalf("grandchild journal dir: %v", err)
 	}
 	if _, err := os.Stat(h.cfg.JournalDir(g)); !os.IsNotExist(err) {
-		t.Fatalf("journal keyed by the pool home path: %v", err)
+		t.Fatalf("journal keyed by the home path: %v", err)
 	}
-	data, _ := os.ReadFile(h.cfg.PoolFile())
-	if !strings.Contains(string(data), `{"user":"agent-3","agent":"`+id+`","state":"active"}`) {
-		t.Fatalf("pool.json %s", data)
+	if users, _ := h.cfg.System.(*fakeSystem).Users("agent-"); len(users) != 3 || users[2] != (User{"agent-3", id}) {
+		t.Fatalf("users %v", users)
 	}
 	h.drop(h.childHome(g), "task.md", "work")
 	if records := h.waitEnds(id, 1); lastEnd(records) != "done" {
@@ -539,28 +537,12 @@ func TestValidControlDir(t *testing.T) {
 	}
 }
 
-func TestMissingPoolUsersLogged(t *testing.T) {
-	h := newHarness(t)
-	h.cfg.LookupUser = func(name string) (*syscall.Credential, error) {
-		if name == "agent-3" {
-			return nil, errors.New("unknown user")
-		}
-		return nil, nil
-	}
-	h.start()
-	time.Sleep(100 * time.Millisecond)
-	h.stop()
-	if n := strings.Count(h.logs.String(), "pool users not found: agent-3; agents are limited to 3"); n != 1 {
-		t.Fatalf("logged %d times:\n%s", n, h.logs)
-	}
-}
-
 // TestRootChildAdmitted: main is root's child, admitted from root's control
 // directory like any subagent.
 func TestRootChildAdmitted(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
-	if home := h.childHome(h.mainCtrl); home != h.cfg.PoolHome("agent-1") || home != h.mainHome {
+	if home := h.childHome(h.mainCtrl); home != h.cfg.Home("agent-1") || home != h.mainHome {
 		t.Fatalf("main's home %s", home)
 	}
 	for _, p := range []string{"README.md", "inbox/processed", "agents"} {
@@ -568,8 +550,8 @@ func TestRootChildAdmitted(t *testing.T) {
 			t.Fatal(p, err)
 		}
 	}
-	if !strings.Contains(poolJSON(h), `{"user":"agent-1","agent":"main","state":"active"}`) {
-		t.Fatalf("pool.json %s", poolJSON(h))
+	if !onlyMain(h) {
+		t.Fatal(h.cfg.System)
 	}
 	if sys := h.cfg.System.(*fakeSystem); !sys.called("members agent-1 ") {
 		t.Fatalf("root listed among main's group members: %v", sys)
@@ -589,7 +571,7 @@ func TestTwoTopLevelAgentsIsolated(t *testing.T) {
 	research := topLevel(t, h, "research")
 	h.start()
 	mainHome, researchHome := h.childHome(h.mainCtrl), h.childHome(research)
-	if mainHome != h.cfg.PoolHome("agent-1") || researchHome != h.cfg.PoolHome("agent-2") {
+	if mainHome != h.cfg.Home("agent-1") || researchHome != h.cfg.Home("agent-2") {
 		t.Fatalf("homes %s and %s", mainHome, researchHome)
 	}
 	sys := h.cfg.System.(*fakeSystem)

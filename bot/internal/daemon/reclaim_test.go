@@ -11,21 +11,10 @@ import (
 	"time"
 )
 
-func writePool(t *testing.T, h *harness, json string) {
-	t.Helper()
-	if err := os.WriteFile(h.cfg.PoolFile(), []byte(json), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func poolJSON(h *harness) string {
-	data, _ := os.ReadFile(h.cfg.PoolFile())
-	return string(data)
-}
-
-// onlyMainInPool reports whether main is the only agent holding a user.
-func onlyMainInPool(h *harness) bool {
-	return poolJSON(h) == `[{"user":"agent-1","agent":"main","state":"active"}]`
+// onlyMain reports whether main is the only agent holding a user.
+func onlyMain(h *harness) bool {
+	users, _ := h.cfg.System.(*fakeSystem).Users("agent-")
+	return len(users) == 1 && users[0] == User{"agent-1", "main"}
 }
 
 func TestRemovalReclaimsUser(t *testing.T) {
@@ -42,16 +31,17 @@ func TestRemovalReclaimsUser(t *testing.T) {
 		t.Fatal(end)
 	}
 	sys := h.cfg.System.(*fakeSystem)
-	waitFor(t, "reclaim", func() bool { return sys.called("members agent-2 ") }) // cleared
-	waitFor(t, "pool entry freed", func() bool { return !strings.Contains(poolJSON(h), "agent-2") })
-	if entries, _ := os.ReadDir(home); len(entries) != 0 {
-		t.Fatal(entries)
+	waitFor(t, "user deleted", func() bool { return sys.called("userdel agent-2") })
+	waitFor(t, "user gone", func() bool { return onlyMain(h) })
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("home kept: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(h.cfg.TmpDirs[0], "mine")); !os.IsNotExist(err) {
 		t.Fatal("tmp file kept")
 	}
-	// The crontab goes before the kill loop, so no cron job starts after it.
-	want := []string{"unlinger agent-2", "crontab agent-2", "stop agent-2", "members agent-2 "}
+	// The mark comes first, so a crash finishes the removal; the crontab
+	// goes before the kill loop, so no cron job starts after it.
+	want := []string{"comment agent-2 removed:" + childID("c"), "unlinger agent-2", "crontab agent-2", "stop agent-2", "userdel agent-2"}
 	if !sys.inOrder(want...) {
 		t.Fatal(sys)
 	}
@@ -85,20 +75,22 @@ func TestRemovalTakesDescendants(t *testing.T) {
 		t.Fatal("g", end)
 	}
 	sys := h.cfg.System.(*fakeSystem)
-	waitFor(t, "both reclaimed", func() bool { return sys.called("members agent-2 ") && sys.called("members agent-3 ") })
-	if !sys.inOrder("unlinger agent-3", "members agent-3 ", "unlinger agent-2", "members agent-2 ") {
+	waitFor(t, "both deleted", func() bool { return onlyMain(h) })
+	if !sys.inOrder("unlinger agent-3", "userdel agent-3", "unlinger agent-2", "userdel agent-2") {
 		t.Fatal(sys)
 	}
-	waitFor(t, "pool empty", func() bool { return onlyMainInPool(h) })
 }
 
-func TestReclaimingFinishedOnStart(t *testing.T) {
+// A user a crashed daemon had marked removed is deleted on start, before
+// anything is admitted, and its name then goes to a new agent with an empty
+// home.
+func TestMarkedUserRemovedOnStart(t *testing.T) {
 	h := newHarness(t)
-	old := childID("old")
-	writePool(t, h, `[{"user":"agent-2","agent":"`+old+`","state":"reclaiming"}]`)
-	home := h.cfg.PoolHome("agent-2")
+	sys := h.cfg.System.(*fakeSystem)
+	home := h.cfg.Home("agent-2")
 	os.MkdirAll(home, 0o755)
 	os.WriteFile(filepath.Join(home, "secret.txt"), []byte("old"), 0o644)
+	sys.seed("agent-2", removedMark+childID("old"), home)
 	h.start()
 	ctrl := makeChild(t, h, "n", true)
 	if got := h.childHome(ctrl); got != home {
@@ -107,37 +99,33 @@ func TestReclaimingFinishedOnStart(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "secret.txt")); !os.IsNotExist(err) {
 		t.Fatal("old home kept")
 	}
-	if p := poolJSON(h); strings.Contains(p, old) || !strings.Contains(p, childID("n")) {
-		t.Fatal(p)
-	}
-	sys := h.cfg.System.(*fakeSystem)
-	if !sys.inOrder("unlinger agent-2", "members agent-2 ", "home agent-2") {
+	if !sys.inOrder("unlinger agent-2", "userdel agent-2", "useradd agent-2 "+childID("n"), "home agent-2") {
 		t.Fatal(sys)
 	}
 }
 
 // Agents whose control directories went while the daemon was stopped, one
-// of main's and one of root's, are reclaimed on start.
+// of main's and one of root's, are removed on start.
 func TestRemovedWhileStoppedIsReclaimed(t *testing.T) {
 	h := newHarness(t)
-	writePool(t, h, `[{"user":"agent-3","agent":"`+childID("gone")+`","state":"active"},{"user":"agent-4","agent":"top","state":"active"}]`)
+	sys := h.cfg.System.(*fakeSystem)
 	var homes []string
-	for _, user := range []string{"agent-3", "agent-4"} {
-		home := h.cfg.PoolHome(user)
+	for user, id := range map[string]string{"agent-3": childID("gone"), "agent-4": "top"} {
+		home := h.cfg.Home(user)
 		os.MkdirAll(home, 0o755)
 		os.WriteFile(filepath.Join(home, "work.txt"), []byte("old"), 0o644)
+		sys.seed(user, id, home)
 		homes = append(homes, home)
 	}
 	h.start()
-	sys := h.cfg.System.(*fakeSystem)
-	waitFor(t, "entries gone", func() bool { return onlyMainInPool(h) })
+	waitFor(t, "users gone", func() bool { return onlyMain(h) })
 	for _, user := range []string{"agent-3", "agent-4"} {
-		if !sys.inOrder("unlinger "+user, "crontab "+user, "stop "+user, "members "+user+" ") {
+		if !sys.inOrder("unlinger "+user, "crontab "+user, "stop "+user, "userdel "+user) {
 			t.Fatal(sys)
 		}
 	}
 	for _, home := range homes {
-		if _, err := os.Stat(filepath.Join(home, "work.txt")); !os.IsNotExist(err) {
+		if _, err := os.Stat(home); !os.IsNotExist(err) {
 			t.Fatalf("%s kept", home)
 		}
 	}
@@ -166,7 +154,7 @@ func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 		t.Fatal("d admitted without a config.json")
 	}
 	writeConfig(t, d)
-	// d may get c's freed user, but never c's files.
+	// d may get c's freed name, but never c's files.
 	waitFor(t, "d admitted", func() bool { return strings.Contains(h.logs.String(), "d: admitted as") })
 	dHome, _ := os.Readlink(filepath.Join(d, "home"))
 	if _, err := os.Stat(filepath.Join(dHome, "README.md")); err != nil {
@@ -176,16 +164,15 @@ func TestRenameControlDirIsRemoveAndAdmit(t *testing.T) {
 		t.Fatal("d inherited c's files")
 	}
 	sys := h.cfg.System.(*fakeSystem)
-	waitFor(t, "c reclaimed", func() bool { return sys.called("members agent-2 ") })
+	waitFor(t, "c deleted", func() bool { return sys.called("userdel agent-2") })
 	if _, err := os.Stat(filepath.Join(cHome, "notes.txt")); !os.IsNotExist(err) {
 		t.Fatal("c's home kept")
 	}
 }
 
-// removeControlDir removes a child's control directory the way agent remove
-// does: the daemon restores a missing home link in a known child's directory
-// every poll, which races a plain RemoveAll, so it is renamed out of agents/
-// first.
+// removeControlDir removes a child's control directory the way rm -r does
+// once the daemon no longer restores the home link: renamed out of agents/
+// first, so no poll sees it half gone.
 func removeControlDir(t *testing.T, ctrl string) {
 	t.Helper()
 	gone := filepath.Join(filepath.Dir(filepath.Dir(ctrl)), ".removed-"+filepath.Base(ctrl)+"-"+time.Now().UTC().Format("20060102T150405.000000000Z"))
@@ -229,7 +216,7 @@ func TestAgentsDirReplacedByFileRemovesChild(t *testing.T) {
 	os.Rename(agents, agents+".old")
 	os.WriteFile(agents, []byte("not a directory"), 0o644)
 	sys := h.cfg.System.(*fakeSystem)
-	waitFor(t, "reclaim", func() bool { return sys.called("members agent-2 ") })
+	waitFor(t, "removal", func() bool { return sys.called("userdel agent-2") })
 }
 
 // failingLookup makes the lookups of main's user fail while failing is set,
@@ -261,7 +248,7 @@ func TestLookupFailureKeepsChild(t *testing.T) {
 	time.Sleep(5 * h.cfg.Poll)
 	sys := h.cfg.System.(*fakeSystem)
 	if sys.called("unlinger agent-2") || sys.called("stop agent-2") {
-		t.Fatalf("reclaimed on a failed lookup: %v", sys)
+		t.Fatalf("removed on a failed lookup: %v", sys)
 	}
 	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
 		t.Fatalf("home touched: %q %v", data, err)
@@ -281,20 +268,20 @@ func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
 	work := filepath.Join(home, "work.txt")
 	os.WriteFile(work, []byte("mine"), 0o644)
 	h.stop()
-	failing.Store(true) // main cannot start: c holds only its pool entry
+	failing.Store(true) // main cannot start: c holds only its user
 	h.start()
 	time.Sleep(20 * h.cfg.Poll)
 	failing.Store(false)
 	time.Sleep(5 * h.cfg.Poll)
 	sys := h.cfg.System.(*fakeSystem)
 	if sys.called("unlinger agent-2") || sys.called("stop agent-2") {
-		t.Fatalf("reclaimed on a failed lookup: %v", sys)
+		t.Fatalf("removed on a failed lookup: %v", sys)
 	}
 	if data, err := os.ReadFile(work); err != nil || string(data) != "mine" {
 		t.Fatalf("home touched: %q %v", data, err)
 	}
-	if p := poolJSON(h); !strings.Contains(p, `"user":"agent-2","agent":"`+childID("c")+`","state":"active"`) {
-		t.Fatal(p)
+	if users, _ := sys.Users("agent-"); len(users) != 2 || users[1] != (User{"agent-2", childID("c")}) {
+		t.Fatal(users)
 	}
 	waitFor(t, "c admitted again", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	if got := h.childHome(ctrl); got != home {
@@ -302,10 +289,10 @@ func TestLookupFailureOnStartKeepsStoppedChild(t *testing.T) {
 	}
 }
 
-// A stuck reclaim of a grandchild keeps its parent's user from being freed
-// (the grandchild's group still lists it), but not from being stopped: the
-// parent's lingering, crontab, processes and files go at once.
-func TestParentWaitsForDescendantReclaim(t *testing.T) {
+// A stuck removal of a grandchild does not hold up its parent's: the
+// parent's user goes at once, and the grandchild's is retried until it
+// succeeds, logged once.
+func TestParentRemovedDespiteStuckDescendant(t *testing.T) {
 	h := newHarness(t)
 	h.start()
 	c := makeChild(t, h, "c", true)
@@ -314,38 +301,28 @@ func TestParentWaitsForDescendantReclaim(t *testing.T) {
 	os.MkdirAll(g, 0o755)
 	os.WriteFile(filepath.Join(g, "config.json"), []byte(`{"provider":"replay","model":"replay-1"}`), 0o644)
 	h.childHome(g)
-	os.WriteFile(filepath.Join(cHome, "work.txt"), []byte("mine"), 0o644)
 	sys := h.cfg.System.(*fakeSystem)
 	sys.setFail("stop agent-3", errors.New("processes survived SIGKILL"))
 	os.RemoveAll(c)
-	waitFor(t, "both reclaiming", func() bool {
-		p := poolJSON(h)
-		return strings.Count(p, `"state":"reclaiming"`) == 2
-	})
-	waitFor(t, "parent stopped", func() bool { return sys.inOrder("unlinger agent-2", "crontab agent-2", "stop agent-2") })
-	waitFor(t, "parent's home wiped", func() bool {
-		_, err := os.Stat(filepath.Join(cHome, "work.txt"))
-		return os.IsNotExist(err)
+	waitFor(t, "parent deleted", func() bool {
+		return sys.inOrder("unlinger agent-2", "crontab agent-2", "stop agent-2", "userdel agent-2")
 	})
 	time.Sleep(20 * h.cfg.Poll)
-	if sys.called("members agent-2 ") {
-		t.Fatalf("parent's group emptied before its child was reclaimed: %v", sys)
+	if sys.called("userdel agent-3") {
+		t.Fatalf("grandchild deleted while its processes survived: %v", sys)
 	}
-	if p := poolJSON(h); strings.Count(p, `"state":"reclaiming"`) != 2 {
-		t.Fatal(p)
+	if users, _ := sys.Users("agent-"); len(users) != 2 || users[1] != (User{"agent-3", removedMark + childID("c/agents/g")}) {
+		t.Fatal(users)
 	}
 	if n := strings.Count(h.logs.String(), "processes survived SIGKILL"); n != 1 {
-		t.Fatalf("reclaim error logged %d times", n)
+		t.Fatalf("removal error logged %d times", n)
 	}
 	sys.setFail("stop agent-3", nil)
-	waitFor(t, "pool empty", func() bool { return onlyMainInPool(h) })
-	if !sys.inOrder("members agent-3 ", "members agent-2 ") {
-		t.Fatal(sys)
-	}
+	waitFor(t, "grandchild deleted", func() bool { return onlyMain(h) })
 }
 
 // A directory without write permission for its owner (a Go module cache is
-// 0555) must not stop a home from being cleared and its user reclaimed.
+// 0555) does not stop a home from going with its user.
 func TestReclaimClearsReadOnlyDirs(t *testing.T) {
 	skipIfRoot(t)
 	h := newHarness(t)
@@ -358,15 +335,15 @@ func TestReclaimClearsReadOnlyDirs(t *testing.T) {
 	os.Chmod(ro, 0o555)
 	t.Cleanup(func() { os.Chmod(ro, 0o755) })
 	os.RemoveAll(c)
-	waitFor(t, "pool empty", func() bool { return onlyMainInPool(h) })
-	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
-		t.Fatalf("home not emptied: %v %v", entries, err)
+	waitFor(t, "user gone", func() bool { return onlyMain(h) })
+	if _, err := os.Stat(home); !os.IsNotExist(err) {
+		t.Fatalf("home kept: %v", err)
 	}
 }
 
 // A grandchild that cannot start again holds its user without running;
-// removing its parent must reclaim it too rather than leave the parent
-// waiting for it forever.
+// removing its parent must remove it too rather than leave it behind: its
+// parent's user goes first, and it is then an orphan the sweep deletes.
 func TestRemovalTakesPausedDescendant(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -382,19 +359,19 @@ func TestRemovalTakesPausedDescendant(t *testing.T) {
 	h.start()
 	waitFor(t, "c running", func() bool { return strings.Count(h.logs.String(), "c: admitted as agent-2") == 2 })
 	os.RemoveAll(c)
-	waitFor(t, "pool empty", func() bool { return onlyMainInPool(h) })
+	waitFor(t, "users gone", func() bool { return onlyMain(h) })
 	if strings.Count(h.logs.String(), "g: admitted as") != 1 {
 		t.Fatal("g ran again")
 	}
-	if !sys.inOrder("members agent-3 ", "unlinger agent-2", "members agent-2 ") {
+	if !sys.inOrder("unlinger agent-2", "userdel agent-2", "unlinger agent-3", "userdel agent-3") {
 		t.Fatal(sys)
 	}
 }
 
 // A control directory removed and created again between two polls is a new
-// subagent: the old one is removed and reclaimed, and the new one admitted
-// with a cleared home. Here the old directory is emptied and the new one
-// renamed over it, so no poll sees the path missing.
+// subagent: the old one is removed and its user deleted, and the new one
+// admitted with an empty home. Here the old directory is emptied and the
+// new one renamed over it, so no poll sees the path missing.
 func TestReplacedControlDirIsRemoveAndAdmit(t *testing.T) {
 	h := newHarness(t)
 	h.start()
@@ -426,8 +403,8 @@ func TestReplacedControlDirIsRemoveAndAdmit(t *testing.T) {
 	}
 	waitFor(t, "readmitted", func() bool { return strings.Count(h.logs.String(), "c: admitted as") == 2 })
 	sys := h.cfg.System.(*fakeSystem)
-	if !sys.called("members agent-2 ") {
-		t.Fatalf("old agent not reclaimed: %v", sys)
+	if !sys.called("userdel agent-2") {
+		t.Fatalf("old agent's user not deleted: %v", sys)
 	}
 	newHome := h.childHome(c)
 	if _, err := os.Stat(filepath.Join(newHome, "notes.txt")); !os.IsNotExist(err) {

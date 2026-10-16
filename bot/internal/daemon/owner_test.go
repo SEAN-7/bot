@@ -79,7 +79,7 @@ func TestOwnerLabelSurvivesRestart(t *testing.T) {
 func TestCrashRecovery(t *testing.T) {
 	h := newHarness(t, done(), done())
 	// main held its user when the daemon stopped mid-run.
-	writePool(t, h, `[{"user":"agent-1","agent":"main","state":"active"}]`)
+	h.cfg.System.(*fakeSystem).seed("agent-1", "main", h.mainHome)
 	w, err := journal.Create(h.cfg.JournalDir(h.mainID), time.Now().Add(-time.Hour), -1)
 	if err != nil {
 		t.Fatal(err)

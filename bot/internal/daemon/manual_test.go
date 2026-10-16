@@ -25,11 +25,6 @@ func TestNoUpgradeNoteWritten(t *testing.T) {
 	}
 	w.Record("start", map[string]any{"agent": h.mainID, "version": "0.5.2"})
 	w.End("done")
-	// An agent that has run is in pool.json, which a journal without it
-	// would make the daemon refuse to start.
-	if err := os.WriteFile(h.cfg.PoolFile(), []byte(`[{"user":"agent-1","agent":"main","state":"active"}]`), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	h.start()
 	h.sendOwner("hello")
 	for _, r := range h.waitEnds(h.mainID, 2) {

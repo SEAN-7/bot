@@ -23,8 +23,10 @@ never both.
 - **One owner per agent.** Root for a top-level agent, the creator
   otherwise. An agent talks only with its owner and its own children, so
   only top-level agents reach the human.
-- **Each agent is its own Unix user**, from a fixed pool of `max_agents`
-  users created at install and reused.
+- **Each agent is its own Unix user**, created by the daemon at admission
+  (`useradd`, with the agent id in the comment field) and deleted at
+  removal (`userdel -r`); the passwd file is the only record. `max_agents`
+  bounds how many exist at once.
 - **Each agent owns its config.** Its creator writes the starting
   `config.json`; it moves into the agent's home at admission. A parent
   stops a child only by removing it.
@@ -74,12 +76,11 @@ never both.
 | `/etc/agent/agents/NAME/OWNER.md` | root, 0644 | The human's standing instructions for NAME; optional |
 | `/etc/agent/.messages/agents/NAME/` | root, 0700 | Root's spool for NAME; files 0600 |
 | `/var/lib/agent/delivered.jsonl` | root, 0600 | Delivered messages: agent id, file name, SHA-256, sender |
-| `/var/lib/agent/pool.json` | root, 0600 | Pool assignments: user, agent id, state |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output, no secrets |
 | `/var/lib/agent/manual/` | root, 0755 | `manual.md`, `notes.md` and `version` (files 0644) |
 | `/var/lib/agent/version` | root, 0644 | Installed version, written by `install.sh` |
 | `/var/log/agent/` | root, 0755 | Journals and conversation logs |
-| `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home; empty while free |
+| `/home/agent-N/` | agent-N:agent-N, 2750 | An agent user's home, created at admission and removed with the user |
 
 `settings.json` holds `max_agents` (default 16), which bounds the whole
 tree, main included. It is read when the daemon starts; a change takes
@@ -88,7 +89,8 @@ directory, and their modes, are in the manual ("Your home", "Subagents").
 
 ## Privilege model
 
-The daemon runs as root; each agent is an unprivileged pool user `agent-N`.
+The daemon runs as root; each agent is an unprivileged user `agent-N` of
+its own.
 
 **Groups.** Each agent user has its own group, whose members are the
 agent's ancestors other than root, kept current in `/etc/group`. A process
@@ -125,31 +127,29 @@ environment. No agent can read `/etc/agent` or another user's environment.
 
 `agent daemon` is one systemd service (`Restart=always`) for the whole tree.
 An agent's id is its path from root (`main`, `main/agents/research`); it
-keys journals, pool assignments and delivery records. Root has control
-directories and spools but no loop, inbox, journal or owner.
+keys journals, delivery records and the user's comment field. Root has
+control directories and spools but no loop, inbox, journal or owner.
 
-- **Startup.** Require root. Refuse to start when `pool.json` is missing but
-  `/var/log/agent` holds anything other than regular files, since without it
-  a live agent's home could be cleared or handed to another agent; the error
-  names the README section "If pool.json is lost". Resolve the provider and
-  pool users (missing ones are logged), start root's helper, write the
-  manual (see Manual), create root's spools `/etc/agent/.messages` and
-  `.messages/agents` where missing (`private`), then poll about
-  once a second: finish any reclaim in progress, walk the tree, collect
-  messages.
+- **Startup.** Require root. Resolve the provider user, start root's
+  helper, write the manual (see Manual), create root's spools
+  `/etc/agent/.messages` and `.messages/agents` where missing (`private`),
+  then poll about once a second: read the agent users from the passwd
+  file, finish any deletion in progress, walk the tree, collect messages.
 - **Discovery.** Walk the tree breadth-first, listing each node's `agents/`
   through its own helper without following symlinks. A control directory is
   a real directory owned by the node's user in an `agents/` that is itself
   one, named by one plain name not starting with `.` and without control
-  characters. One not yet running is admitted with the user `pool.json` records for
-  it (a restart: the home is kept), or else with a fresh user if it holds a
+  characters. One not yet running whose id names a user is admitted with
+  it (a restart: the home is kept), or else with a new user if it holds a
   regular `config.json`; otherwise it is left alone. Failures are logged once
   and retried next poll. A known agent is kept unless its control directory
   is certainly gone. A `config.json` in an admitted agent's control directory
   is ignored.
-- **Admission.** Take the lowest free pool user and record it in
-  `pool.json`; prepare the home (2750, setgid); start the user's helper;
-  clear what a previous holder left; set the group's members; create the
+- **Admission.** Unless the agent already has a user: refuse when
+  `max_agents` users exist, else create the user `agent-N` for the lowest
+  N no user has, its id in the comment. Prepare the home (2750, setgid);
+  start the user's helper; clear what a previous user of the name may have
+  left in the home; set the group's members; create the
   harness directories where missing (`private`; anything else of that name
   is left alone and logged once); write the seed `README.md` where
   missing; move the starting `config.json` into the home unless it
@@ -161,8 +161,8 @@ directories and spools but no loop, inbox, journal or owner.
   recreating it makes a new agent. A deleted `home` link is written again
   only at the next admission (a restart), so `rm -r` of a control directory
   never races it.
-- **Admission errors.** No free pool user ("Agent limit reached") keeps the
-  agent out: the reason goes to its `ERROR` and the service log, and the
+- **Admission errors.** `max_agents` users existing ("Agent limit reached")
+  keeps the agent out: the reason goes to its `ERROR` and the service log, and the
   parent's inbox is told once per reason (root's children: the service log
   only). A starting `config.json` over 1 MiB fails adoption, which is
   logged once and retried each poll until the parent shrinks it in place.
@@ -176,23 +176,19 @@ directories and spools but no loop, inbox, journal or owner.
 - **Removal.** When a control directory disappears or is replaced, its agent
   and all descendants are removed, deepest first: each loop kills its
   running command, writes the end marker (`reason: "removed"`) and exits,
-  then its user is reclaimed. Journals remain.
-- **Reclaim.** Mark the user `reclaiming`; disable lingering; remove its
-  crontab; stop its user manager and kill its processes; remove its home's
-  contents (making its directories writable first) and its files in `/tmp`,
-  `/var/tmp` and `/dev/shm`; move its journal directory to the nearest
-  remaining ancestor's group. Its group is cleared and the user freed only
-  after every descendant is reclaimed. An interrupted reclaim finishes on
-  the next start; a failed one is retried every poll.
+  then its user is deleted. Journals remain.
+- **Deletion.** Mark the user removed (its comment becomes `removed:` and
+  the id, so a control directory made again under that id gets a new user
+  rather than this one); disable lingering; remove its crontab; stop its
+  user manager and kill its processes; remove its files in `/tmp`,
+  `/var/tmp` and `/dev/shm`, as the user; move its journal directory to
+  the nearest remaining ancestor's group; `userdel -r`, which removes the
+  home and the group and takes the user out of its descendants' groups. An
+  interrupted deletion finishes on the next start, from the mark; a failed
+  one is retried every poll.
 
 ### Known limits
 
-- After starting with the journals moved aside, the daemon does not stop
-  what the pool users were running; root does (README, "If pool.json is
-  lost").
-- A restored `pool.json` older than the last admission or removal can make
-  the daemon wipe the home of an agent that now holds a reused user; the
-  latest backup cannot.
 - While stat fails on a not-yet-running child's control directory, messages
   for it wait.
 - Reclaim leaves links in `/home`. An installation upgraded from 0.3 has
@@ -361,14 +357,13 @@ the `agent` binary and the release's plugins. It:
    previous one to restore if anything fails before the service starts, and
    creates `agent-provider` and the directories above, root's spools
    `/etc/agent/.messages` and `.messages/agents` included (0700).
-4. Creates missing pool users, each with its own group and an empty home.
-5. Fresh install: asks for a provider, downloads it, verifies it against
+4. Fresh install: asks for a provider, downloads it, verifies it against
    the pinned checksum, installs it with `agent provider install` (which
    prompts for its settings), and asks for a model. Upgrade: reinstalls
    each installed plugin the same way, keeping the old one with a warning
    if that fails.
-6. Installs and starts the service, then writes `/var/lib/agent/version`.
-7. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
+5. Installs and starts the service, then writes `/var/lib/agent/version`.
+6. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
    `config.json`, saying how to retry if that fails; the daemon admits it.
 
 **Releases** are reproducible (`CGO_ENABLED=0`, `-trimpath`, empty build ID,
@@ -379,6 +374,7 @@ refuses to publish if any checksum differs.
 ## Tests
 
 Paths, user names and timings are configurable, so tests run in a temporary
-root against the replay plugin. Privilege tests need root and a throwaway
-pool of real users (`AGENT_ROOT_TESTS=1`); they run in CI, and on a
-machine with live agents they need their own temporary root and users.
+root against the replay plugin. Privilege tests need root
+(`AGENT_ROOT_TESTS=1`) and create real users under a test prefix; they run
+in CI, and on a machine with live agents they need their own temporary
+root.

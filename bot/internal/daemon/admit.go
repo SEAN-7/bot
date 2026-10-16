@@ -25,8 +25,8 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		d.admitFailed(ctrl, id, "control directory", err)
 		return nil
 	}
-	held := d.pool.userOf(id)
-	ok, err := d.admission(parent, ctrl, held)
+	user := d.userOf(id)
+	ok, err := d.admission(parent, ctrl, user)
 	if err != nil {
 		d.admitFailed(ctrl, id, "admission", err)
 		return nil
@@ -34,33 +34,26 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if !ok {
 		return nil // it may still be being written
 	}
-	keep := held != ""
-	limit := min(len(d.pool.users), d.settings.MaxAgents)
-	user, err := d.pool.assign(id, limit)
-	if err != nil {
-		d.admitFailed(ctrl, id, "pool", err)
-		return nil
-	}
-	if user == "" {
-		if held == "" {
+	fresh := user == ""
+	if fresh {
+		if d.agentCount() >= d.settings.MaxAgents {
 			d.holdBack(parent, ctrl, id)
+			return nil
 		}
-		return nil // held: its user is being reclaimed
+		// A user of its own, named for the lowest free number. A name freed
+		// by userdel comes back, but as a new user with an empty home.
+		user = d.newUserName()
+		if err := d.cfg.System.AddUser(user, id, d.cfg.Home(user)); err != nil {
+			d.admitFailed(ctrl, id, "user", err)
+			return nil
+		}
+		d.users = append(d.users, User{user, id})
 	}
-	c := &agent{d: d, id: id, name: id, home: d.cfg.PoolHome(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
-	// A user new to this agent may hold a previous agent's files; a user it
-	// already held keeps them.
-	fresh, cleared := !keep, false
+	c := &agent{d: d, id: id, name: id, home: d.cfg.Home(user), ctrl: ctrl, ctrlID: idOf(dir), user: user, parent: parent, done: make(chan struct{})}
 	fail := func(step string, err error) *agent {
 		d.admitFailed(ctrl, id, step, err)
 		if c.fs != nil {
 			c.fs.Close()
-		}
-		if fresh && !cleared {
-			// Retry as a new assignment, so the home is cleared then.
-			if err := d.pool.free(user); err != nil {
-				d.cfg.Logger.Printf("%s: pool: %v", id, err)
-			}
 		}
 		return nil
 	}
@@ -75,10 +68,11 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return fail("file helper", err)
 	}
 	if fresh {
+		// A home directory left under this name (a userdel that could not
+		// remove it) must not reach the new user.
 		if err := c.fs.Clear(c.home); err != nil {
 			return fail("clear home", err)
 		}
-		cleared = true
 	}
 	var ancestors []string // nearest first; root needs no group membership
 	for p := parent; p != d.root; p = p.parent {
@@ -123,9 +117,9 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 }
 
 // admission decides whether the agent at ctrl, which the daemon does not
-// run, is admitted (false: it is not an agent yet). held is the user it holds
-// in pool.json. An error means there is no answer yet (a file or helper
-// failed): the caller retries at the next poll. It is admitted when:
+// run, is admitted (false: it is not an agent yet). held is the user it
+// holds. An error means there is no answer yet (a file or helper failed):
+// the caller retries at the next poll. It is admitted when:
 //  1. it holds a user (a daemon restart): that user, keeping the home;
 //  2. it holds a regular config.json: a fresh user.
 func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {

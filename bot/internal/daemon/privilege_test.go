@@ -66,14 +66,11 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	os.Chown(replayDir, puid, pgid)
 	h.cfg.RootUser, h.cfg.ProviderUser = "root", provider
 	h.cfg.LookupUser = osuser.Lookup
-	// The pool: real users, the real System, homes in a root-owned Homes
-	// and a sticky world-writable temporary directory, as on the VM.
-	pool := os.Getenv("AGENT_TEST_POOL")
-	if pool == "" {
-		pool = "agent-test-1,agent-test-2,agent-test-3"
-	}
-	h.cfg.PoolUsers = strings.Split(pool, ",")
-	h.mainHome = h.cfg.PoolHome(h.cfg.PoolUsers[0])
+	// Real users, which the daemon creates under a test prefix, the real
+	// System, homes in a root-owned Homes and a sticky world-writable
+	// temporary directory, as on the VM.
+	h.cfg.UserPrefix = "agent-test-"
+	h.mainHome = h.cfg.Home(h.cfg.UserPrefix + "1")
 	sys := newExecSystem()
 	if !withSystemd() {
 		sys = noLinger{sys} // a container without systemd: everything else is real
@@ -82,30 +79,31 @@ func rootHarness(t *testing.T, steps ...string) (*harness, string) {
 	if err := os.Chmod(h.cfg.Homes, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, u := range h.cfg.PoolUsers {
-		lookupIDs(t, u)
-		if err := sys.PrepareHome(u, h.cfg.PoolHome(u)); err != nil {
-			t.Fatal(err)
-		}
-	}
 	tmp := filepath.Join(h.root, "tmp")
 	if err := os.Chmod(tmp, 0o777|fs.ModeSticky); err != nil {
 		t.Fatal(err)
 	}
 	h.cfg.TmpDirs = []string{tmp}
-	// Undo what admission did to the real users, whatever the test left:
-	// after the daemon stops (newHarness's cleanup runs after this one).
+	// Delete the users the daemon created, whatever the test left: after
+	// the daemon stops (newHarness's cleanup runs after this one).
 	t.Cleanup(func() {
 		h.stop()
-		for _, u := range h.cfg.PoolUsers {
-			for _, err := range []error{sys.DisableLinger(u), sys.RemoveCrontab(u), sys.StopProcesses(u), sys.SetMembers(u, nil)} {
+		users, err := sys.Users(h.cfg.UserPrefix)
+		if err != nil {
+			t.Logf("cleanup: %v", err)
+		}
+		for _, u := range users {
+			if u.ID == "" {
+				continue // not the daemon's
+			}
+			for _, err := range []error{sys.DisableLinger(u.Name), sys.RemoveCrontab(u.Name), sys.StopProcesses(u.Name), sys.DeleteUser(u.Name)} {
 				if err != nil {
-					t.Logf("cleanup %s: %v", u, err)
+					t.Logf("cleanup %s: %v", u.Name, err)
 				}
 			}
 		}
 	})
-	return h, h.cfg.PoolUsers[0]
+	return h, h.cfg.UserPrefix + "1"
 }
 
 // noLinger is the real System without lingering, which needs systemd.
@@ -131,7 +129,7 @@ func lookupIDs(t *testing.T, name string) (int, int) {
 // belong to that user.
 func rootChild(t *testing.T, h *harness, name string) string {
 	t.Helper()
-	uid, gid := lookupIDs(t, h.cfg.PoolUsers[0])
+	uid, gid := lookupIDs(t, h.cfg.UserPrefix+"1")
 	agents := filepath.Join(h.mainHome, "agents")
 	ctrl := filepath.Join(agents, name)
 	if err := os.MkdirAll(ctrl, 0o755); err != nil {
@@ -249,11 +247,11 @@ func lingering(user string) bool {
 	return err == nil
 }
 
-// waitReclaimed waits until the pool no longer holds user.
+// waitReclaimed waits until user has been deleted.
 func (h *harness) waitReclaimed(user string) {
 	h.t.Helper()
-	waitFor(h.t, "reclaim of "+user, func() bool {
-		return !strings.Contains(poolJSON(h), `"`+user+`"`) && strings.Contains(h.logs.String(), user+": reclaimed")
+	waitFor(h.t, "removal of "+user, func() bool {
+		return strings.Contains(h.logs.String(), user+": reclaimed") && exitCode(h.t, "getent", "passwd", user) != 0
 	})
 }
 
@@ -561,17 +559,17 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	mine := filepath.Join(h.cfg.TmpDirs[0], "mine")
 	h.setScript(matchStep("task-for-c", "echo '* * * * * true' | crontab -; echo cron=$?; touch "+mine+"; echo tmp=$?", 100))
 	h.start()
-	if got := groupMembers(t, h.cfg.PoolUsers[0]); got != "" {
-		t.Fatalf("main's group %s members %q, want none: root needs no membership", h.cfg.PoolUsers[0], got)
+	if got := groupMembers(t, h.cfg.UserPrefix+"1"); got != "" {
+		t.Fatalf("main's group %s members %q, want none: root needs no membership", h.cfg.UserPrefix+"1", got)
 	}
 	ctrl := rootChild(t, h, "c")
 	home := h.childHome(ctrl)
 	user := ownerName(t, home)
-	if user != h.cfg.PoolUsers[1] {
+	if user != h.cfg.UserPrefix+"2" {
 		t.Fatalf("main's first subagent got %s", user)
 	}
-	if got := groupMembers(t, user); got != h.cfg.PoolUsers[0] {
-		t.Fatalf("group %s members %q, want the parent %s", user, got, h.cfg.PoolUsers[0])
+	if got := groupMembers(t, user); got != h.cfg.UserPrefix+"1" {
+		t.Fatalf("group %s members %q, want the parent %s", user, got, h.cfg.UserPrefix+"1")
 	}
 	if withSystemd() && !lingering(user) {
 		t.Fatalf("%s not lingering after admission", user)
@@ -600,14 +598,14 @@ func TestPrivilegeReclaimKillsEverything(t *testing.T) {
 	if code := exitCode(t, "crontab", "-l", "-u", user); code == 0 {
 		t.Fatal("crontab kept")
 	}
-	if entries, err := os.ReadDir(home); err != nil || len(entries) != 0 {
-		t.Fatalf("home not emptied: %v %v", entries, err)
+	if _, err := os.Lstat(home); !os.IsNotExist(err) {
+		t.Fatalf("home kept: %v", err)
 	}
 	if _, err := os.Lstat(mine); !os.IsNotExist(err) {
 		t.Fatal("temporary file kept")
 	}
-	if got := groupMembers(t, user); got != "" {
-		t.Fatalf("group %s keeps members %q", user, got)
+	if code := exitCode(t, "getent", "group", user); code == 0 {
+		t.Fatalf("group %s kept", user)
 	}
 	if withSystemd() && lingering(user) {
 		t.Fatalf("%s still lingering", user)
@@ -748,13 +746,13 @@ func TestPrivilegeRootSpoolPrivate(t *testing.T) {
 	if err := os.WriteFile(staged, []byte("owner secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	uid, gid := lookupIDs(t, h.cfg.PoolUsers[1])
+	uid, gid := lookupIDs(t, h.cfg.UserPrefix+"2")
 	for _, args := range [][]string{{"ls", spool}, {"cat", staged}} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
 		out, err := cmd.CombinedOutput()
 		if err == nil || strings.Contains(string(out), "owner secret") {
-			t.Fatalf("%s as %s: %v %q", strings.Join(args, " "), h.cfg.PoolUsers[1], err, out)
+			t.Fatalf("%s as %s: %v %q", strings.Join(args, " "), h.cfg.UserPrefix+"2", err, out)
 		}
 	}
 }

@@ -1,7 +1,9 @@
 package daemon
 
 import (
+	"io/fs"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -15,28 +17,49 @@ type fakeSystem struct {
 	calls []string
 	fail  map[string]error  // calls that fail, still recorded
 	users map[string]string // user name → agent id
+	homes map[string]string // user name → home, removed with the user
+}
+
+// seed makes a user exist before the daemon starts, as one a previous
+// daemon created would.
+func (s *fakeSystem) seed(name, id, home string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.users == nil {
+		s.users, s.homes = map[string]string{}, map[string]string{}
+	}
+	s.users[name], s.homes[name] = id, home
 }
 
 func (s *fakeSystem) AddUser(name, id, home string) error {
 	if err := s.record("useradd " + name + " " + id); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.users == nil {
-		s.users = map[string]string{}
-	}
-	s.users[name] = id
+	s.seed(name, id, home)
 	return nil
 }
 
+// DeleteUser removes the user and, as userdel -r does with root's powers,
+// its home whatever the modes inside.
 func (s *fakeSystem) DeleteUser(name string) error {
 	if err := s.record("userdel " + name); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if home := s.homes[name]; home != "" {
+		filepath.WalkDir(home, func(path string, d fs.DirEntry, err error) error {
+			if err == nil && d.IsDir() {
+				os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+		if err := os.RemoveAll(home); err != nil {
+			return err
+		}
+	}
 	delete(s.users, name)
+	delete(s.homes, name)
 	return nil
 }
 

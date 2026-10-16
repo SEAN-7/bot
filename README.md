@@ -17,9 +17,8 @@ curl -fsSL https://raw.githubusercontent.com/SEAN-7/bot/vX.Y.Z/bot/install.sh | 
 
 The installer verifies every download against pinned checksums, asks for a
 provider plugin (anthropic or openai-compatible), its credentials and a
-model, creates the pool users `agent-1` to `agent-<max_agents>`, starts the
-service and creates the main agent, `main`, as `agent-1`. No agent gets
-sudo.
+model, starts the service and creates the main agent, `main`, which the
+daemon gives a Unix user of its own (`agent-1`). No agent gets sudo.
 
 A newer release's `install.sh` upgrades in place, keeping agents' files,
 journals and credentials; a failed upgrade restores the previous binary.
@@ -90,9 +89,10 @@ Subagents don't see it; each has its own, written by its parent.
 
 ## Agents and subagents
 
-Every agent runs as its own pool user; `max_agents` (default 16, main
-included) is in `/etc/agent/settings.json`. An agent that does not fit is
-not started, and its parent is told.
+Every agent runs as a Unix user of its own, created when it is admitted
+and deleted when it is removed; `max_agents` (default 16, main included)
+in `/etc/agent/settings.json` bounds how many exist at once. An agent that
+does not fit is not started, and its parent is told.
 
 An agent creates a subagent by making a directory in `~/agents/` holding a
 `config.json`, and removes it by deleting the directory. As root you can
@@ -115,8 +115,8 @@ sudo rm -r /etc/agent/agents/research   # stops it and its subagents, discards t
 ```
 
 Within about a second `/etc/agent/agents/NAME/` gets a `home` link, or an
-`ERROR` saying why not (an invalid `config.json` takes no pool user and can
-be fixed in place).
+`ERROR` saying why not (an invalid `config.json` is reported at its first
+run; remove the directory and create it again to fix it).
 
 ## Watch it
 
@@ -143,29 +143,6 @@ with:
 u=$(sudo stat -L -c %U /etc/agent/agents/main/home)
 sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") systemctl --user list-units
 ```
-
-## If pool.json is lost
-
-`/var/lib/agent/pool.json` is the only record of which pool user each agent
-holds. If it is missing while `/var/log/agent` holds journals, the daemon
-refuses to start, since a live agent's home could be cleared or given to
-another agent. Either:
-
-- Restore the latest backup, taken after the last admission or removal. An
-  older one can make the daemon wipe the home of an agent that now holds a
-  reused user.
-- Or start with no agents: stop everything the pool users run, then move
-  the journals somewhere only root can read. Old control directories stay
-  and are not started.
-
-  ```bash
-  for u in $(getent passwd | cut -d: -f1 | grep -x 'agent-[0-9]*'); do
-    sudo loginctl disable-linger "$u"; sudo crontab -r -u "$u"; sudo pkill -KILL -u "$u"
-  done
-  sudo mkdir -m 700 /root/agent-journals && sudo mv /var/log/agent/* /root/agent-journals/
-  ```
-
-Then `sudo systemctl restart agent`.
 
 ## What is protected, and what isn't
 

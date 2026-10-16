@@ -274,7 +274,7 @@ func (a *agent) childWaits(uid int, name string) bool {
 	if e.Type != "dir" || e.UID != uid {
 		return false
 	}
-	ok, err := a.d.admission(a, ctrl, a.d.pool.userOf(id))
+	ok, err := a.d.admission(a, ctrl, a.d.userOf(id))
 	if err != nil {
 		a.d.admitFailed(ctrl, id, "admission", err)
 		return true

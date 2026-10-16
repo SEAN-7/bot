@@ -5,13 +5,14 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"log"
 	"os"
 	"os/user"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -33,9 +34,9 @@ type Config struct {
 	Self         string // this executable, re-run as the file helper
 
 	System     System                                    // root-only side effects; the real one by default
-	PoolUsers  []string                                  // agent users; nil = the max_agents pool users that exist
+	UserPrefix string                                    // agent users are UserPrefix followed by a number
 	LookupUser func(string) (*syscall.Credential, error) // resolves user names; osuser.Lookup by default
-	TmpDirs    []string                                  // shared directories swept when a user is reclaimed
+	TmpDirs    []string                                  // shared directories swept when a user is deleted
 
 	Poll           time.Duration
 	CommandWait    time.Duration // how long a command runs when the model gives no wait
@@ -59,6 +60,7 @@ func DefaultConfig(self string) Config {
 		ProviderUser:   "agent-provider",
 		Self:           self,
 		System:         newExecSystem(),
+		UserPrefix:     "agent-",
 		LookupUser:     osuser.Lookup,
 		TmpDirs:        []string{"/tmp", "/var/tmp", "/dev/shm"},
 		Poll:           time.Second,
@@ -87,8 +89,10 @@ type daemon struct {
 	cfg      Config
 	runner   *plugin.Runner
 	root     *agent // the top of the tree: no loop, never in agents
-	pool     *pool
 	selfUser string // the daemon's own user name, for an agent run without changing identity
+	// users is the agent users that exist, as read at the start of each
+	// poll and kept current through it; only the poll goroutine touches it.
+	users []User
 
 	mu sync.Mutex
 	// stop is Run's context. Once it is cancelled the daemon drains: no new
@@ -136,12 +140,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	if err := poolLost(cfg); err != nil {
-		return err
-	}
-	if d.pool, err = loadPool(cfg.PoolFile(), poolUsers(cfg, d.settings.MaxAgents)); err != nil {
-		return err
-	}
 	if d.root.fs, err = fsio.Start(cfg.Self, rootCred); err != nil {
 		return err
 	}
@@ -161,7 +159,8 @@ func Run(ctx context.Context, cfg Config) error {
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
 	for {
-		// Before reconcile, so a reclaim a crash interrupted is finished
+		d.loadUsers()
+		// Before reconcile, so a removal a crash interrupted is finished
 		// before the first admission, and one that failed is retried.
 		d.sweep()
 		d.reconcile()
@@ -175,47 +174,49 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 }
 
-// poolLost refuses to start without pool.json once the journal root holds
-// anything but regular files (an agent's journal directory, or a link that
-// may lead to one): agents have been admitted. pool.json is the only record
-// of the user each holds; without it every agent would look new and its user
-// free, so a live agent's home could be cleared or handed to another.
-func poolLost(cfg Config) error {
-	if _, err := os.Stat(cfg.PoolFile()); !errors.Is(err, fs.ErrNotExist) {
-		return nil // loadPool reports any other error
+// loadUsers reads the agent users that exist. The passwd file is the only
+// record of which user each agent holds: the agent id is the user's
+// comment. A read failure keeps the previous list and is logged.
+func (d *daemon) loadUsers() {
+	users, err := d.cfg.System.Users(d.cfg.UserPrefix)
+	if err != nil {
+		d.cfg.Logger.Printf("users: %v", err)
+		return
 	}
-	entries, err := os.ReadDir(cfg.Log)
-	if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	for _, e := range entries {
-		if !e.Type().IsRegular() {
-			return fmt.Errorf("not starting: %s is missing but %s holds agent journals; see \"If pool.json is lost\" in the harness README", cfg.PoolFile(), cfg.Log)
-		}
-	}
-	return nil
+	d.users = users
 }
 
-// poolUsers returns the configured pool users, or the max_agents pool users,
-// that exist, logging the ones that do not: agents can only use the users
-// that resolve.
-func poolUsers(cfg Config, maxAgents int) []string {
-	configured := cfg.PoolUsers
-	if configured == nil {
-		configured = layout.PoolUsers(maxAgents)
-	}
-	var users, missing []string
-	for _, u := range configured {
-		if _, err := cfg.LookupUser(u); err == nil {
-			users = append(users, u)
-		} else {
-			missing = append(missing, u)
+// userOf is the name of the user agentID holds, or "" when it has none. A
+// user marked removed belongs to no agent: its deletion is pending.
+func (d *daemon) userOf(agentID string) string {
+	for _, u := range d.users {
+		if u.ID == agentID {
+			return u.Name
 		}
 	}
-	if len(missing) > 0 {
-		cfg.Logger.Printf("pool users not found: %s; agents are limited to %d", strings.Join(missing, ", "), len(users))
+	return ""
+}
+
+// agentCount is how many users agents hold, users being removed included:
+// they are still users until userdel succeeds.
+func (d *daemon) agentCount() int {
+	n := 0
+	for _, u := range d.users {
+		if u.ID != "" {
+			n++
+		}
 	}
-	return users
+	return n
+}
+
+// newUserName is the lowest-numbered user name no user has.
+func (d *daemon) newUserName() string {
+	for n := 1; ; n++ {
+		name := d.cfg.UserPrefix + strconv.Itoa(n)
+		if !slices.ContainsFunc(d.users, func(u User) bool { return u.Name == name }) {
+			return name
+		}
+	}
 }
 
 // shutdown lets active runs finish so a restart loses no context, then

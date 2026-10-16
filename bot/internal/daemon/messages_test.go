@@ -128,7 +128,7 @@ func TestDownMessageToUnadmissibleChildDropped(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
 	ctrl := makeChild(t, h, "x", false)
-	os.Symlink(h.cfg.PoolHome("agent-3"), filepath.Join(ctrl, "home"))
+	os.Symlink(h.cfg.Home("agent-3"), filepath.Join(ctrl, "home"))
 	spooled := h.spoolDown(h.mainHome, "x", "anyone there?")
 	waitFor(t, "spool file dropped", func() bool { _, err := os.Stat(spooled); return os.IsNotExist(err) })
 	want := fmt.Sprintf(MsgUndeliveredFmt, "x") + "\n"

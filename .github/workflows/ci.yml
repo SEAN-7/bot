@@ -25,9 +25,6 @@ jobs:
           done
           sudo useradd --system --no-create-home --user-group agent-test
           sudo useradd --system --no-create-home agent-test-provider
-          for n in 1 2 3; do
-            sudo useradd --system --no-create-home --user-group agent-test-$n
-          done
           sudo AGENT_ROOT_TESTS=1 "$(which go)" test ./internal/daemon -run Privilege -v
       - name: Reproducible release build
         run: sh scripts/release_test.sh
