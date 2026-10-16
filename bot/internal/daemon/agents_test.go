@@ -193,21 +193,22 @@ func TestRemoveDuringAdmissionNotUndone(t *testing.T) {
 	}
 }
 
-func TestMalformedSettingsKeepsAgentsRunning(t *testing.T) {
-	h := newHarness(t, step("sleep 0.5", 100), done())
+// settings.json is read when the daemon starts; a later change waits for a
+// restart.
+func TestSettingsReadOnceAtStart(t *testing.T) {
+	h := newHarness(t)
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
+	other := topLevel(t, h, "other")
 	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
-	os.WriteFile(h.cfg.SettingsFile(), []byte("{"), 0o644)
-	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "done" {
-		t.Fatalf("run ended %q after settings.json broke", end)
+	errorFile := filepath.Join(other, "ERROR")
+	waitFor(t, "limit ERROR", func() bool { return fileContains(errorFile, "Agent limit reached (max_agents=1)") })
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":4}`), 0o644)
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Lstat(filepath.Join(other, "home")); !os.IsNotExist(err) {
+		t.Fatal("other admitted after settings.json changed")
 	}
-	if fileContains(filepath.Join(h.mainCtrl, "ERROR"), "Agent limit") {
-		t.Fatal("broken settings treated as max_agents=0")
-	}
-	time.Sleep(100 * time.Millisecond)
-	if n := strings.Count(h.logs.String(), "settings"); n != 1 {
-		t.Fatalf("settings error logged %d times", n)
+	if strings.Contains(h.logs.String(), "settings.json:") {
+		t.Fatalf("settings logged after start:\n%s", h.logs)
 	}
 }
 
@@ -322,8 +323,8 @@ func TestMaxAgentsUsesPool(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(b, "home")); !os.IsNotExist(err) {
 		t.Fatal("b admitted despite the limit")
 	}
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":3}`), 0o644)
-	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-3") {
+	os.RemoveAll(a)
+	if home := h.childHome(b); home != filepath.Join(h.cfg.Homes, "agent-2") {
 		t.Fatal(home)
 	}
 	waitFor(t, "limit ERROR cleared", func() bool {

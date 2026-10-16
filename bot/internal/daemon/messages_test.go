@@ -61,9 +61,11 @@ func TestChildMessageReachesParent(t *testing.T) {
 
 func TestDownMessageWaitsForAdmission(t *testing.T) {
 	h := newHarness(t, doneFor(childMark), doneFor(parentMark), doneFor(parentMark), doneFor(parentMark))
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":1}`), 0o644)
+	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
 	h.start()
 	h.markParent()
+	first := makeChild(t, h, "first", true)
+	h.childHome(first)
 	ctrl := makeChild(t, h, "late", true)
 	spooled := h.spoolDown(h.mainHome, "late", "when you start")
 	waitFor(t, "limit ERROR", func() bool { return fileContains(filepath.Join(ctrl, "ERROR"), "Agent limit") })
@@ -74,7 +76,7 @@ func TestDownMessageWaitsForAdmission(t *testing.T) {
 	if n := countNotes(h.mainHome, "-undelivered.md"); n != 0 {
 		t.Fatalf("%d undelivered notes for a waiting child", n)
 	}
-	os.WriteFile(h.cfg.SettingsFile(), []byte(`{"max_agents":2}`), 0o644)
+	os.RemoveAll(first)
 	h.childHome(ctrl)
 	waitFor(t, "delivery after admission", func() bool { return h.sawRecord(`-owner.md"`, `"from":"owner"`, "when you start") })
 	if _, err := os.Stat(spooled); !os.IsNotExist(err) {

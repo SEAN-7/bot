@@ -100,8 +100,7 @@ type daemon struct {
 	stop        context.Context
 	agents      map[string]*agent // by id; root is not among them
 	delivered   *delivered
-	settings    layout.Settings // last good settings.json
-	settingsErr string
+	settings    layout.Settings // settings.json as read at startup
 	heldBack    map[string]string // control directories not admitted, with the reason already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
 	reclaimErrs map[string]string // the last reclaim error logged per pool user
@@ -124,7 +123,11 @@ type daemon struct {
 func Run(ctx context.Context, cfg Config) error {
 	syscall.Umask(0o022)
 	d := &daemon{cfg: cfg, agents: map[string]*agent{}, heldBack: map[string]string{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
-	d.settings, _ = layout.LoadSettings(cfg.SettingsFile())
+	settings, err := layout.LoadSettings(cfg.SettingsFile())
+	if err != nil {
+		cfg.Logger.Printf("settings.json: %v; using max_agents=%d", err, settings.MaxAgents)
+	}
+	d.settings = settings
 	if u, err := user.Current(); err == nil {
 		d.selfUser = u.Username
 	}
@@ -271,7 +274,6 @@ func (d *daemon) start(a *agent) {
 // new control directories are admitted, and agents no longer reached are
 // removed.
 func (d *daemon) reconcile() {
-	d.loadSettings()
 	d.mu.Lock()
 	known := make(map[string]*agent, len(d.agents))
 	for id, a := range d.agents {
@@ -423,18 +425,4 @@ func cleanName(name string) bool {
 		}
 	}
 	return true
-}
-
-// loadSettings rereads settings.json, keeping the last good settings when it
-// is malformed: a half-written file must not stop agents.
-func (d *daemon) loadSettings() {
-	settings, err := layout.LoadSettings(d.cfg.SettingsFile())
-	if err != nil {
-		if msg := err.Error(); msg != d.settingsErr {
-			d.settingsErr = msg
-			d.cfg.Logger.Printf("settings.json: %v; keeping max_agents=%d", err, d.settings.MaxAgents)
-		}
-		return
-	}
-	d.settings, d.settingsErr = settings, ""
 }

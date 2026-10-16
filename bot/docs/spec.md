@@ -81,7 +81,8 @@ never both.
 | `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home; empty while free |
 
 `settings.json` holds `max_agents` (default 16), which bounds the whole
-tree, main included. What the harness keeps in an agent's home and control
+tree, main included. It is read when the daemon starts; a change takes
+effect at the next restart. What the harness keeps in an agent's home and control
 directory, and their modes, are in the manual ("Your home", "Subagents").
 
 ## Privilege model
