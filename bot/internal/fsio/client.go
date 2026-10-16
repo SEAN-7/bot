@@ -123,7 +123,13 @@ func (c *Client) Read(path string, limit int64) ([]byte, int64, error) {
 
 // Write replaces path atomically with a file of mode (less the umask).
 func (c *Client) Write(path string, data []byte, mode os.FileMode) error {
-	_, err := c.call(request{Op: "write", Path: path, Data: data, Mode: uint32(mode.Perm())})
+	return c.WriteStaged(path, "", data, mode)
+}
+
+// WriteStaged is Write with its temporary file in the directory stage, so a
+// reader of path's directory never sees it.
+func (c *Client) WriteStaged(path, stage string, data []byte, mode os.FileMode) error {
+	_, err := c.call(request{Op: "write", Path: path, Data: data, Mode: uint32(mode.Perm()), Stage: stage})
 	return err
 }
 

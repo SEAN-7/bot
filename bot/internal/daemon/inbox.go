@@ -44,10 +44,45 @@ func noteName(kind string, now time.Time) string {
 
 // writeNote drops a harness message into an agent's inbox, through its helper.
 func (d *daemon) writeNote(to *agent, kind, text string) error {
-	return to.fs.Write(filepath.Join(to.home, "inbox", noteName(kind, time.Now())), []byte(text+"\n"), 0o640)
+	return to.writeInbox(noteName(kind, time.Now()), []byte(text+"\n"))
 }
 
-// pending lists deliverable inbox files: regular, not dot-prefixed, by name.
+// inboxStage is where the harness stages the files it writes into an inbox:
+// a directory, which collection skips, so a run never collects a file half
+// written. An agent that removed it gets it back on the next write.
+const inboxStage = "inbox/.tmp"
+
+// writeInbox writes name into the agent's inbox, through its helper.
+func (a *agent) writeInbox(name string, data []byte) error {
+	path, stage := filepath.Join(a.home, "inbox", name), filepath.Join(a.home, inboxStage)
+	err := a.fs.WriteStaged(path, stage, data, 0o640)
+	if errors.Is(err, fs.ErrNotExist) {
+		if _, perr := a.fs.Private(stage); perr == nil {
+			err = a.fs.WriteStaged(path, stage, data, 0o640)
+		}
+	}
+	return err
+}
+
+// clearStage removes what a write interrupted by a crash left in the
+// inbox's staging directory. Admission calls it, before the agent's loop
+// starts and from the poll goroutine, so no write of the harness is in
+// progress there.
+func (a *agent) clearStage() {
+	stage := filepath.Join(a.home, inboxStage)
+	entries, err := a.fs.List(stage)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Type == "file" {
+			a.fs.Unlink(filepath.Join(stage, e.Name))
+		}
+	}
+}
+
+// pending lists the inbox files that wake the agent: regular, not
+// dot-prefixed, by name.
 func (a *agent) pending() ([]string, error) {
 	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
 	if err != nil {
@@ -56,6 +91,24 @@ func (a *agent) pending() ([]string, error) {
 	var names []string
 	for _, e := range entries {
 		if e.Type == "file" && !strings.HasPrefix(e.Name, ".") {
+			names = append(names, e.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// deliverable lists the inbox files a run collects: every regular file, a
+// dot-file too, by name. Directories (processed/, the staging directory)
+// are skipped.
+func (a *agent) deliverable() ([]string, error) {
+	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.Type == "file" {
 			names = append(names, e.Name)
 		}
 	}
@@ -73,7 +126,7 @@ var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image
 // model accepts, budget how many more bytes of images the run may show.
 func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
-	names, err := a.pending()
+	names, err := a.deliverable()
 	if err != nil || len(names) == 0 {
 		return nil, nil, err
 	}

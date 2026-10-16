@@ -464,3 +464,22 @@ func TestStatSymlinkTarget(t *testing.T) {
 		t.Fatalf("got %+v %v", e, err)
 	}
 }
+
+// A staged write leaves its temporary file only in the staging directory.
+func TestWriteStaged(t *testing.T) {
+	dir := t.TempDir()
+	target, stage := filepath.Join(dir, "inbox"), filepath.Join(dir, "inbox", ".tmp")
+	os.MkdirAll(stage, 0o750)
+	if err := write(filepath.Join(target, "x.md"), []byte("hi"), 0o640, stage); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(filepath.Join(target, "x.md")); string(data) != "hi" {
+		t.Fatalf("x.md %q", data)
+	}
+	if entries, _ := os.ReadDir(stage); len(entries) != 0 {
+		t.Fatalf("stage left %v", entries)
+	}
+	if err := write(filepath.Join(target, "y.md"), []byte("hi"), 0o640, filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("wrote through a missing staging directory")
+	}
+}

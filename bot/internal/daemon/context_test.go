@@ -138,9 +138,9 @@ func itoa(n int) string {
 }
 
 // An agent starts fresh by having a note arrive after its run's last inbox
-// check: a dot-file renamed later, then a stop. The seed README relies on it.
+// check: a file staged outside the inbox and moved in later, then a stop.
 func TestDelayedNoteStartsNextRun(t *testing.T) {
-	rename := `echo fresh > inbox/.fresh-start; (sleep 1; mv inbox/.fresh-start inbox/fresh-start.md) >/dev/null 2>&1 &`
+	rename := `echo fresh > .fresh-start; (sleep 1; mv .fresh-start inbox/fresh-start.md) >/dev/null 2>&1 &`
 	h := newHarness(t, step(rename, 100), done())
 	h.start()
 	h.drop(h.mainHome, "go.md", "go")

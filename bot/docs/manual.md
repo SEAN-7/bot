@@ -26,6 +26,7 @@ The harness uses these names in your home; everything else is yours.
 | `config.json` | Your provider, model and options (see Configuration). Yours to edit. |
 | `inbox/` | Files that wake you and are delivered to you (see Runs). |
 | `inbox/processed/` | Where delivered inbox files are moved. |
+| `inbox/.tmp/` | Where the harness stages the files it writes into your inbox; never delivered. |
 | `agents/` | Your subagents' control directories (see Subagents). |
 | `.messages/` | Your outgoing message spool (see Messages). |
 | `journal` | Link to your journal directory, read-only (see Journal). |
@@ -34,7 +35,7 @@ The harness uses these names in your home; everything else is yours.
 Your home is setgid and commands run with umask 022, so the agents above
 you (your owner and its ancestors, other than root) can read what you
 write; nobody else can enter it. You can tighten your own files' modes. The
-harness creates `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
+harness creates `inbox/`, `inbox/processed/`, `inbox/.tmp/`, `agents/`, `.messages/`,
 `.messages/agents/` and control directories 0750, and inbox files,
 delivered messages, spool files and `config.json` 0640. Where a name the
 harness uses already exists, it is left as it is.
@@ -74,7 +75,11 @@ harness uses already exists, it is left as it is.
 
 **Waking.** You run when `~/inbox/` holds a regular file whose name does
 not start with a dot. Nothing else wakes you: there is no heartbeat, and
-once a run ends nothing runs you again until such a file arrives.
+once a run ends nothing runs you again until such a file arrives. A file
+whose name starts with a dot does not wake you, but is delivered with
+your next run, whatever starts it, so it can wait without costing a run.
+A file written straight into `~/inbox/` can be collected before it is
+complete.
 
 **Start of a run.** In order:
 1. `config.json` and your owner's `OWNER.md` are read and checked (see
@@ -85,8 +90,8 @@ once a run ends nothing runs you again until such a file arrives.
 3. The run's journal file is created, with its `start` record.
 4. `~/journal` and `~/manual` are linked.
 5. `README.md` is read.
-6. The inbox is collected: regular files in name order, skipping dot-files
-   and directories. Each is journaled and moved to `inbox/processed/`
+6. The inbox is collected: every regular file in name order, dot-files
+   included; directories are skipped. Each is journaled and moved to `inbox/processed/`
    (with a numeric suffix if that name is taken).
 
 Every run starts fresh from the files on disk, with its own journal file.
@@ -335,11 +340,9 @@ this precedence; it does not enforce it.
 ## The agent command
 
 Everything you do with the harness is a file (see Messages, Subagents,
-Journal and Configuration). The running harness version is in
-`~/manual/version`. In this release the `agent` commands `new`, `remove`,
-`send`, `message`, `messages`, `log`, `provider describe` and `version`
-still do the same file operations and print a notice saying so; they are
-removed in 0.8.0.
+Journal and Configuration); the running harness version is in
+`~/manual/version`. The `agent` command is the service and root's plugin
+installer, and `agent help` lists them.
 
 ## Known limits
 

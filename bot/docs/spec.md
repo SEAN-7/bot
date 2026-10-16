@@ -101,7 +101,8 @@ planted symlink reaches only what the user could. A home is accessed
 through its agent's helper, a control directory through its parent's, and
 `/etc/agent` through a root helper. A helper that dies is restarted and the
 affected run retried. Operations: `list`, `read` (regular files, byte
-limit), `write` (atomic dot-name then rename), `private` (create a missing
+limit), `write` (atomic: a temporary dot-file in the target's directory, or
+in a staging directory the caller names, then a rename), `private` (create a missing
 directory 0750; leave anything else alone), `rename`, `remove` and `clear`
 (never following symlinks), `unlink`, `symlink`, `purge_owned` (the user's
 files in shared temporary directories) and `stat` (lstat of the final
@@ -153,7 +154,8 @@ directories and spools but no loop, inbox, journal or owner.
 - **Admission.** Take the lowest free pool user and record it in
   `pool.json`; prepare the home (2750, setgid); start the user's helper;
   clear what a previous holder left; set the group's members; create the
-  harness directories where missing (`private`; anything else of that name
+  harness directories where missing (`inbox/.tmp` among them; `private`;
+  anything else of that name
   is left alone and logged once); write the seed `README.md` where
   missing; move the starting `config.json` into the home unless it
   already has one; enable lingering; create the journal directory; write
@@ -204,6 +206,15 @@ directories and spools but no loop, inbox, journal or owner.
 
 What a run does, as the agent sees it, is the manual's "Runs". How:
 
+- **Waking and collecting.** Waking needs a regular inbox file whose name
+  does not start with a dot; collection takes every regular file, dot-files
+  included, and skips directories.
+- **Staging.** Every file the harness writes into an inbox (a message, a
+  note) is written through the agent's helper with its temporary file in
+  `inbox/.tmp`, which collection skips, so a run never collects one half
+  written; a missing `inbox/.tmp` is created and the write repeated.
+  Admission removes files left there, before the agent's loop starts and
+  from the poll goroutine, so no write is in progress.
 - **Labels.** An inbox file is read (up to 16 MiB) and hashed; it is
   labelled `owner` or `agents/NAME` only if the agent path, file name and
   SHA-256 match a `delivered.jsonl` record with that sender.
@@ -347,19 +358,8 @@ accepts only a file matching the index.
 helper), `agent provider install NAME FILE` (root: install a plugin binary
 whose SHA-256 matches the index for NAME and this architecture, prompt for
 missing settings and refresh `providers.json`; downloads nothing) and
-`agent help`.
-
-In 0.7.0 `new`, `remove`, `send`, `message`, `messages`, `log`,
-`provider describe` and `version` also remain. Each prints "agent CMD:
-replaced by files; see /var/lib/agent/manual/manual.md (SECTION). Removed
-in 0.8.0." on stderr and then does what it did: `new` validates the config
-against `providers.json` and writes the control directory (root 0700,
-agent 0750) and `config.json` (0640); `remove` renames the control
-directory out of `agents/` and removes it; `send` and `message` write a
-spool file atomically; `messages` and `log` print once with control
-characters removed; `provider describe` as root runs the plugins and
-refreshes `providers.json`, otherwise it reads it; `version` prints the
-version.
+`agent help`. The commands 0.7.0 kept (`new`, `remove`, `send`, `message`,
+`messages`, `log`, `provider describe`, `version`) were removed in 0.8.0.
 
 ## Manual
 

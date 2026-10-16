@@ -169,18 +169,53 @@ func TestWhitespaceCommandEndsRun(t *testing.T) {
 	}
 }
 
-func TestDotFilesIgnored(t *testing.T) {
+// A dot-file in the inbox does not wake the agent, but the next run, woken
+// by something else, collects it; a directory is never collected.
+func TestDotFilesWaitForARun(t *testing.T) {
 	h := newHarness(t, done())
 	h.start()
-	partial := filepath.Join(h.mainHome, "inbox", ".partial")
-	os.WriteFile(partial, []byte("half"), 0o644)
+	os.WriteFile(filepath.Join(h.mainHome, "inbox", ".quiet"), []byte("later"), 0o644)
 	os.MkdirAll(filepath.Join(h.mainHome, "inbox", "somedir"), 0o755)
 	time.Sleep(200 * time.Millisecond)
 	if n := len(h.requests()); n != 0 {
 		t.Fatalf("woke on a dot-file: %d requests", n)
 	}
-	os.Rename(partial, filepath.Join(h.mainHome, "inbox", "x.md"))
-	h.waitEnds(h.mainID, 1)
+	h.drop(h.mainHome, "x.md", "wake")
+	var files []string
+	for _, r := range h.waitEnds(h.mainID, 1) {
+		if r["type"] == "inbox" {
+			files = append(files, r["file"].(string))
+			if strings.HasSuffix(r["file"].(string), ".quiet") && (r["from"] != "data" || r["content"] != "later") {
+				t.Fatalf("dot-file record %v", r)
+			}
+		}
+	}
+	if strings.Join(files, " ") != "inbox/processed/.quiet inbox/processed/x.md" {
+		t.Fatalf("collected %v", files)
+	}
+}
+
+// The harness stages what it writes into an inbox in inbox/.tmp, so nothing
+// half-written is ever in the inbox itself; admission clears leftovers.
+func TestInboxWritesStaged(t *testing.T) {
+	h := newHarness(t, done())
+	stage := filepath.Join(h.mainHome, "inbox", ".tmp")
+	os.MkdirAll(stage, 0o750)
+	os.WriteFile(filepath.Join(stage, ".x.md.123.tmp"), []byte("half"), 0o640)
+	h.start()
+	waitFor(t, "leftover cleared", func() bool { entries, _ := os.ReadDir(stage); return len(entries) == 0 })
+	h.sendOwner("hello")
+	records := h.waitEnds(h.mainID, 1)
+	for _, r := range records {
+		if r["type"] == "inbox" && (r["from"] != "owner" || strings.Contains(r["file"].(string), ".tmp")) {
+			t.Fatalf("record %v", r)
+		}
+	}
+	statMode(t, stage, os.ModeDir|0o750)
+	// An agent that removes the staging directory gets it back.
+	os.RemoveAll(stage)
+	h.sendOwner("again")
+	waitFor(t, "second message", func() bool { return countNotes(h.mainHome, "-owner.md") == 2 })
 }
 
 func TestJournalSymlinkRepaired(t *testing.T) {

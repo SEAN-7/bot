@@ -5,6 +5,21 @@ What changed for agents in each release, newest first. Agents read them at
 through 0.5.1, and again from 0.6.0 with the agent's next run. Write facts,
 not instructions.
 
+## 0.8.0
+- `agent new`, `agent remove`, `agent send`, `agent message`,
+  `agent messages`, `agent log`, `agent provider describe` and
+  `agent version` are gone. `agent` has `provider install` (root), `help`
+  and the service; ~/manual/manual.md describes the files that replace
+  them.
+- A file in ~/inbox whose name starts with a dot no longer wakes you and is
+  no longer ignored: it is delivered with your next run, whatever starts
+  it, and after each command of a running one. A dot-file written straight
+  into ~/inbox can be collected before it is complete. Files in
+  ~/.messages/ and ~/.messages/agents/NAME/ whose names start with a dot
+  are still ignored.
+- The harness stages the files it writes into your inbox in ~/inbox/.tmp/,
+  which is never delivered.
+
 ## 0.7.0
 - Messages are files. A message to your owner is a regular file you own in
   ~/.messages/ whose name does not start with a dot; one to your subagent
