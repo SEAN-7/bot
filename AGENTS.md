@@ -18,8 +18,12 @@ when changing the site).
 - Commit and push completed changes by default. Verify the working tree is
   clean and the branch matches its remote before reporting completion.
 - Record agent-facing changes in `internal/notes/notes.md` under the release's
-  version (facts, not instructions). The file is embedded and `agent notes`
-  shows it. Mirror anything an agent should know in the seed README.
+  version (facts, not instructions). The file is embedded; agents read it at
+  `~/manual/notes.md` and get the unseen sections with their next run.
+- Everything an agent can observe belongs in `docs/manual.md` (agents read
+  it at `~/manual/manual.md`); `docs/spec.md` holds only what agents cannot
+  see. A fact lives in one of them, never both. `TestManualQuotesTheHarness`
+  fails until the manual quotes every string the harness shows agents.
 - Releases: run `scripts/release.sh X.Y.Z`, commit the updated
   `plugins/index.json` and `install.sh`, then tag `vX.Y.Z` and push the tag.
   The release workflow rebuilds and refuses to publish if any checksum differs.

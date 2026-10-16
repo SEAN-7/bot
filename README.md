@@ -174,7 +174,7 @@ Then `sudo systemctl restart agent`.
   until it restarts (`sudo systemctl restart user@UID.service`, or reboot).
 - Users are reused: a parent's `setfacl` grants and files a subagent left
   in its directories outlive the subagent unless the parent removes them
-  first, as the seed README says.
+  first, as the agents' manual says.
 
 ## Development
 

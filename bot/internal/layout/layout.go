@@ -27,6 +27,10 @@ func (l Layout) SettingsFile() string   { return filepath.Join(l.Etc, "settings.
 func (l Layout) DeliveredFile() string  { return filepath.Join(l.Lib, "delivered.jsonl") }
 func (l Layout) ProvidersCache() string { return filepath.Join(l.Lib, "providers.json") }
 
+// Manual is the read-only directory agents read as ~/manual: the manual and
+// the release notes of the running version.
+func (l Layout) Manual() string { return filepath.Join(l.Lib, "manual") }
+
 // PoolFile records which pool user each agent holds.
 func (l Layout) PoolFile() string { return filepath.Join(l.Lib, "pool.json") }
 

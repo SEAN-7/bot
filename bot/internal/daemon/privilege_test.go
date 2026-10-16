@@ -452,7 +452,7 @@ func TestPrivilegeSubagentIsolation(t *testing.T) {
 	statIs(t, journalA, 0, gidA, fs.ModeDir|0o751)
 	_, mainGid := lookupIDs(t, ownerName(t, h.mainHome))
 	statIs(t, h.cfg.JournalDir(h.mainID), 0, mainGid, fs.ModeDir|0o751)
-	steps := []string{matchStep("task-for-a", fmt.Sprintf("touch %s/x; echo rc1=$?; echo hi > %s/OWNER.md; echo rc2=$?; cat %s/TASK.md; echo rc3=$?", h.mainHome, ctrlA, homeB), 100)}
+	steps := []string{matchStep("task-for-a", fmt.Sprintf("touch %s/x; echo rc1=$?; echo hi > %s/OWNER.md; echo rc2=$?; cat %s/README.md; echo rc3=$?", h.mainHome, ctrlA, homeB), 100)}
 	h.setScript(steps...)
 	h.drop(homeA, "task.md", "task-for-a")
 	h.waitEnds(childID("a"), 1)
@@ -464,7 +464,7 @@ func TestPrivilegeSubagentIsolation(t *testing.T) {
 	}
 	runA := h.runs(childID("a"))[0]
 	steps = append(steps,
-		matchStep("task-for-main", fmt.Sprintf("cat agents/a/home/TASK.md; echo rc=$?; cat %s/*.jsonl >/dev/null; echo jrc=$?", journalA), 100),
+		matchStep("task-for-main", fmt.Sprintf("cat agents/a/home/README.md; echo rc=$?; cat %s/*.jsonl >/dev/null; echo jrc=$?", journalA), 100),
 		matchStep("task-for-b", fmt.Sprintf("cat %s/*.jsonl; echo jrc=$?; cat %s; echo frc=$?", journalA, runA), 100))
 	h.setScript(steps...)
 	h.drop(h.mainHome, "go.md", "task-for-main")

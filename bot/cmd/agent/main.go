@@ -19,7 +19,6 @@ import (
 	"github.com/SEAN-7/bot/internal/daemon"
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/layout"
-	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
@@ -128,12 +127,6 @@ func run(args []string, e env) error {
 		return provider(ctx, e, args[1:])
 	case "version":
 		fmt.Fprintln(e.out, version.Version)
-		return nil
-	case "notes":
-		if len(args) != 1 {
-			return errors.New("usage: agent notes")
-		}
-		io.WriteString(e.out, notes.Text)
 		return nil
 	case "_fsio":
 		return fsio.Serve(os.Stdin, os.Stdout)

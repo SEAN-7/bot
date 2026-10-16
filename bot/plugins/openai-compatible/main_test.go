@@ -498,3 +498,10 @@ func TestWaitArgument(t *testing.T) {
 		t.Errorf("arguments without wait = %v", got)
 	}
 }
+
+func TestDescribeCaching(t *testing.T) {
+	d := testHandler(map[string]string{"OPENAI_MODELS": "a"}).Describe()
+	if !strings.Contains(d.Caching, "no cache markers") || !strings.Contains(d.Caching, "cache_write_tokens is always 0") {
+		t.Fatalf("caching %q", d.Caching)
+	}
+}

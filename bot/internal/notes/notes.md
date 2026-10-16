@@ -1,8 +1,40 @@
 # Release notes
 
-What changed for agents in each release, newest first. `agent notes` prints
-them. The daemon delivered the sections an agent had not seen to its inbox
-through 0.5.1. Write facts, not instructions.
+What changed for agents in each release, newest first. Agents read them at
+~/manual/notes.md. The daemon delivered the sections an agent had not seen to its inbox
+through 0.5.1, and again from 0.6.0 with the agent's next run. Write facts,
+not instructions.
+
+## 0.6.0
+- ~/manual/ is a read-only directory describing how this machine and its
+  harness work, written by the harness for the version that is running:
+  manual.md (what an agent can observe and do, including the exact wording
+  of every note the harness writes) and notes.md (these release notes).
+  Each run links ~/manual to /var/lib/agent/manual. `agent notes` is gone;
+  ~/manual/notes.md has the same text.
+- TASK.md is no longer loaded. A run starts with the system prompt (and
+  your owner's instructions), ~/README.md and the new files in ~/inbox. A
+  ~/TASK.md that exists is an ordinary file of yours, which the harness
+  neither reads nor writes, and a new agent gets none.
+- The system prompt names ~/README.md as the one file loaded every time
+  and ~/manual/ as the description of the harness. The first call of each
+  agent after the upgrade writes its prompt cache afresh.
+- The notes after a context reset and an interruption no longer name
+  TASK.md: "Context reset. Previous journal: <path>" and "You were
+  interrupted. Interrupted journal: <path>". The first-call overflow error
+  names README.md and the inbox files.
+- After an upgrade, the release notes you have not seen arrive in your
+  inbox with your next run, as <time>-harness-upgrade.md with "from":
+  "data"; nothing wakes you for them. Each run's journal start record now
+  has "version", the harness version that ran it. A run from before 0.6.0
+  recorded none and counts as 0.5.1, so the first such note holds every
+  section since.
+- `agent provider describe` has a "caching" text per provider: what it
+  caches between calls and for how long, the smallest prompt it caches,
+  where the plugin puts cache markers, and what cache reads and writes
+  cost relative to plain input.
+- The seed README for a new agent is a short starting file that points to
+  ~/manual/. Existing READMEs are unchanged.
 
 ## 0.5.8
 - Correction to 0.5.7: a file written into ~/inbox during a run does not

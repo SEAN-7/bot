@@ -5,22 +5,15 @@ import (
 	"testing"
 )
 
-func TestSeedReadmeCoversTopics(t *testing.T) {
-	for _, want := range []string{"TASK.md", "archive", "journal", "systemd-run --user", "--on-active", "agent provider describe", `"from": "owner"`, "cron", "~/agents/", "dot", "Never poll", "agent message",
-		"~/config.json", "~/journal/messages.jsonl", "agent send NAME", "agent new NAME", "agent remove NAME", "agent help",
-		"~/agents/NAME/OWNER.md", "~/agents/NAME/ERROR", "~/agents/NAME/home", `"from": "agents/NAME"`} {
+// The seed README points to the manual, which holds the facts, and names no
+// file the harness no longer loads.
+func TestSeedReadme(t *testing.T) {
+	for _, want := range []string{"~/manual/manual.md", "~/manual/notes.md", "This file is yours"} {
 		if !strings.Contains(README, want) {
 			t.Errorf("README lacks %q", want)
 		}
 	}
-}
-
-// The README carries the sharing facts an agent cannot discover: users are
-// reused, and ~ takes no default ACL.
-func TestSeedReadmeCarriesSharingFacts(t *testing.T) {
-	for _, want := range []string{"setfacl", "dedicated directory", "Pool users are reused", "find DIR -user USER", "setfacl -R -x u:USER,d:u:USER DIR", "setfacl -x u:USER ~", "Never set a default ACL on ~"} {
-		if !strings.Contains(README, want) {
-			t.Errorf("README lacks %q", want)
-		}
+	if strings.Contains(README, "TASK.md") {
+		t.Error("README names TASK.md")
 	}
 }

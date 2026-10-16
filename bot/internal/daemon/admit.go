@@ -201,7 +201,7 @@ func (a *agent) seed() error {
 	if err != nil {
 		return err
 	}
-	for _, file := range []struct{ name, text string }{{"README.md", seed.README}, {"TASK.md", seed.TASK}} {
+	for _, file := range []struct{ name, text string }{{"README.md", seed.README}} {
 		path := filepath.Join(a.home, file.name)
 		_, err := a.fs.Stat(path)
 		if errors.Is(err, fs.ErrNotExist) {

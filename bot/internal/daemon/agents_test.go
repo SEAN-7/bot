@@ -219,7 +219,7 @@ func TestAdmissionSeedsPoolHome(t *testing.T) {
 	if home != filepath.Join(h.cfg.Homes, "agent-2") {
 		t.Fatal(home)
 	}
-	for _, p := range []string{"README.md", "TASK.md", "inbox/processed", "agents"} {
+	for _, p := range []string{"README.md", "inbox/processed", "agents"} {
 		if _, err := os.Stat(filepath.Join(home, p)); err != nil {
 			t.Fatal(p, err)
 		}
@@ -558,7 +558,7 @@ func TestRootChildAdmitted(t *testing.T) {
 	if home := h.childHome(h.mainCtrl); home != h.cfg.PoolHome("agent-1") || home != h.mainHome {
 		t.Fatalf("main's home %s", home)
 	}
-	for _, p := range []string{"README.md", "TASK.md", "inbox/processed", "agents"} {
+	for _, p := range []string{"README.md", "inbox/processed", "agents"} {
 		if _, err := os.Stat(filepath.Join(h.mainHome, p)); err != nil {
 			t.Fatal(p, err)
 		}

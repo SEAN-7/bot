@@ -4,8 +4,7 @@ The harness provides a few guarantees; the agent provides all policy.
 
 ## Three ideas
 
-1. **An agent is a user and a home** holding `README.md`, `TASK.md` and
-   `inbox/`. Its owner, root or another agent, creates it with `agent new`;
+1. **An agent is a user and a home** holding `README.md` and `inbox/`. Its owner, root or another agent, creates it with `agent new`;
    the harness gives it a user from a pool. `agent remove` stops it. Root is
    the top of the tree and the main agent its first child, so the human
    does exactly what an agent does.
@@ -33,15 +32,15 @@ The harness provides a few guarantees; the agent provides all policy.
   journals or conversation logs.
 - All daemon file access inside agent homes happens with an agent's
   privileges, so a planted symlink reaches nothing that agent couldn't.
-- Every model message and command result is journaled; an interrupted run is
-  reported to the agent on restart.
+- Every model message and command result is journaled; an interrupted run,
+  and a harness upgrade, are reported to the agent at its next run.
 - Context resets and interruptions lose nothing that is on disk.
 
 ## What the agent decides
 
 Memory, its model, scheduling, messaging, tools, subagents, when to stop
-and how to work: all of it is files and scripts the agent writes for itself,
-starting from suggestions in its seed README that it is free to revise.
+and how to work: all of it is files and scripts the agent writes for itself.
+Its README starts nearly empty; how the harness works is in its manual.
 
 ## How to judge a change
 

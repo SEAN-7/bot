@@ -6,6 +6,3 @@ import _ "embed"
 
 //go:embed README.md
 var README string
-
-//go:embed TASK.md
-var TASK string

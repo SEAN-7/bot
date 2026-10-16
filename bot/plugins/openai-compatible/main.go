@@ -115,8 +115,12 @@ func modelOptions() map[string]proto.Option {
 	}
 }
 
+// caching is the describe text for agents. Checked 2026-10-16 against
+// OpenAI's prompt-caching guide (developers.openai.com).
+const caching = "Prompt caching: this plugin sends no cache markers. Each call is one system message holding the system segments (the system prompt with your owner's instructions, then README.md, joined by blank lines), then the conversation; any caching is the server's. OpenAI caches prompt prefixes automatically on supported models: on GPT-5.6 and later, prefixes of at least 1,024 tokens, kept at least 30 minutes after their last use, with cache reads at 0.1x the input price; on earlier models the minimum and the discount depend on the model, and an entry usually lasts 5 to 10 minutes without use. A change early in the prompt, such as to README.md, means everything after it is no longer a cached prefix. What the server read from its cache is reported as cache_read_tokens; cache_write_tokens is always 0 from this plugin, even where the server charges for writes. Other servers differ (vLLM caches prefixes when prefix caching is enabled; llama.cpp and Ollama depend on their settings): compare input_tokens and cache_read_tokens in your journal to see what yours does."
+
 func (h handler) Describe() proto.DescribeResponse {
-	d := proto.DescribeResponse{Settings: settings, Models: []proto.Model{}}
+	d := proto.DescribeResponse{Settings: settings, Models: []proto.Model{}, Caching: caching}
 	models, err := parseModels(h.getenv("OPENAI_MODELS"))
 	if err != nil {
 		d.Error = &proto.Error{Message: err.Error()}

@@ -27,7 +27,7 @@ func TestBasicRun(t *testing.T) {
 		t.Fatalf("requests %d", len(reqs))
 	}
 	sys := reqs[0].System
-	if len(sys) != 3 || sys[0].Text != SystemPrompt || sys[1].Text != seed.README || sys[2].Text != seed.TASK {
+	if len(sys) != 2 || sys[0].Text != SystemPrompt || sys[1].Text != seed.README {
 		t.Fatalf("system %+v", sys)
 	}
 	if len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "sh" || reqs[0].Model != "replay-1" {

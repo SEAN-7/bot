@@ -134,7 +134,7 @@ func TestRequestShape(t *testing.T) {
 			t.Fatalf("system[%d] = %v", i, b)
 		}
 		// Each system section is its own cache breakpoint, so a change to a
-		// later section (TASK.md) leaves the earlier ones cached.
+		// later section (README.md) leaves the earlier ones cached.
 		if _, cached := b["cache_control"]; !cached {
 			t.Fatalf("system[%d] has no cache_control", i)
 		}
@@ -544,5 +544,19 @@ func TestImageBlocks(t *testing.T) {
 		`{"type":"image","source":{"type":"base64","media_type":"image/jpeg","data":"BA=="},"cache_control":{"type":"ephemeral"}}]`
 	if !jsonEqual(t, got, []byte(want)) {
 		t.Fatalf("content\n got %s\nwant %s", got, want)
+	}
+}
+
+// The caching text names every model's minimum, so an agent on any model
+// finds its own.
+func TestDescribeCaching(t *testing.T) {
+	d := handler{}.Describe()
+	if !strings.Contains(d.Caching, "5-minute") || !strings.Contains(d.Caching, "1.25x") {
+		t.Fatalf("caching %q", d.Caching)
+	}
+	for _, m := range d.Models {
+		if !strings.Contains(d.Caching, m.ID) {
+			t.Errorf("caching text does not name %s", m.ID)
+		}
 	}
 }

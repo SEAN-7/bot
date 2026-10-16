@@ -69,10 +69,7 @@ func TestRunDispatch(t *testing.T) {
 		{"log with two names", 1000, []string{"log", "a", "b"}, "usage: agent log [NAME]", ""},
 		{"messages as root without name", 0, []string{"messages"}, "root has no owner", ""},
 		{"help", 1000, []string{"help"}, "", "agent new NAME [CONFIG|-]"},
-		{"help lists notes", 1000, []string{"help"}, "", "agent notes"},
-		{"notes", 1000, []string{"notes"}, "", "# Release notes"},
-		{"notes as root", 0, []string{"notes"}, "", "## 0.5.0"},
-		{"notes with an argument", 1000, []string{"notes", "x"}, "usage: agent notes", ""},
+		{"notes is gone", 1000, []string{"notes"}, `unknown command "notes"`, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			e, out := testEnv(t, c.euid)

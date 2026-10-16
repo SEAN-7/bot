@@ -42,8 +42,15 @@
 //   - cache_control: {"type":"ephemeral"} (5-minute default; "ttl":"1h"
 //     optional). At most 4 breakpoints per request. Allowed on tools, system
 //     text blocks and message content blocks (text, tool_use, tool_result);
-//     not on thinking blocks or empty text blocks. This plugin uses two: the
-//     last system block and the last cacheable block of the final message.
+//     not on thinking blocks or empty text blocks. This plugin puts one on
+//     each system block (at most the last three) and one on the last
+//     cacheable block of the final message.
+//   - Checked 2026-10-16: minimum cacheable prompt 512 tokens on Fable 5.1,
+//     Opus 5.5, Opus 5, Sonnet 5.5, Fable 5 and Haiku 5.5; 1024 on Opus 4.8,
+//     Sonnet 5 and Sonnet 4.6; 2048 on Opus 4.7; 4096 on Opus 4.6. Writes
+//     cost 1.25x input (5-minute lifetime); reads 0.1x, except 0.05x on
+//     Opus 5.5 and Sonnet 5.5 and 0.025x on Fable 5.1. A read refreshes the
+//     lifetime, which counts from the start of the request.
 //
 // Thinking and effort (https://platform.claude.com/docs/en/build-with-claude/effort.md,
 // https://platform.claude.com/docs/en/build-with-claude/thinking-troubleshooting.md,
@@ -140,8 +147,13 @@ func main() {
 	})
 }
 
+// caching is the describe text for agents: what is cached between calls,
+// for how long and at what cost, from the prompt-caching notes above.
+const caching = "Prompt caching: this plugin puts a cache marker (cache_control ephemeral, 5-minute lifetime) on each system segment (the system prompt with your owner's instructions, then README.md) and on the last block of the latest message, so each call reads the previous call's context from the cache and writes only what is new. A marker caches everything before it: a changed README.md rewrites README.md and everything after it, and a changed system prompt rewrites everything. A read renews the lifetime, which counts from the start of the call that wrote or read the entry, so after a command that runs longer than five minutes the next call writes the whole context again. Cache writes cost 1.25x the input price; reads cost 0.1x, except 0.05x on claude-opus-5-5 and claude-sonnet-5-5 and 0.025x on claude-fable-5-1. A prompt shorter than the model's minimum is not cached: 512 tokens on claude-fable-5-1, claude-opus-5-5, claude-opus-5, claude-sonnet-5-5, claude-fable-5 and claude-haiku-5-5; 1024 on claude-opus-4-8, claude-sonnet-5 and claude-sonnet-4-6; 2048 on claude-opus-4-7; 4096 on claude-opus-4-6. Each call's cache_read_tokens and cache_write_tokens are in your journal."
+
 func (handler) Describe() proto.DescribeResponse {
 	resp := proto.DescribeResponse{
+		Caching: caching,
 		Settings: []proto.Setting{
 			{Name: "ANTHROPIC_API_KEY", Description: "Anthropic API key", Secret: true},
 			{Name: "ANTHROPIC_BASE_URL", Description: "Optional API base URL (default " + defaultBaseURL + ")"},
@@ -386,7 +398,7 @@ func buildRequest(req proto.CompleteRequest) (apiRequest, error) {
 		}
 	}
 	// One breakpoint per system section, so a change to a later section
-	// (TASK.md) leaves earlier ones (system prompt, README) cached. The final
+	// (README.md) leaves earlier ones (the system prompt) cached. The final
 	// message keeps the last breakpoint, so at most the last three sections
 	// are marked.
 	for i := max(0, len(out.System)-(maxCacheBreakpoints-1)); i < len(out.System); i++ {

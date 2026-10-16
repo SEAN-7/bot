@@ -102,7 +102,7 @@ func TestOverflowMidRunResets(t *testing.T) {
 	}
 	found := false
 	for _, r := range h.waitEnds(h.mainID, 2) {
-		if r["type"] == "inbox" && strings.Contains(r["content"].(string), "Context reset. Continue from TASK.md.") {
+		if r["type"] == "inbox" && strings.Contains(r["content"].(string), "Context reset. Previous journal:") {
 			found = true
 		}
 	}

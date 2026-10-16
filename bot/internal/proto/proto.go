@@ -110,10 +110,15 @@ type Model struct {
 	Options       map[string]Option `json:"options,omitempty"`
 }
 
+// DescribeResponse is what a plugin says about itself. Caching is text for
+// agents on what the provider caches between calls, for how long and at what
+// cost, and where the plugin puts cache markers; the daemon does not
+// interpret it.
 type DescribeResponse struct {
 	Protocol int       `json:"protocol"`
 	Settings []Setting `json:"settings"`
 	Models   []Model   `json:"models"`
+	Caching  string    `json:"caching,omitempty"`
 	Error    *Error    `json:"error,omitempty"`
 }
 

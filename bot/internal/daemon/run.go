@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	segmentLimit = 1 << 20            // README.md and TASK.md as read into the system prompt
+	segmentLimit = 1 << 20            // README.md as read into the system prompt
 	configLimit  = plugin.ConfigLimit // config.json
 )
 
@@ -132,6 +132,7 @@ func (a *agent) run(ctx context.Context) {
 		a.logf("journal path %q escapes %s", jdir, a.d.cfg.Log)
 		return
 	}
+	a.d.upgradeNote(a, jdir)
 	j, err := journal.Create(jdir, time.Now(), a.gid())
 	if err != nil {
 		a.logf("journal: %v", err)
@@ -164,11 +165,14 @@ func (a *agent) readSegment(name string) string {
 
 func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config, imageTypes []string, owner string) string {
 	d := a.d
-	j.Record("start", map[string]any{"agent": a.id, "config": cfg})
+	j.Record("start", map[string]any{"agent": a.id, "config": cfg, "version": d.cfg.Version})
 	if err := a.fs.Symlink(d.cfg.JournalDir(a.id), filepath.Join(a.home, "journal")); err != nil {
 		a.logf("journal link: %v", err)
 	}
-	system := []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}, {Text: a.readSegment("TASK.md")}}
+	if err := a.fs.Symlink(d.cfg.Manual(), filepath.Join(a.home, "manual")); err != nil {
+		a.logf("manual link: %v", err)
+	}
+	system := []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}}
 	records, shown, err := a.collectInbox(j, imageTypes, d.cfg.ImageBudget)
 	if err != nil {
 		a.logf("inbox: %v", err)

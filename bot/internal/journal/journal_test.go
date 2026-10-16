@@ -275,3 +275,23 @@ func TestAttach(t *testing.T) {
 		t.Fatalf("latest %s %v %v", path, ended, err)
 	}
 }
+
+func TestLastVersion(t *testing.T) {
+	dir := t.TempDir()
+	if v, found, err := LastVersion(dir); err != nil || found || v != "" {
+		t.Fatalf("no runs: %q %v %v", v, found, err)
+	}
+	old, _ := Create(dir, time.Unix(100, 0), -1)
+	old.Record("start", map[string]any{"agent": "main"})
+	old.End("done")
+	if v, found, err := LastVersion(dir); err != nil || !found || v != "" {
+		t.Fatalf("run without a version: %q %v %v", v, found, err)
+	}
+	w, _ := Create(dir, time.Unix(200, 0), -1)
+	w.Record("start", map[string]any{"agent": "main", "version": "0.6.0"})
+	w.End("done")
+	os.WriteFile(filepath.Join(dir, "messages.jsonl"), []byte(`{"type":"start","version":"9.9.9"}`+"\n"), 0o640)
+	if v, found, err := LastVersion(dir); err != nil || !found || v != "0.6.0" {
+		t.Fatalf("newest run: %q %v %v", v, found, err)
+	}
+}

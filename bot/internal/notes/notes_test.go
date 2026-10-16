@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Every section is "## X.Y.Z", newest first, so an agent reading `agent notes`
+// Every section is "## X.Y.Z", newest first, so an agent reading ~/manual/notes.md
 // finds the newest sections at the top.
 func TestHeadingsAreDescendingVersions(t *testing.T) {
 	var prev [3]int

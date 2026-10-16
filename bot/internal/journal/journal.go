@@ -2,6 +2,7 @@
 package journal
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -202,6 +203,44 @@ func Latest(dir string) (string, bool, error) {
 	}
 	json.Unmarshal([]byte(lines[len(lines)-1]), &last)
 	return path, last.Type == "end", nil
+}
+
+// LastVersion returns the harness version in the start record of the newest
+// run file in dir, and whether there is a run file at all. A start record
+// without a version (a run before 0.6.0) gives "".
+func LastVersion(dir string) (string, bool, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	} else if err != nil {
+		return "", false, err
+	}
+	newest := ""
+	for _, e := range entries {
+		if e.Type().IsRegular() && IsRun(e.Name()) && e.Name() > newest {
+			newest = e.Name()
+		}
+	}
+	if newest == "" {
+		return "", false, nil
+	}
+	f, err := os.Open(filepath.Join(dir, newest))
+	if err != nil {
+		return "", true, err
+	}
+	defer f.Close()
+	line, err := bufio.NewReaderSize(f, 64<<10).ReadSlice('\n')
+	if err != nil && len(line) == 0 {
+		return "", true, nil
+	}
+	var start struct {
+		Type    string `json:"type"`
+		Version string `json:"version"`
+	}
+	if json.Unmarshal(line, &start) != nil || start.Type != "start" {
+		return "", true, nil
+	}
+	return start.Version, true, nil
 }
 
 // MarkInterrupted appends an end record to a run that never finished, so

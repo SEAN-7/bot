@@ -418,7 +418,7 @@ func sendDownText(name, text string) string { return spoolCommand("~/.messages/a
 // markParent gives main this README, and a subagent's README is the seed's.
 const (
 	parentMark = "parent-readme"
-	childMark  = "These are starting suggestions"
+	childMark  = "This file is yours"
 )
 
 // markParent replaces main's seeded README; call it once main is admitted.

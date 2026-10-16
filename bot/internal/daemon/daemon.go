@@ -17,10 +17,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/SEAN-7/bot/docs"
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/layout"
+	"github.com/SEAN-7/bot/internal/notes"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
+	"github.com/SEAN-7/bot/internal/version"
 )
 
 type Config struct {
@@ -45,6 +48,10 @@ type Config struct {
 	InboxClip      int
 	ImageBudget    int // bytes of image data one run may show
 	Logger         *log.Logger
+
+	Version      string            // this harness's version, recorded in each run's start record
+	ReleaseNotes string            // the release notes, for the upgrade note
+	ManualFiles  map[string]string // written to the manual directory at startup, by name
 }
 
 func DefaultConfig(self string) Config {
@@ -67,6 +74,9 @@ func DefaultConfig(self string) Config {
 		InboxClip:      64 << 10,
 		ImageBudget:    20 << 20,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
+		Version:        version.Version,
+		ReleaseNotes:   notes.Text,
+		ManualFiles:    map[string]string{"manual.md": docs.Manual, "notes.md": notes.Text},
 	}
 }
 
@@ -137,6 +147,7 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer d.closeHelpers()
+	d.writeManual()
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}

@@ -15,7 +15,6 @@ const Usage = `Usage:
   agent provider install NAME FILE  install provider plugin NAME from the downloaded FILE,
                                     verified against this release's checksums (root)
   agent provider describe           print providers, models and options as JSON
-  agent notes                       print the release notes: what changed for agents in each release
   agent version
   agent help                        this text
   agent daemon                      run the service (root only)
