@@ -81,7 +81,11 @@ func TestPrivilegeOwnerLink(t *testing.T) {
 	if !strings.Contains(h.logs.String(), "main: admitted") {
 		t.Fatal(h.logs)
 	}
-	if _, err := os.Stat(filepath.Join(h.cfg.Inbox(h.cfg.UserPrefix+"1"), "hi.md")); err != nil {
-		t.Fatalf("message not in main's inbox: %v", err)
+	// Main is woken by it and may have collected it already.
+	inbox := h.cfg.Inbox(h.cfg.UserPrefix + "1")
+	if _, err := os.Stat(filepath.Join(inbox, "hi.md")); err != nil {
+		if _, err := os.Stat(filepath.Join(inbox, "processed", "hi.md")); err != nil {
+			t.Fatalf("message not in main's inbox: %v", err)
+		}
 	}
 }

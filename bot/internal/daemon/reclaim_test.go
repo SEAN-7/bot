@@ -42,7 +42,7 @@ func TestRemovalReclaimsUser(t *testing.T) {
 	// The mark comes first, so a crash finishes the removal; the crontab
 	// goes before the kill loop, so no cron job starts after it; the
 	// parent's inbox grant is revoked before the user goes.
-	want := []string{"comment agent-2 removed:" + childID("c"), "unlinger agent-2", "crontab agent-2", "stop agent-2", "revoke agent-1 " + itoa(os.Getuid()), "userdel agent-2"}
+	want := []string{"comment agent-2 " + removedMark + childID("c"), "unlinger agent-2", "crontab agent-2", "stop agent-2", "revoke agent-1 " + itoa(os.Getuid()), "userdel agent-2"}
 	if !sys.inOrder(want...) {
 		t.Fatal(sys)
 	}

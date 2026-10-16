@@ -207,7 +207,13 @@ func write(path string, data []byte, mode os.FileMode, stage string) error {
 func mkdir(path string, mode os.FileMode) error {
 	err := os.Mkdir(path, mode)
 	if err == nil {
-		return os.Chmod(path, mode)
+		// Keep the setgid bit a directory inherits from a setgid parent
+		// (a home), so what is made inside stays in the home's group.
+		info, lerr := os.Lstat(path)
+		if lerr != nil {
+			return lerr
+		}
+		return os.Chmod(path, mode|info.Mode()&fs.ModeSetgid)
 	}
 	if !errors.Is(err, fs.ErrExist) {
 		return err

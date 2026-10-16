@@ -13,7 +13,6 @@ import (
 	"strings"
 	"syscall"
 	"testing"
-	"time"
 
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
@@ -638,9 +637,10 @@ func TestPrivilegeReusedUserCannotReadOldJournals(t *testing.T) {
 	exitCodes(t, h.toolOutput("frc="), false, "rc", "frc")
 }
 
-// TestPrivilegeChildOwnerMd: a subagent's OWNER.md owned by its parent's user
-// leads its system prompt; once the subagent's own user owns it, the
-// subagent stops with an OWNER.md ERROR until the file is fixed.
+// TestPrivilegeChildOwnerMd: a subagent's OWNER.md, written by its parent
+// into the control directory the parent owns, leads its system prompt and
+// is read through the parent's helper, which the subagent cannot reach
+// (TestPrivilegeSubagentIsolation shows it cannot write the file).
 func TestPrivilegeChildOwnerMd(t *testing.T) {
 	h, name := rootHarness(t)
 	h.start()
@@ -654,28 +654,5 @@ func TestPrivilegeChildOwnerMd(t *testing.T) {
 	h.waitEnds(childID("c"), 1)
 	if got := h.requests()[0].System[0].Text; got != SystemPrompt+ownerSegment("Child rules.") {
 		t.Fatalf("child's first segment %q", got)
-	}
-	childUID, _ := lookupIDs(t, ownerName(t, home))
-	if err := os.Lchown(owner, childUID, -1); err != nil {
-		t.Fatal(err)
-	}
-	h.drop(home, "next.md", "second")
-	errorFile := filepath.Join(ctrl, "ERROR")
-	want := MsgOwnerPrefix + owner + " is not owned by its owner\n"
-	waitFor(t, "OWNER.md ERROR", func() bool {
-		data, _ := os.ReadFile(errorFile)
-		return string(data) == want
-	})
-	time.Sleep(300 * time.Millisecond) // several polls
-	if n := len(h.runs(childID("c"))); n != 1 {
-		t.Fatalf("%d runs with an OWNER.md the child owns", n)
-	}
-	if names := inboxNames(home); len(names) != 1 || names[0] != "next.md" {
-		t.Fatalf("inbox touched: %v", names)
-	}
-	os.Lchown(owner, mainUID, -1)
-	h.waitEnds(childID("c"), 2)
-	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
-		t.Fatal("OWNER.md ERROR not cleared")
 	}
 }

@@ -19,8 +19,10 @@ import (
 // removedMark prefixes the comment of a user whose agent is being removed.
 // It is written before anything is destroyed, so a control directory made
 // again under the same id never gets this user back: it waits for the
-// deletion and then a fresh user.
-const removedMark = "removed:"
+// deletion and then a fresh user. The comma cannot appear in an id
+// (cleanName), so the mark is unambiguous, and usermod takes it (it
+// refuses a colon).
+const removedMark = "removed,"
 
 // remove stops the agents whose control directories are gone and deletes
 // their users, deepest first, so a child goes while its parent's user still

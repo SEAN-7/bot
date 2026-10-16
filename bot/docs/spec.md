@@ -187,9 +187,9 @@ control directories but no loop, inbox, journal or owner.
   and all descendants are removed, deepest first: each loop kills its
   running command, writes the end marker (`reason: "removed"`) and exits,
   then its user is deleted. Journals remain.
-- **Deletion.** Mark the user removed (its comment becomes `removed:` and
-  the id, so a control directory made again under that id gets a new user
-  rather than this one); disable lingering; remove its crontab; stop its
+- **Deletion.** Mark the user removed (its comment becomes `removed,` and
+  the id, a comma being impossible in an id, so a control directory made
+  again under that id gets a new user rather than this one); disable lingering; remove its crontab; stop its
   user manager and kill its processes; remove its files in `/tmp`,
   `/var/tmp` and `/dev/shm`, as the user; move its journal directory to
   the nearest remaining ancestor's group; remove its inbox (as root, under
