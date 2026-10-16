@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/SEAN-7/bot/internal/cli"
 	"github.com/SEAN-7/bot/internal/osuser"
 	"github.com/SEAN-7/bot/internal/plugin"
 )
@@ -765,21 +764,21 @@ func TestPrivilegeChildOwnerMd(t *testing.T) {
 	}
 }
 
-// TestPrivilegeRootSpoolPrivate: an owner message root queued for main,
-// waiting in /etc/agent (which every user may traverse), cannot be listed or
-// read by another pool user.
+// TestPrivilegeRootSpoolPrivate: root's spool for main, which the daemon
+// creates in /etc/agent (which every user may traverse), cannot be listed by
+// another pool user, nor a message being written there read.
 func TestPrivilegeRootSpoolPrivate(t *testing.T) {
 	h, _ := rootHarness(t)
-	if err := cli.SendChild(h.cfg.RootHome(), "main", "owner secret", time.Now()); err != nil {
+	h.start()
+	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")
+	waitFor(t, "root's spool for main", func() bool { _, err := os.Stat(spool); return err == nil })
+	// A message still being written: a dot name, which delivery leaves alone.
+	staged := filepath.Join(spool, ".m.md")
+	if err := os.WriteFile(staged, []byte("owner secret"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")
-	entries, err := os.ReadDir(spool)
-	if err != nil || len(entries) != 1 {
-		t.Fatalf("spool %v %v", entries, err)
-	}
 	uid, gid := lookupIDs(t, h.cfg.PoolUsers[1])
-	for _, args := range [][]string{{"ls", spool}, {"cat", filepath.Join(spool, entries[0].Name())}} {
+	for _, args := range [][]string{{"ls", spool}, {"cat", staged}} {
 		cmd := exec.Command(args[0], args[1:]...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
 		out, err := cmd.CombinedOutput()

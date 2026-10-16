@@ -93,14 +93,17 @@ func TestTruncatedMessageReported(t *testing.T) {
 }
 
 // inboxHas reports whether an inbox file of the agent at home whose name
-// ends in suffix holds text.
+// ends in suffix holds text, whether or not a run has collected it yet (the
+// note itself wakes the agent).
 func inboxHas(home, suffix, text string) bool {
-	entries, _ := os.ReadDir(filepath.Join(home, "inbox"))
-	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), suffix) {
-			data, _ := os.ReadFile(filepath.Join(home, "inbox", e.Name()))
-			if strings.Contains(string(data), text) {
-				return true
+	for _, dir := range []string{"inbox", "inbox/processed"} {
+		entries, _ := os.ReadDir(filepath.Join(home, dir))
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), suffix) {
+				data, _ := os.ReadFile(filepath.Join(home, dir, e.Name()))
+				if strings.Contains(string(data), text) {
+					return true
+				}
 			}
 		}
 	}

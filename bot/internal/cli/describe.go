@@ -41,26 +41,11 @@ func RefreshCache(ctx context.Context, l layout.Layout, r *plugin.Runner) (plugi
 	return cache, os.Rename(temp, l.ProvidersCache())
 }
 
-// LoadProviders reads the cache of describe responses RefreshCache writes.
-func LoadProviders(l layout.Layout) (map[string]proto.DescribeResponse, error) {
-	return plugin.LoadProviders(l.ProvidersCache())
-}
-
-// Describe prints the describe responses of the installed providers as
-// indented JSON: live as root, otherwise from the cache.
-func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool, w io.Writer) error {
-	var cache plugin.ProvidersCache
-	if root {
-		var err error
-		if cache, err = RefreshCache(ctx, l, r); err != nil {
-			return err
-		}
-	} else {
-		providers, err := LoadProviders(l)
-		if err != nil {
-			return err
-		}
-		cache.Providers = providers
+// Describe refreshes the providers cache and prints it as indented JSON.
+func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, w io.Writer) error {
+	cache, err := RefreshCache(ctx, l, r)
+	if err != nil {
+		return err
 	}
 	data, err := json.MarshalIndent(cache, "", "  ")
 	if err != nil {

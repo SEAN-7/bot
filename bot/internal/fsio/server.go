@@ -39,7 +39,8 @@ type request struct {
 	Data  []byte   `json:"data,omitempty"`
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
-	Mode  uint32   `json:"mode,omitempty"` // write's permission bits
+	Mode  uint32   `json:"mode,omitempty"`  // write's permission bits
+	Stage string   `json:"stage,omitempty"` // write's staging directory; "" is the target's own
 }
 
 type response struct {
@@ -116,7 +117,7 @@ func handle(req request) (response, error) {
 		data, err := io.ReadAll(io.LimitReader(f, req.Limit))
 		return response{Data: data, Size: info.Size()}, err
 	case "write":
-		return response{}, write(req.Path, req.Data, os.FileMode(req.Mode).Perm())
+		return response{}, write(req.Path, req.Data, os.FileMode(req.Mode).Perm(), req.Stage)
 	case "private":
 		skipped, err := private(req.Paths)
 		return response{Paths: skipped}, err
@@ -179,10 +180,15 @@ func random() string {
 	return hex.EncodeToString(b)
 }
 
-// write replaces path atomically. Renaming over a symlink replaces the link
-// itself, never its target.
-func write(path string, data []byte, mode os.FileMode) error {
-	temp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+"."+random()+".tmp")
+// write replaces path atomically, through a temporary file in stage (the
+// target's own directory when empty), which must be on the same
+// filesystem. Renaming over a symlink replaces the link itself, never its
+// target.
+func write(path string, data []byte, mode os.FileMode, stage string) error {
+	if stage == "" {
+		stage = filepath.Dir(path)
+	}
+	temp := filepath.Join(stage, "."+filepath.Base(path)+"."+random()+".tmp")
 	f, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err

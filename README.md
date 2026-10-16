@@ -129,9 +129,7 @@ journalctl -u agent -f                    # the service log
 ```
 
 Journals are JSON lines, one file per run; `tail -F` the newest to follow a
-run. The `agent` commands that used to do these (`send`, `messages`, `log`,
-`new`, `remove`, `provider describe`, `version`) still work in 0.7.0, print
-a notice, and are removed in 0.8.0.
+run.
 
 ## Stop it
 

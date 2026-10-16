@@ -117,7 +117,7 @@ func (d *daemon) deliver(to *agent, name string, data []byte, from string) error
 	if err := d.delivered.add(to.id, name, hex.EncodeToString(sum[:]), from); err != nil {
 		return fmt.Errorf("delivery record: %w", err)
 	}
-	return to.fs.Write(filepath.Join(to.home, "inbox", name), data, 0o640)
+	return to.writeInbox(name, data)
 }
 
 // retry is a spool file whose delivery failed.
