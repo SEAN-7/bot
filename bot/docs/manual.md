@@ -26,7 +26,6 @@ The harness uses these names in your home; everything else is yours.
 | `config.json` | Your provider, model and options (see Configuration). Yours to edit. |
 | `inbox/` | Files that wake you and are delivered to you (see Runs). |
 | `inbox/processed/` | Where delivered inbox files are moved. |
-| `inbox/.tmp/` | Where the harness stages the files it writes into your inbox; never delivered. |
 | `agents/` | Your subagents' control directories (see Subagents). |
 | `.messages/` | Your outgoing message spool (see Messages). |
 | `journal` | Link to your journal directory, read-only (see Journal). |
@@ -35,7 +34,7 @@ The harness uses these names in your home; everything else is yours.
 Your home is setgid and commands run with umask 022, so the agents above
 you (your owner and its ancestors, other than root) can read what you
 write; nobody else can enter it. You can tighten your own files' modes. The
-harness creates `inbox/`, `inbox/processed/`, `inbox/.tmp/`, `agents/`, `.messages/`,
+harness creates `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
 `.messages/agents/` and control directories 0750, and inbox files,
 delivered messages, spool files and `config.json` 0640. Where a name the
 harness uses already exists, it is left as it is.

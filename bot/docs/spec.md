@@ -155,8 +155,7 @@ directories and spools but no loop, inbox, journal or owner.
 - **Admission.** Take the lowest free pool user and record it in
   `pool.json`; prepare the home (2750, setgid); start the user's helper;
   clear what a previous holder left; set the group's members; create the
-  harness directories where missing (`inbox/.tmp` among them; `private`;
-  anything else of that name
+  harness directories where missing (`private`; anything else of that name
   is left alone and logged once); write the seed `README.md` where
   missing; move the starting `config.json` into the home unless it
   already has one; enable lingering; create the journal directory; write
@@ -212,10 +211,9 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
   included, and skips directories.
 - **Staging.** Every file the harness writes into an inbox (a message, a
   note) is written through the agent's helper with its temporary file in
-  `inbox/.tmp`, which collection skips, so a run never collects one half
-  written; a missing `inbox/.tmp` is created and the write repeated.
-  Admission removes files left there, before the agent's loop starts and
-  from the poll goroutine, so no write is in progress.
+  the agent's home directory and renamed into the inbox, so a run never
+  collects one half written. A crash leaves at worst a dot-file in the
+  home.
 - **Labels.** An inbox file is read (up to 16 MiB) and hashed; it is
   labelled `owner` or `agents/NAME` only if the agent path, file name and
   SHA-256 match a `delivered.jsonl` record with that sender.

@@ -195,15 +195,12 @@ func TestDotFilesWaitForARun(t *testing.T) {
 	}
 }
 
-// The harness stages what it writes into an inbox in inbox/.tmp, so nothing
-// half-written is ever in the inbox itself; admission clears leftovers.
-func TestInboxWritesStaged(t *testing.T) {
+// The harness stages what it writes into an inbox as a dot-file in the home
+// and renames it in, so nothing half-written is ever in the inbox and no
+// staging directory is needed there.
+func TestInboxWritesStagedInHome(t *testing.T) {
 	h := newHarness(t, done())
-	stage := filepath.Join(h.mainHome, "inbox", ".tmp")
-	os.MkdirAll(stage, 0o750)
-	os.WriteFile(filepath.Join(stage, ".x.md.123.tmp"), []byte("half"), 0o640)
 	h.start()
-	waitFor(t, "leftover cleared", func() bool { entries, _ := os.ReadDir(stage); return len(entries) == 0 })
 	h.sendOwner("hello")
 	records := h.waitEnds(h.mainID, 1)
 	for _, r := range records {
@@ -211,11 +208,15 @@ func TestInboxWritesStaged(t *testing.T) {
 			t.Fatalf("record %v", r)
 		}
 	}
-	statMode(t, stage, os.ModeDir|0o750)
-	// An agent that removes the staging directory gets it back.
-	os.RemoveAll(stage)
-	h.sendOwner("again")
-	waitFor(t, "second message", func() bool { return countNotes(h.mainHome, "-owner.md") == 2 })
+	if _, err := os.Lstat(filepath.Join(h.mainHome, "inbox", ".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("inbox/.tmp exists: %v", err)
+	}
+	entries, _ := os.ReadDir(h.mainHome)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("temporary file left in the home: %s", e.Name())
+		}
+	}
 }
 
 func TestJournalSymlinkRepaired(t *testing.T) {

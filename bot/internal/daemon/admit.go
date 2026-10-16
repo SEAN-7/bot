@@ -184,7 +184,7 @@ func (d *daemon) startingConfigError(parent *agent, ctrl string) string {
 
 // harnessDirs are the directories the harness keeps in a home, parents
 // first.
-var harnessDirs = []string{"inbox", "inbox/processed", inboxStage, "agents", ".messages", ".messages/agents"}
+var harnessDirs = []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"}
 
 // seed creates the harness's directories and the seed files the home lacks,
 // through the agent's own helper. The directories are created open to the
@@ -211,7 +211,6 @@ func (a *agent) seed() error {
 	if err != nil {
 		return err
 	}
-	a.clearStage()
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}} {
 		path := filepath.Join(a.home, file.name)
 		_, err := a.fs.Stat(path)
