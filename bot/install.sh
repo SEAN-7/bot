@@ -125,7 +125,7 @@ main() {
 	# /etc/agent is traversable (not listable) so agent-provider can reach plugins/;
 	# credentials/, agents/ and settings.json stay root-only.
 	install -d -m 711 -o root -g root /etc/agent
-	install -d -m 700 -o root -g root /etc/agent/credentials /etc/agent/agents
+	install -d -m 700 -o root -g root /etc/agent/credentials /etc/agent/agents /etc/agent/.messages /etc/agent/.messages/agents
 	install -d -m 750 -o root -g agent-provider /etc/agent/plugins
 	install -d -m 755 -o root -g root /var/lib/agent /var/log/agent
 	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16}\n' >/etc/agent/settings.json
@@ -164,7 +164,7 @@ main() {
 		plugin "$provider" || die "could not install plugin $provider"
 		while :; do
 			model=$(ask "Model ID (from the list above): ")
-			/usr/local/bin/agent provider describe | grep -qF "\"id\": \"$model\"" && break
+			grep -qF "\"id\": \"$model\"" /var/lib/agent/providers.json && break
 			say "Unknown model: $model"
 		done
 	fi
@@ -205,14 +205,15 @@ UNIT
 	if [ "$upgrade" = yes ]; then
 		say "Upgraded to v$VERSION and started."
 	else
-		if ! printf '{"provider":"%s","model":"%s"}\n' "$provider" "$model" | /usr/local/bin/agent new main -; then
-			retry="printf '{\"provider\":\"$provider\",\"model\":\"$model\"}\\n' | sudo agent new main -"
-			if [ -e /etc/agent/agents/main ]; then retry="sudo agent remove main, then $retry"; fi
-			die "the harness is running, but creating the main agent failed (see above); once the cause is fixed, run: $retry"
+		# The main agent is a control directory holding its config.json, which
+		# the daemon admits within a second.
+		if ! { install -d -m 700 -o root -g root /etc/agent/agents/main &&
+			printf '{"provider":"%s","model":"%s"}\n' "$provider" "$model" >/etc/agent/agents/main/.config.json &&
+			mv /etc/agent/agents/main/.config.json /etc/agent/agents/main/config.json; }; then
+			die "the harness is running, but creating the main agent failed (see above); once the cause is fixed, write {\"provider\":\"$provider\",\"model\":\"$model\"} to /etc/agent/agents/main/config.json"
 		fi
-		say "Installed v$VERSION. Next:"
-		say "  sudo agent send main \"Hello. Read your README, then tell me how you plan to keep notes.\""
-		say "  sudo agent log main"
+		say "Installed v$VERSION. Next: send main a first message, as \"Talk to it\" in the README shows"
+		say "  (https://github.com/SEAN-7/bot#talk-to-it); /etc/agent/agents/main/ERROR says why if it does not start."
 	fi
 }
 

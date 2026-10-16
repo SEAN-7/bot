@@ -2,8 +2,8 @@
 
 How this machine and its harness work, as seen from inside an agent. It is
 written for the version that is running: the harness writes it, with the
-release notes beside it (`~/manual/notes.md`), each time it starts, and no
-agent can change it. Everything here is a fact about the harness; how to
+release notes (`~/manual/notes.md`) and the version (`~/manual/version`)
+beside it, each time it starts, and no agent can change it. Everything here is a fact about the harness; how to
 work is yours to decide.
 
 ## You
@@ -116,20 +116,20 @@ Every run starts fresh from the files on disk, with its own journal file.
   meanwhile are collected the same way and sent after its result.
 
 How the provider caches these between calls, and what that costs, is the
-`caching` text in `agent provider describe` (see Configuration).
+`caching` text in `/var/lib/agent/providers.json` (see Configuration).
 
 **Inbox records.** Each inbox file reaches you as one JSON record:
 `{"file": "inbox/processed/NAME", "from": "owner" | "agents/NAME" | "data", "content": "..."}`.
-- `from` is `owner` only for a message your owner sent with `agent send`,
-  and `agents/NAME` only for one your subagent NAME sent with
-  `agent message`: the harness records each delivery (agent, file name,
+- `from` is `owner` only for a message your owner sent you, and
+  `agents/NAME` only for one your subagent NAME sent (see Messages): the
+  harness records each delivery (agent, file name,
   SHA-256, sender) and labels a file only when all three match. Everything
   else, including the harness's own notes and files your scripts write, is
   `data`. Content is a JSON string, so no file can forge the field.
 - Content over 64 KiB is clipped and followed by "[file clipped; full
   file: PATH]".
 - A JPEG, PNG or GIF up to 5 MiB and 2000 px a side, of a type your model
-  accepts (`image_types` in `agent provider describe`), is shown to you as
+  accepts (`image_types` in `/var/lib/agent/providers.json`), is shown to you as
   an image; its record's content is "[image/png 1280x960, 169027 bytes,
   shown below]". Shown images are resent with every call, so a run shows
   at most 20 MiB of them. Images are never resized.
@@ -202,15 +202,15 @@ cannot run or why calls are failing, and clears it when the cause is gone:
 ## Configuration
 
 - `config.json` is `{"provider": "P", "model": "M", "options": {...}}`. Each
-  run checks it against `agent provider describe`: an installed provider,
+  run checks it against the installed providers: an installed provider,
   one of its models, and only that model's options with allowed values. A
   missing, unreadable, invalid or over-1-MiB file stops your runs: the
   reason goes to your `ERROR` ("config.json: " and the reason), and an
   agent owner is told once per distinct content ("Subagent NAME did not
   start: config.json: REASON"). The check is retried when the
   file changes; a valid change takes effect at your next run.
-- `agent provider describe` prints each installed provider as JSON, from
-  `/var/lib/agent/providers.json`: `models` (`id`, `context_tokens` where
+- `/var/lib/agent/providers.json` (owned by root, readable by all) is
+  `{"providers": {NAME: {...}}}` for each installed provider: `models` (`id`, `context_tokens` where
   known, `image_types`, `options` with their allowed values or integer
   ranges) and `caching`, the provider's own text on what it caches between
   calls and for how long, the smallest prompt it caches, where its cache
@@ -238,25 +238,33 @@ this precedence; it does not enforce it.
 
 ## Messages
 
-- **To your owner:** `agent message "text"` (or `-` to read stdin) writes
-  a file to `~/.messages/`. If your owner is an agent, it is delivered to
-  its inbox as `<time>-NAME.md` (NAME is yours) with `"from":
+- A message is a file. Write it under a name starting with a dot, then
+  rename it, so it is never read half-written; the harness ignores dot
+  names. For example:
+  `f=$(date -u +%Y%m%dT%H%M%S.%NZ).md; printf '%s\n' "text" > ~/.messages/.$f && mv ~/.messages/.$f ~/.messages/$f`.
+- About once a second the harness collects the regular files you own in
+  each spool, other than dot-files, in name order (so names that sort in
+  time order, such as UTC timestamps, keep messages in order), delivers
+  each and removes it. Anything else there (a link, a directory, another
+  user's file) is left alone. A crash can duplicate a message but not lose
+  one.
+- **To your owner:** a file in `~/.messages/`. If your owner is an agent, it
+  reaches its inbox as `<time>-NAME.md` (NAME is yours) with `"from":
   "agents/NAME"`. If your owner is the human, it is only recorded in your
-  conversation log, which the human reads with `sudo agent messages NAME`;
-  nothing notifies them.
-- **To a subagent:** `agent send NAME "text"` (or `-`) reaches your direct
-  child NAME's inbox as `<time>-owner.md` with `"from": "owner"`. It fails
-  at once if `~/agents/NAME/` does not exist. A message for a subagent not
-  yet running waits while it may still be admitted; if it is removed
-  first, the message is dropped and "Message to NAME dropped: there is no
-  subagent by that name." arrives in your inbox.
-- Empty messages and messages over 64 KiB are refused.
-- Messages are delivered about once a second. A crash can duplicate a
-  message but not lose one.
+  conversation log, which the human reads; nothing notifies them.
+- **To a subagent:** a file in `~/.messages/agents/NAME/`, which the
+  harness creates when NAME is admitted (you may create it sooner). It
+  reaches your direct child NAME's inbox as `<time>-owner.md` with `"from":
+  "owner"`. A message for a subagent not yet running waits while it may
+  still be admitted; otherwise the file is removed and "Message to NAME
+  dropped: there is no subagent by that name." arrives in your inbox. Only
+  a real directory you own, named like a subagent, is a spool.
+- A message over 64 KiB is delivered as its first 64 KiB followed by
+  "[message truncated]", and you are told: "Message to your owner was
+  truncated to 64 KiB." or "Message to NAME was truncated to 64 KiB."
 - **Conversation log:** `~/journal/messages.jsonl`, written only by the
   harness, one record per message: `{"t", "from": "owner" | "agent",
-  "text"}`. `agent messages` prints yours; `agent messages NAME` a
-  subagent's.
+  "text"}`. A subagent's is `~/journal/agents/NAME/messages.jsonl`.
 
 ## Journal
 
@@ -273,27 +281,37 @@ this precedence; it does not enforce it.
 - The directory also holds `messages.jsonl` and a copy of each shown image
   as `<run>-<n>.<ext>`, which are not runs. A subagent's journal directory
   is inside yours.
-- `agent log` prints your newest run once; `agent log NAME` prints a
-  subagent's, after its `ERROR`.
+- Your newest run is the last `*Z.jsonl` in `~/journal/`; a subagent's
+  runs are in `~/journal/agents/NAME/`, and a deeper descendant's under
+  `~/journal/agents/NAME/agents/...`.
 
 ## Subagents
 
-- `agent new NAME [CONFIG|-]` creates a subagent with the `config.json` in
-  file CONFIG, on stdin for `-`, or a copy of your own. The config is
-  checked against `agent provider describe` first. It creates the control
-  directory `~/agents/NAME/` and returns at once.
-- The harness then admits it, usually within a second: a pool user is
+- A subagent is a directory: `~/agents/NAME/`, a real directory you own,
+  holding a regular file `config.json` (see Configuration).
+  `cp ~/config.json ~/agents/NAME/` gives it a copy of yours. NAME is one
+  plain directory name, not starting with a dot, without control
+  characters. A directory without a `config.json` is not a subagent, and
+  nothing happens.
+- When `config.json` appears it is checked against
+  `/var/lib/agent/providers.json`, as each run checks yours. If it is
+  invalid or over 1 MiB, no pool user is assigned: `~/agents/NAME/ERROR`
+  holds "config.json: " and the reason, you are told once ("Subagent NAME
+  did not start: config.json: REASON"), and you can fix the file in place.
+- A valid one is admitted, usually within a second: a pool user is
   assigned, its home is prepared with the seed `README.md`, its
   `config.json` moves into that home (one written into `~/agents/NAME/`
-  later is ignored), and `~/agents/NAME/home` links to it. It starts work
-  when you `agent send` it a task. Once admitted, its config is its own.
-- If it cannot be admitted, `~/agents/NAME/ERROR` says why and you are told
-  once per reason: "Subagent NAME was not started: agent limit reached
-  (max_agents=N)." or "Subagent NAME did not start: REASON". `max_agents`
-  bounds the whole tree, the human's agents included.
+  later is ignored), `~/agents/NAME/home` links to it, and
+  `~/.messages/agents/NAME/` is created. It starts work when you send it a
+  message. Once admitted, its config is its own.
+- If it cannot be admitted for another reason, `~/agents/NAME/ERROR` says
+  why and you are told once per reason: "Subagent NAME was not started:
+  agent limit reached (max_agents=N)." `max_agents` bounds the whole tree,
+  the human's agents included.
 - Its control directory `~/agents/NAME/` is yours and holds its `OWNER.md`
   (your standing instructions to it, which it cannot change and which do
-  not include yours), its `ERROR` and the `home` link.
+  not include yours), its `ERROR` and the `home` link, which is written at
+  admission and when the harness restarts, not put back if you delete it.
 - Its home is its own user's. You can read it (you are in its group) but
   not write to it. It cannot read yours unless you grant access, and even
   then cannot list or read `~/inbox`, `~/agents` or `~/.messages` unless a
@@ -304,28 +322,24 @@ this precedence; it does not enforce it.
   Its user is `stat -L -c %U ~/agents/NAME/home`. Pool users are reused:
   files it created in your directories, and grants naming its user, stay
   until you remove them.
-- `agent remove NAME` stops it and all its subagents, deepest first, and
+- Deleting the directory (`rm -r ~/agents/NAME`) stops it and all its
+  subagents, deepest first, and
   reclaims their users: lingering is disabled, the crontab removed, the
   user manager stopped and its processes killed, the home emptied, and its
   files in `/tmp`, `/var/tmp` and `/dev/shm` deleted. Journals remain, in
   your journal directory. An idle subagent costs nothing.
 - Your subagents' messages reach you as `"from": "agents/NAME"`. You can
-  read their journals and messages: `agent log NAME`, `agent messages
-  NAME`, where NAME may also be a deeper descendant such as
-  `research/agents/scraper`.
+  read their journals, conversation logs and `ERROR`:
+  `~/journal/agents/NAME/` and `~/agents/NAME/ERROR`.
 
-## Commands of the harness
+## The agent command
 
-`NAME` is a direct child's name: one plain directory name, not starting
-with `.` (or `-` for `agent new`), without control characters.
-
-- `agent new NAME [CONFIG|-]`, `agent remove NAME`: see Subagents.
-- `agent send NAME "text"|-`, `agent message "text"|-`, `agent messages
-  [NAME]`: see Messages.
-- `agent log [NAME]`: see Journal.
-- `agent provider describe`: see Configuration.
-- `agent version`: the running harness version.
-- `agent help`: the commands.
+Everything you do with the harness is a file (see Messages, Subagents,
+Journal and Configuration). The running harness version is in
+`~/manual/version`. In this release the `agent` commands `new`, `remove`,
+`send`, `message`, `messages`, `log`, `provider describe` and `version`
+still do the same file operations and print a notice saying so; they are
+removed in 0.8.0.
 
 ## Known limits
 

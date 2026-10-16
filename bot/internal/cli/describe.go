@@ -13,14 +13,10 @@ import (
 	"github.com/SEAN-7/bot/internal/proto"
 )
 
-type providersCache struct {
-	Providers map[string]proto.DescribeResponse `json:"providers"`
-}
-
 // RefreshCache describes every installed plugin and writes the world-readable
 // cache the agent reads. Describe output carries no credentials.
-func RefreshCache(ctx context.Context, l layout.Layout, r *plugin.Runner) (providersCache, error) {
-	cache := providersCache{Providers: map[string]proto.DescribeResponse{}}
+func RefreshCache(ctx context.Context, l layout.Layout, r *plugin.Runner) (plugin.ProvidersCache, error) {
+	cache := plugin.ProvidersCache{Providers: map[string]proto.DescribeResponse{}}
 	names, err := r.Installed()
 	if err != nil {
 		return cache, err
@@ -47,21 +43,13 @@ func RefreshCache(ctx context.Context, l layout.Layout, r *plugin.Runner) (provi
 
 // LoadProviders reads the cache of describe responses RefreshCache writes.
 func LoadProviders(l layout.Layout) (map[string]proto.DescribeResponse, error) {
-	data, err := os.ReadFile(l.ProvidersCache())
-	if err != nil {
-		return nil, fmt.Errorf("no provider cache yet (run as root once): %w", err)
-	}
-	var cache providersCache
-	if err := json.Unmarshal(data, &cache); err != nil {
-		return nil, err
-	}
-	return cache.Providers, nil
+	return plugin.LoadProviders(l.ProvidersCache())
 }
 
 // Describe prints the describe responses of the installed providers as
 // indented JSON: live as root, otherwise from the cache.
 func Describe(ctx context.Context, l layout.Layout, r *plugin.Runner, root bool, w io.Writer) error {
-	var cache providersCache
+	var cache plugin.ProvidersCache
 	if root {
 		var err error
 		if cache, err = RefreshCache(ctx, l, r); err != nil {

@@ -9,13 +9,14 @@ import (
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
+	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/seed"
 )
 
 // heldBackPrefixes begin the ERRORs that say why an agent was not admitted
 // (see notStarted), which admission clears, including those an earlier
 // daemon wrote (only 0.4.1 and 0.5.0 wrote "No free agent user").
-var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix + MsgConfigTooLarge}
+var heldBackPrefixes = []string{"Agent limit reached", "No free agent user", MsgConfigPrefix}
 
 // errConfigTooLarge: a starting config.json over configLimit.
 var errConfigTooLarge = errors.New(MsgConfigTooLarge)
@@ -49,6 +50,12 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		// takes no user.
 		if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Size > configLimit {
 			d.configTooLarge(parent, ctrl, id)
+			return nil
+		}
+		// An invalid one takes no user either: the parent can still fix it
+		// in place, which it cannot once it has moved into the home.
+		if text := d.startingConfigError(parent, ctrl); text != "" {
+			d.notStarted(parent, ctrl, id, text, fmt.Sprintf(MsgSubagentFmt, id, text))
 			return nil
 		}
 	}
@@ -125,6 +132,14 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
 		return fail("home link", err)
 	}
+	// The parent's spool for it, so messages need only a file written; a
+	// failure leaves the parent to create it.
+	spool := filepath.Join(parent.home, ".messages", "agents", filepath.Base(ctrl))
+	if skipped, err := parent.fs.Private(spool); err != nil {
+		c.logf("spool %s: %v", spool, err)
+	} else if len(skipped) > 0 {
+		c.logf("not closed to others: %s is a link, a file or another user's", spool)
+	}
 	delete(d.admitErrs, ctrl)
 	d.clearHeldBack(parent, ctrl)
 	d.mu.Lock()
@@ -153,23 +168,24 @@ func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 	return e.Type == "file", nil
 }
 
-// repairHomeLink puts back the home link in an agent's control directory
-// if its parent removed it, through the parent's helper. A failure is
-// logged once and retried at the next poll.
-func (d *daemon) repairHomeLink(c *agent) {
-	link := filepath.Join(c.ctrl, "home")
-	_, err := c.parent.fs.Stat(link)
-	if errors.Is(err, fs.ErrNotExist) {
-		if err = c.parent.fs.Symlink(c.home, link); err == nil {
-			c.logf("home link restored")
-		}
+// startingConfigError checks a new agent's starting config.json, read
+// through its parent's helper, against the providers cache: the check each
+// run makes, without running plugins from the poll. It returns the ERROR
+// text, or "" when the config is valid or cannot be checked yet (no cache,
+// or the file could not be read: admission or the first run reports it).
+func (d *daemon) startingConfigError(parent *agent, ctrl string) string {
+	providers, err := plugin.LoadProviders(d.cfg.ProvidersCache())
+	if err != nil {
+		return ""
 	}
-	if err == nil {
-		c.linkErr = ""
-	} else if msg := err.Error(); msg != c.linkErr {
-		c.linkErr = msg
-		c.logf("home link: %v", err)
+	data, _, err := parent.fs.Read(filepath.Join(ctrl, "config.json"), configLimit)
+	if err != nil {
+		return ""
 	}
+	if _, err := plugin.ValidateCached(data, providers); err != nil {
+		return MsgConfigPrefix + err.Error()
+	}
+	return ""
 }
 
 // harnessDirs are the directories the harness keeps in a home, parents

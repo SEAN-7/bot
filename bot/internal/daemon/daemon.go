@@ -76,7 +76,7 @@ func DefaultConfig(self string) Config {
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
 		Version:        version.Version,
 		ReleaseNotes:   notes.Text,
-		ManualFiles:    map[string]string{"manual.md": docs.Manual, "notes.md": notes.Text},
+		ManualFiles:    map[string]string{"manual.md": docs.Manual, "notes.md": notes.Text, "version": version.Version + "\n"},
 	}
 }
 
@@ -148,6 +148,13 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	defer d.closeHelpers()
 	d.writeManual()
+	// Root's spools, so a person writing a message never creates them open
+	// to agents.
+	if skipped, err := d.root.fs.Private(filepath.Join(cfg.RootHome(), ".messages"), filepath.Join(cfg.RootHome(), ".messages", "agents")); err != nil {
+		cfg.Logger.Printf("root spools: %v", err)
+	} else if len(skipped) > 0 {
+		cfg.Logger.Printf("root spools not closed to others: %v", skipped)
+	}
 	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
 		return err
 	}
@@ -319,11 +326,6 @@ func (d *daemon) reconcile() {
 			}
 		}
 	}
-	for _, c := range tree[1:] {
-		if !unscanned[c.parent.home] {
-			d.repairHomeLink(c)
-		}
-	}
 	// Forget what was reported for directories that are gone, so they are
 	// reported again if they come back.
 	vanished := func(ctrl string) bool { return !seen[ctrl] && !unscanned[filepath.Dir(filepath.Dir(ctrl))] }
@@ -405,7 +407,22 @@ func controlDirs(a *agent) ([]string, error) {
 // with, and journal paths are derived from them.
 func validControlDir(home, dir string) bool {
 	base := filepath.Base(dir)
-	return base != "." && base != ".." && base != "/" && dir == filepath.Join(home, "agents", base)
+	return cleanName(base) && dir == filepath.Join(home, "agents", base)
+}
+
+// cleanName reports whether name can name a subagent: one plain directory
+// name, not starting with a dot (so neither "." nor ".."), without control
+// characters.
+func cleanName(name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.ContainsRune(name, '/') {
+		return false
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
 }
 
 // loadSettings rereads settings.json, keeping the last good settings when it

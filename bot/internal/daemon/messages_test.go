@@ -190,6 +190,7 @@ func TestNestedDownSpoolIgnored(t *testing.T) {
 	// A symlinked spool directory is not a real spool.
 	elsewhere := filepath.Join(h.root, "elsewhere")
 	evil := h.queue(elsewhere, "linked")
+	os.Remove(filepath.Join(h.mainHome, ".messages", "agents", "d")) // the spool admission made
 	if err := os.Symlink(elsewhere, filepath.Join(h.mainHome, ".messages", "agents", "d")); err != nil {
 		t.Fatal(err)
 	}

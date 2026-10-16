@@ -42,6 +42,10 @@ never both.
   notes are embedded in the binary and written as a read-only directory,
   so they always describe the running version. What a provider caches and
   what it costs comes from its plugin's `describe`.
+- **Everything an agent does with the harness is a file.** Messages are
+  files in spools, a subagent is a directory holding a `config.json`, and
+  journals, providers and the manual are files to read. The binary is the
+  daemon, its file helper and root's plugin installer.
 - **Upgrades are reported, not announced.** An agent learns what changed
   at its next run; nothing wakes it for an upgrade.
 - **The repository is public.** Installs download release assets without
@@ -71,7 +75,7 @@ never both.
 | `/var/lib/agent/delivered.jsonl` | root, 0600 | Delivered messages: agent id, file name, SHA-256, sender |
 | `/var/lib/agent/pool.json` | root, 0600 | Pool assignments: user, agent id, state |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output, no secrets |
-| `/var/lib/agent/manual/` | root, 0755 | `manual.md` and `notes.md` (files 0644) |
+| `/var/lib/agent/manual/` | root, 0755 | `manual.md`, `notes.md` and `version` (files 0644) |
 | `/var/lib/agent/version` | root, 0644 | Installed version, written by `install.sh` |
 | `/var/log/agent/` | root, 0755 | Journals and conversation logs |
 | `/home/agent-N/` | agent-N:agent-N, 2750 | A pool user's home; empty while free |
@@ -126,18 +130,26 @@ directories and spools but no loop, inbox, journal or owner.
   a live agent's home could be cleared or handed to another agent; the error
   names the README section "If pool.json is lost". Resolve the provider and
   pool users (missing ones are logged), start root's helper, write the
-  manual (see Manual), then poll about
+  manual (see Manual), create root's spools `/etc/agent/.messages` and
+  `.messages/agents` where missing (`private`), then poll about
   once a second: finish any reclaim in progress, walk the tree, collect
   messages.
 - **Discovery.** Walk the tree breadth-first, listing each node's `agents/`
   through its own helper without following symlinks. A control directory is
   a real directory owned by the node's user in an `agents/` that is itself
-  one. One not yet running is admitted with the user `pool.json` records for
+  one, named by one plain name not starting with `.` and without control
+  characters. One not yet running is admitted with the user `pool.json` records for
   it (a restart: the home is kept), or else with a fresh user if it holds a
   regular `config.json`; otherwise it is left alone. Failures are logged once
   and retried next poll. A known agent is kept unless its control directory
   is certainly gone. A `config.json` in an admitted agent's control directory
   is ignored.
+- **Starting config.** Before a new agent is given a user, its starting
+  `config.json` is read through the parent's helper and checked against
+  `providers.json` (no plugin runs from the poll; without the cache the
+  check is skipped and the first run's gate reports). An invalid one, like
+  one over 1 MiB, keeps the agent out (see Admission errors) and is checked
+  again each poll, so the parent fixes it in place.
 - **Admission.** Take the lowest free pool user and record it in
   `pool.json`; prepare the home (2750, setgid); start the user's helper;
   clear what a previous holder left; set the group's members; create the
@@ -145,12 +157,15 @@ directories and spools but no loop, inbox, journal or owner.
   is left alone and logged once); write the seed `README.md` where
   missing; move the starting `config.json` into the home unless it
   already has one; enable lingering; create the journal directory; write
-  the `home` link (never recreating a control directory `agent remove` moved
-  away). A failed step is retried next poll. The control directory's device
-  and inode are part of the agent's identity, so renaming or recreating it
-  makes a new agent. Each poll restores a missing `home` link.
-- **Admission errors.** A starting `config.json` over 1 MiB, or no free pool
-  user ("Agent limit reached"), keeps the agent out: the reason goes to its
+  the `home` link (never recreating a control directory that was removed);
+  create the parent's spool `.messages/agents/NAME` (`private`; a failure
+  is logged). A failed step is retried next poll. The control directory's
+  device and inode are part of the agent's identity, so renaming or
+  recreating it makes a new agent. A deleted `home` link is written again
+  only at the next admission (a restart), so `rm -r` of a control directory
+  never races it.
+- **Admission errors.** An invalid starting `config.json` or one over 1 MiB,
+  or no free pool user ("Agent limit reached"), keeps the agent out: the reason goes to its
   `ERROR` and the service log, and the parent's inbox is told once per
   reason (root's children: the service log only).
 - **Runs.** One goroutine per agent, one run at a time.
@@ -219,17 +234,16 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
 
 What agents send and receive is the manual's "Messages". Delivery:
 
-- **Up.** `agent message` writes `~/.messages/<UTC timestamp>.md` (atomic
-  dot-name rename). Root has no owner, so it fails as root.
-- **Down.** `agent send NAME` writes `.messages/agents/NAME/<UTC
-  timestamp>.md` under the caller's home (root: under `/etc/agent`,
-  private). NAME must be a direct child.
+- **Up** is `~/.messages/`; **down** is `.messages/agents/NAME/` under the
+  sender's home (root: under `/etc/agent`). Root has no up spool.
 - Each poll, the daemon reads every spool through its owner's helper:
   regular non-dot files owned by the spool's user, in name order; anything
   else is logged and ignored. The spool's location identifies the sender.
   Up from a top-level agent is appended to its conversation log only; a
   message for a child that can no longer be admitted is dropped with a note
-  to the sender (root: the service log).
+  to the sender (root: the service log). A file over 64 KiB is read to its
+  first 64 KiB, delivered with "[message truncated]", and the sender is
+  told with a note once it is delivered (root: the service log).
 - The `delivered.jsonl` record is written first, then the inbox file, then
   the conversation log, then the spool file is removed, so a crash can only
   duplicate a message. A failing delivery is retried every poll under the
@@ -300,7 +314,7 @@ requests (reasoning blocks, signatures). A plugin returns at most one
 command and disables parallel tool calls.
 
 The daemon interprets only `image_types`; `usage` is journaled and
-`caching` printed by `agent provider describe`, neither interpreted.
+`caching` cached in `providers.json`, neither interpreted.
 
 ## Plugins
 
@@ -327,29 +341,31 @@ accepts only a file matching the index.
 - **replay**: scripted replies for tests. `REPLAY_SCRIPT` (JSONL responses
   after a header describing models) and optional `REPLAY_LOG`.
 
-## CLI
+## The binary
 
-The commands agents use are in the manual. Root runs every command with
-`sudo`; for root, `NAME` is `/etc/agent/agents/NAME`, `agent new` must be
-given a config, and `messages` and `log` must be given a NAME.
+`agent daemon` (the service, root only), the hidden `agent _fsio` (the file
+helper), `agent provider install NAME FILE` (root: install a plugin binary
+whose SHA-256 matches the index for NAME and this architecture, prompt for
+missing settings and refresh `providers.json`; downloads nothing) and
+`agent help`.
 
-- `agent daemon`: the service (root only).
-- `agent new`: the config is validated against `providers.json` before
-  anything is created; then the control directory (root 0700, agent 0750)
-  and `config.json` (0640) are written, and removed again if writing fails.
-- `agent remove`: renames the child's control directory out of `agents/`,
-  then removes it.
-- `agent messages`, `agent log`: print once, control characters removed.
-- `agent provider install NAME FILE` (root): install a plugin binary whose
-  SHA-256 matches the index for NAME and this architecture, prompt for
-  missing settings and refresh `providers.json`. Downloads nothing.
-- `agent provider describe`: as root it runs the plugins and refreshes
-  `providers.json`; otherwise it reads it.
+In 0.7.0 `new`, `remove`, `send`, `message`, `messages`, `log`,
+`provider describe` and `version` also remain. Each prints "agent CMD:
+replaced by files; see /var/lib/agent/manual/manual.md (SECTION). Removed
+in 0.8.0." on stderr and then does what it did: `new` validates the config
+against `providers.json` and writes the control directory (root 0700,
+agent 0750) and `config.json` (0640); `remove` renames the control
+directory out of `agents/` and removes it; `send` and `message` write a
+spool file atomically; `messages` and `log` print once with control
+characters removed; `provider describe` as root runs the plugins and
+refreshes `providers.json`, otherwise it reads it; `version` prints the
+version.
 
 ## Manual
 
-`docs/manual.md` and `internal/notes/notes.md` (the release notes, newest
-first) are embedded in the binary. At startup the daemon writes each into
+`docs/manual.md`, `internal/notes/notes.md` (the release notes, newest
+first) and `version` (the running version) are embedded in the binary. At
+startup the daemon writes each into
 `/var/lib/agent/manual/` (root, 0755, created if missing; files 0644)
 atomically, through a temporary file and a rename, and removes any other
 file there, so the manual always matches the running version and no agent
@@ -379,16 +395,16 @@ checksums (which pin the plugins'). It:
    0.4.1 (upgrade with the v0.4.1 `install.sh` first).
 3. Stops the service (runs finish first), installs the binary, keeping the
    previous one to restore if anything fails before the service starts, and
-   creates `agent-provider` and the directories above.
+   creates `agent-provider` and the directories above, root's spools
+   `/etc/agent/.messages` and `.messages/agents` included (0700).
 4. Creates missing pool users, each with its own group and an empty home.
 5. Fresh install: asks for a provider, downloads and installs it with
    `agent provider install` (which prompts for its settings), and asks for a
    model. Upgrade: reinstalls each installed plugin, keeping the old one
    with a warning if that fails.
 6. Installs and starts the service, then writes `/var/lib/agent/version`.
-7. Fresh install: runs
-   `printf '{"provider":"P","model":"M"}\n' | agent new main -`, saying how
-   to retry if it fails.
+7. Fresh install: creates `/etc/agent/agents/main` (0700) and writes its
+   `config.json`, saying how to retry if that fails; the daemon admits it.
 
 **Releases** are reproducible (`CGO_ENABLED=0`, `-trimpath`, empty build ID,
 toolchain pinned in `go.mod`). `scripts/release.sh` builds everything and

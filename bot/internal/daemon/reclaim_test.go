@@ -438,18 +438,24 @@ func TestReplacedControlDirIsRemoveAndAdmit(t *testing.T) {
 	}
 }
 
-// The parent may delete its child's home link; the daemon puts it back.
-func TestHomeLinkRepaired(t *testing.T) {
-	h := newHarness(t)
+// The parent may delete its child's home link: the child keeps running, and
+// the link is not put back until the next admission (a daemon restart), so
+// removing the control directory with rm -r never races it.
+func TestHomeLinkNotRestored(t *testing.T) {
+	h := newHarness(t, doneFor(childMark))
 	h.start()
 	c := makeChild(t, h, "c", true)
 	home := h.childHome(c)
-	if err := os.Remove(filepath.Join(c, "home")); err != nil {
+	link := filepath.Join(c, "home")
+	if err := os.Remove(link); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.childHome(c); got != home {
-		t.Fatalf("home link points at %s, want %s", got, home)
+	time.Sleep(200 * time.Millisecond)
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Fatalf("home link put back: %v", err)
 	}
+	h.drop(home, "task.md", "work")
+	h.waitEnds(childID("c"), 1)
 	if n := strings.Count(h.logs.String(), "c: admitted as"); n != 1 {
 		t.Fatalf("admitted %d times", n)
 	}

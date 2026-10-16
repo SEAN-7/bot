@@ -26,7 +26,7 @@ import (
 )
 
 func main() {
-	e := env{l: layout.Default(), euid: os.Geteuid(), home: os.Getenv("HOME"), in: os.Stdin, out: os.Stdout}
+	e := env{l: layout.Default(), euid: os.Geteuid(), home: os.Getenv("HOME"), in: os.Stdin, out: os.Stdout, err: os.Stderr}
 	if err := run(os.Args[1:], e); err != nil {
 		fmt.Fprintln(os.Stderr, "agent:", err)
 		os.Exit(1)
@@ -40,6 +40,7 @@ type env struct {
 	home string
 	in   io.Reader
 	out  io.Writer
+	err  io.Writer // notices, such as for a command that files replace
 }
 
 func (e env) root() bool { return e.euid == 0 }
@@ -52,6 +53,9 @@ func run(args []string, e env) error {
 	l := e.l
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if notice := replaced(args); notice != "" {
+		fmt.Fprintln(e.err, notice)
+	}
 	switch args[0] {
 	case "daemon":
 		if !e.root() {
@@ -135,6 +139,26 @@ func run(args []string, e env) error {
 		return nil
 	}
 	return fmt.Errorf("unknown command %q\n%s", args[0], cli.Usage)
+}
+
+// replacedBy names, for each command that files replace, the section of
+// the manual that describes the files. The commands still work in 0.7.0 and
+// are removed in 0.8.0.
+var replacedBy = map[string]string{
+	"new": "Subagents", "remove": "Subagents", "send": "Messages", "message": "Messages",
+	"messages": "Messages", "log": "Journal", "version": "Runs, Upgrades",
+}
+
+// replaced is the notice for a command that files replace, or "".
+func replaced(args []string) string {
+	cmd, section := args[0], replacedBy[args[0]]
+	if cmd == "provider" && len(args) > 1 && args[1] == "describe" {
+		cmd, section = "provider describe", "Configuration"
+	}
+	if section == "" {
+		return ""
+	}
+	return fmt.Sprintf("agent %s: replaced by files; see /var/lib/agent/manual/manual.md (%s). Removed in 0.8.0.", cmd, section)
 }
 
 // messageText is text, or all of stdin for "-".

@@ -14,6 +14,7 @@ import (
 
 	"github.com/SEAN-7/bot/internal/journal"
 	"github.com/SEAN-7/bot/internal/layout"
+	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/proto"
 )
 
@@ -90,7 +91,7 @@ func TestDescribeReadsCacheAsNonRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The cache comes back as indented JSON, of the same shape.
-	var got providersCache
+	var got plugin.ProvidersCache
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("%v in:\n%s", err, out.String())
 	}

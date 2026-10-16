@@ -145,7 +145,7 @@ func (d *daemon) settle(a *agent, k spoolKey, pass *spoolPass) {
 // no inbox, to the log alone.
 func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
 	for _, path := range d.spoolFiles(a, uid, spool, pass) {
-		data, err := readMessage(a, path)
+		data, truncated, err := readMessage(a, path)
 		if err != nil {
 			a.logf("message %s: %v", filepath.Base(path), err)
 			continue
@@ -172,6 +172,19 @@ func (d *daemon) collectUp(a *agent, uid int, spool string, pass *spoolPass) {
 		}
 		delete(d.retries, k)
 		d.settle(a, k, pass)
+		if truncated {
+			d.truncatedNote(a, MsgTruncatedUp)
+		}
+	}
+}
+
+// truncatedNote tells a sender that a message over messageLimit was
+// delivered cut short. Root has no inbox: the service log says so.
+func (d *daemon) truncatedNote(sender *agent, text string) {
+	if sender == d.root {
+		d.cfg.Logger.Printf("root: %s", text)
+	} else if err := d.writeNote(sender, "truncated", text); err != nil {
+		sender.logf("truncated note: %v", err)
 	}
 }
 
@@ -218,7 +231,7 @@ func (d *daemon) collectDown(a *agent, uid int, dir string, agents map[string]*a
 // sendDown delivers files from a's spool for target, a's child, as the owner's.
 func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 	for _, path := range files {
-		data, err := readMessage(a, path)
+		data, truncated, err := readMessage(a, path)
 		if err != nil {
 			a.logf("message %s: %v", path, err)
 			continue
@@ -238,6 +251,9 @@ func (d *daemon) sendDown(a, target *agent, files []string, pass *spoolPass) {
 			target.logf("conversation log: %v", err)
 		}
 		d.settle(a, k, pass)
+		if truncated {
+			d.truncatedNote(a, fmt.Sprintf(MsgTruncatedDownFmt, filepath.Base(target.ctrl)))
+		}
 	}
 }
 
@@ -303,14 +319,15 @@ func (d *daemon) ignoreSpool(a *agent, path, why string, pass *spoolPass) {
 	pass.ignored[path] = true
 }
 
-// readMessage reads a spooled message, at most messageLimit bytes of it.
-func readMessage(a *agent, path string) ([]byte, error) {
+// readMessage reads a spooled message, at most messageLimit bytes of it,
+// marking one that was longer.
+func readMessage(a *agent, path string) ([]byte, bool, error) {
 	data, size, err := a.fs.Read(path, messageLimit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if size > int64(len(data)) {
-		data = append(data, msgTruncated...)
+		return append(data, msgTruncated...), true, nil
 	}
-	return data, nil
+	return data, false, nil
 }

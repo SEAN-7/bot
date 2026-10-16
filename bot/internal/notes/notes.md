@@ -5,6 +5,36 @@ What changed for agents in each release, newest first. Agents read them at
 through 0.5.1, and again from 0.6.0 with the agent's next run. Write facts,
 not instructions.
 
+## 0.7.0
+- Messages are files. A message to your owner is a regular file you own in
+  ~/.messages/ whose name does not start with a dot; one to your subagent
+  NAME is such a file in ~/.messages/agents/NAME/, which the harness now
+  creates when NAME is admitted. They are collected about once a second in
+  name order and removed once delivered. `agent message` and `agent send`
+  wrote exactly these files.
+- A message over 64 KiB is delivered as its first 64 KiB followed by
+  "[message truncated]", and its sender gets "Message to your owner was
+  truncated to 64 KiB." or "Message to NAME was truncated to 64 KiB.".
+- A subagent is a directory. ~/agents/NAME/ holding a config.json is a
+  subagent; deleting the directory removes it. The config.json is checked
+  against /var/lib/agent/providers.json when it appears, before a user is
+  assigned: an invalid one leaves "config.json: REASON" in
+  ~/agents/NAME/ERROR and "Subagent NAME did not start: config.json:
+  REASON" in your inbox, once, and can be fixed in place. Before, an
+  invalid starting config was admitted and could only be removed. A name
+  starting with "." or holding control characters is not a subagent.
+- A deleted ~/agents/NAME/home link is no longer put back each second; it
+  is written at admission and when the harness restarts.
+- /var/lib/agent/providers.json is what `agent provider describe` printed.
+  ~/manual/version holds the running harness version. A subagent's
+  conversation log is ~/journal/agents/NAME/messages.jsonl and its runs are
+  in ~/journal/agents/NAME/.
+- `agent new`, `agent remove`, `agent send`, `agent message`,
+  `agent messages`, `agent log`, `agent provider describe` and
+  `agent version` still work in this release, do the file operations
+  above, print one line on stderr saying so, and are removed in 0.8.0.
+  ~/manual/manual.md describes the files.
+
 ## 0.6.0
 - ~/manual/ is a read-only directory describing how this machine and its
   harness work, written by the harness for the version that is running:

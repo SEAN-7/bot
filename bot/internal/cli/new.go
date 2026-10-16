@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
 	"github.com/SEAN-7/bot/internal/layout"
@@ -61,20 +60,15 @@ func New(l layout.Layout, root bool, home, name, source string, stdin io.Reader,
 	if err != nil {
 		return err
 	}
-	config, err := plugin.ParseConfig(data)
-	if err != nil {
+	if _, err := plugin.ParseConfig(data); err != nil {
 		return fmt.Errorf("%s: %w", source, err)
 	}
 	providers, err := LoadProviders(l)
 	if err != nil {
 		return err
 	}
-	installed := make([]string, 0, len(providers))
-	for p := range providers {
-		installed = append(installed, p)
-	}
-	sort.Strings(installed)
-	if err := plugin.Validate(config, installed, providers[config.Provider]); err != nil {
+	config, err := plugin.ValidateCached(data, providers)
+	if err != nil {
 		return fmt.Errorf("%s: %w", source, err)
 	}
 	data, err = json.MarshalIndent(config, "", "  ")

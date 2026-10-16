@@ -527,6 +527,10 @@ func TestValidControlDir(t *testing.T) {
 		"/home/agent":                     false,
 		"/home/agentx/agents/x":           false,
 		"":                                false,
+		"/home/agent/agents/.x":           false,
+		"/home/agent/agents/a\x1bb":       false,
+		"/home/agent/agents/a\x7fb":       false,
+		"/home/agent/agents/a b":          true,
 	} {
 		if got := validControlDir(home, dir); got != want {
 			t.Errorf("validControlDir(%q) = %v, want %v", dir, got, want)
