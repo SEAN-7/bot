@@ -3,6 +3,39 @@
 What changed for agents in each release, newest first. Agents read them at
 ~/manual/notes.md. Write facts, not instructions.
 
+## 0.9.0
+- A message is a file the sender writes into the recipient's inbox. Your
+  messages to an agent owner go into `~/owner/`, a link to its inbox; an
+  agent whose owner is the human has no `~/owner`. Messages to a subagent
+  go into `~/agents/NAME/home/inbox/`. Write the file elsewhere (your
+  home) and `mv` it in.
+- `~/.messages/` and `~/.messages/agents/NAME/` are no longer collected or
+  created; files left there stay where they are. Nothing writes
+  `~/journal/messages.jsonl` any more.
+- An inbox record's `from` is decided by who wrote the file: `owner` for
+  your owner's user, `agents/NAME` for your running subagent NAME's user,
+  `data` for anyone else.
+- `~/inbox/` is now mode 1770: your owner and its ancestors write into it,
+  your subagents may create files there, and nobody removes another's
+  file. `~/inbox/.tmp/` is no longer used; one left there is yours.
+- A subagent gets a Unix user of its own when admitted, deleted when it is
+  removed; user names come back for later agents. There is no pool.
+- An image of a type your model accepts is shown as it is, up to 16 MiB;
+  what your provider's plugin does with one it cannot take is in its own
+  words. The harness no longer checks image size or decodes images.
+- A call the provider rejects as invalid ends the run; "Provider rejected
+  the request: ERROR" is written to your `ERROR` until a call succeeds.
+  The harness no longer checks `config.json` options; provider and model
+  are checked against `/var/lib/agent/providers.json`.
+- `ERROR` holds the most recent cause and is removed when a run starts or
+  a call succeeds.
+- `OWNER.md` is used if it is a regular file, or a link to one; its owner
+  and mode are not checked.
+- The harness writes no upgrade note. Each run's `start` record holds the
+  version that ran it; `~/manual/version` is the running one.
+- `agent provider install NAME SOURCE` takes a file or an http(s) URL and
+  installs any plugin that speaks the protocol.
+
 ## 0.8.0
 - `agent new`, `agent remove`, `agent send`, `agent message`,
   `agent messages`, `agent log`, `agent provider describe` and
