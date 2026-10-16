@@ -33,7 +33,7 @@ func TestBasicRun(t *testing.T) {
 	if len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "sh" || reqs[0].Model != "replay-1" {
 		t.Fatalf("request %+v", reqs[0])
 	}
-	want := `{"file":"inbox/processed/hi.md","from":"data","content":"hello there"}`
+	want := `{"file":"inbox/processed/hi.md","from":"owner","content":"hello there"}`
 	if reqs[0].Messages[0].Role != "user" || !strings.Contains(reqs[0].Messages[0].Content, want) {
 		t.Fatalf("first message %q", reqs[0].Messages[0].Content)
 	}
@@ -185,7 +185,7 @@ func TestDotFilesWaitForARun(t *testing.T) {
 	for _, r := range h.waitEnds(h.mainID, 1) {
 		if r["type"] == "inbox" {
 			files = append(files, r["file"].(string))
-			if strings.HasSuffix(r["file"].(string), ".quiet") && (r["from"] != "data" || r["content"] != "later") {
+			if strings.HasSuffix(r["file"].(string), ".quiet") && (r["from"] != "owner" || r["content"] != "later") {
 				t.Fatalf("dot-file record %v", r)
 			}
 		}
@@ -243,7 +243,7 @@ func (countRecorder) Attach(string, []byte) (string, error) {
 // before recording anything when it leads nowhere.
 func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	h := newHarness(t)
-	main := detachedMain(t, h, &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}}})
+	main := detachedMain(t, h, &daemon{cfg: h.cfg})
 	inbox := filepath.Join(h.mainHome, "inbox")
 	processed := filepath.Join(inbox, "processed")
 	var recorded int
@@ -278,8 +278,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 
 func TestVanishedInboxDoesNotCallModel(t *testing.T) {
 	h := newHarness(t, step("echo never", 100))
-	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}},
-		runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
+	d := &daemon{cfg: h.cfg, runner: &plugin.Runner{PluginDir: h.cfg.Plugins(), CredDir: h.cfg.Credentials(), Timeout: 10 * time.Second}}
 	main := detachedMain(t, h, d)
 	if err := os.MkdirAll(filepath.Join(h.mainHome, "inbox"), 0o755); err != nil {
 		t.Fatal(err)

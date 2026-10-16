@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -39,7 +40,7 @@ type request struct {
 	Data  []byte   `json:"data,omitempty"`
 	Limit int64    `json:"limit,omitempty"`
 	Paths []string `json:"paths,omitempty"`
-	Mode  uint32   `json:"mode,omitempty"`  // write's permission bits
+	Mode  uint32   `json:"mode,omitempty"`  // write's permission bits; mkdir's whole mode
 	Stage string   `json:"stage,omitempty"` // write's staging directory; "" is the target's own
 }
 
@@ -47,6 +48,7 @@ type response struct {
 	Err        string   `json:"err,omitempty"`
 	NotExist   bool     `json:"notexist,omitempty"`
 	Permission bool     `json:"permission,omitempty"`
+	Exist      bool     `json:"exist,omitempty"`
 	Data       []byte   `json:"data,omitempty"`
 	Size       int64    `json:"size,omitempty"`
 	Entries    []Entry  `json:"entries,omitempty"`
@@ -72,7 +74,7 @@ func Serve(r io.Reader, w io.Writer) error {
 		if err != nil {
 			// A path below a non-directory (ENOTDIR) does not exist either.
 			notExist := errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR)
-			resp = response{Err: err.Error(), NotExist: notExist, Permission: errors.Is(err, fs.ErrPermission)}
+			resp = response{Err: err.Error(), NotExist: notExist, Permission: errors.Is(err, fs.ErrPermission), Exist: errors.Is(err, fs.ErrExist)}
 		}
 		if err := enc.Encode(resp); err != nil {
 			return err
@@ -121,6 +123,8 @@ func handle(req request) (response, error) {
 	case "private":
 		skipped, err := private(req.Paths)
 		return response{Paths: skipped}, err
+	case "mkdir":
+		return response{}, mkdir(req.Path, os.FileMode(req.Mode))
 	case "rename":
 		return response{}, os.Rename(req.Path, req.Path2)
 	case "remove":
@@ -207,6 +211,27 @@ func write(path string, data []byte, mode os.FileMode, stage string) error {
 		os.Remove(temp)
 	}
 	return err
+}
+
+// mkdir creates path as a directory with exactly mode, sticky bit included,
+// whatever the umask. An existing directory of this user's is left as it
+// is; anything else at the path is an error that wraps fs.ErrExist.
+func mkdir(path string, mode os.FileMode) error {
+	err := os.Mkdir(path, mode)
+	if err == nil {
+		return os.Chmod(path, mode)
+	}
+	if !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	info, lerr := os.Lstat(path)
+	if lerr != nil {
+		return lerr
+	}
+	if !info.IsDir() || owner(info) != os.Getuid() {
+		return fmt.Errorf("%s is not a directory this user owns: %w", path, fs.ErrExist)
+	}
+	return nil
 }
 
 // private creates each of paths that is missing as a directory without

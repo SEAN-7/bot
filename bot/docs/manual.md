@@ -28,17 +28,20 @@ The harness uses these names in your home; everything else is yours.
 | `inbox/` | Files that wake you and are delivered to you (see Runs). |
 | `inbox/processed/` | Where delivered inbox files are moved. |
 | `agents/` | Your subagents' control directories (see Subagents). |
-| `.messages/` | Your outgoing message spool (see Messages). |
+| `owner` | Link to your owner's inbox, where your messages go (see Messages); absent when your owner is the human. |
 | `journal` | Link to your journal directory, read-only (see Journal). |
 | `manual` | Link to this manual, read-only. |
 
 Your home is setgid and commands run with umask 022, so the agents above
 you (your owner and its ancestors, other than root) can read what you
 write; nobody else can enter it. You can tighten your own files' modes. The
-harness creates `inbox/`, `inbox/processed/`, `agents/`, `.messages/`,
-`.messages/agents/` and control directories 0750, and inbox files,
-delivered messages, spool files and `config.json` 0640. Where a name the
-harness uses already exists, it is left as it is.
+harness creates `inbox/` 1770 (your owner and its ancestors write messages
+straight into it, your subagents by a grant, and nobody removes or renames
+another's file), `inbox/processed/`, `agents/` and control directories
+0750, and the notes it writes into your inbox and `config.json` 0640. A
+file someone else wrote into your inbox has the mode they gave it. Where a
+name the harness uses already exists as a directory you own, it is left as
+it is; anything else of that name keeps you from starting.
 
 ## Commands
 
@@ -125,10 +128,10 @@ How the provider caches these between calls, and what that costs, is the
 
 **Inbox records.** Each inbox file reaches you as one JSON record:
 `{"file": "inbox/processed/NAME", "from": "owner" | "agents/NAME" | "data", "content": "..."}`.
-- `from` is `owner` only for a message your owner sent you, and
-  `agents/NAME` only for one your subagent NAME sent (see Messages): the
-  harness records each delivery (agent, file name,
-  SHA-256, sender) and labels a file only when all three match. Everything
+- `from` is `owner` only for a file your owner's user wrote, and
+  `agents/NAME` only for one your running subagent NAME's user wrote (see
+  Messages): the kernel records who created a file, so no file can forge
+  it. Everything
   else, including the harness's own notes and files your scripts write, is
   `data`. Content is a JSON string, so no file can forge the field.
 - Content over 64 KiB is clipped and followed by "[file clipped; full
@@ -231,33 +234,22 @@ this precedence; it does not enforce it.
 
 ## Messages
 
-- A message is a file. Write it under a name starting with a dot, then
-  rename it, so it is never read half-written; the harness ignores dot
-  names. For example:
-  `f=$(date -u +%Y%m%dT%H%M%S.%NZ).md; printf '%s\n' "text" > ~/.messages/.$f && mv ~/.messages/.$f ~/.messages/$f`.
-- About once a second the harness collects the regular files you own in
-  each spool, other than dot-files, in name order (so names that sort in
-  time order, such as UTC timestamps, keep messages in order), delivers
-  each and removes it. Anything else there (a link, a directory, another
-  user's file) is left alone. A crash can duplicate a message but not lose
-  one.
-- **To your owner:** a file in `~/.messages/`. If your owner is an agent, it
-  reaches its inbox as `<time>-NAME.md` (NAME is yours) with `"from":
-  "agents/NAME"`. If your owner is the human, it is only recorded in your
-  conversation log, which the human reads; nothing notifies them.
-- **To a subagent:** a file in `~/.messages/agents/NAME/`, which the
-  harness creates when NAME is admitted (you may create it sooner). It
-  reaches your direct child NAME's inbox as `<time>-owner.md` with `"from":
-  "owner"`. A message for a subagent not yet running waits while it may
-  still be admitted; otherwise the file is removed and "Message to NAME
-  dropped: there is no subagent by that name." arrives in your inbox. Only
-  a real directory you own, named like a subagent, is a spool.
-- A message over 64 KiB is delivered as its first 64 KiB followed by
-  "[message truncated]", and you are told: "Message to your owner was
-  truncated to 64 KiB." or "Message to NAME was truncated to 64 KiB."
-- **Conversation log:** `~/journal/messages.jsonl`, written only by the
-  harness, one record per message: `{"t", "from": "owner" | "agent",
-  "text"}`. A subagent's is `~/journal/agents/NAME/messages.jsonl`.
+- A message is a file in the recipient's inbox, which you write yourself:
+  write it in your home, then `mv` it in, so it is never read
+  half-written. A file in an inbox wakes its agent and is collected with
+  its next run, like any other (see Runs); names that sort in time order,
+  such as UTC timestamps, keep messages in order. For example:
+  `f=$(date -u +%Y%m%dT%H%M%S.%NZ).md; printf '%s\n' "text" > ~/.$f && mv ~/.$f ~/owner/$f`.
+- **To your owner:** `~/owner` links to your owner's inbox when your owner
+  is an agent; write into it. You can create files there but not list it
+  or read what is in it. Your file reaches your owner with `"from":
+  "agents/NAME"` (NAME is yours). When your owner is the human there is no
+  `~/owner`: the human reads your home, so leave what you have to say
+  where you have agreed to.
+- **To a subagent:** write into `~/agents/NAME/home/inbox/`, which exists
+  once NAME is admitted. Your file reaches it with `"from": "owner"`.
+- The label comes from the file's owner, which the kernel sets: a file
+  written by anyone else, or by you into your own inbox, is `data`.
 
 ## Journal
 
@@ -270,9 +262,9 @@ this precedence; it does not enforce it.
   `usage`: `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`), `result` (exactly what the model got), `note` and
   `end` (with `reason`: `done`, `context`, `removed` and others).
-- The directory also holds `messages.jsonl` and a copy of each shown image
-  as `<run>-<n>.<ext>`, which are not runs. A subagent's journal directory
-  is inside yours.
+- The directory also holds a copy of each shown image as
+  `<run>-<n>.<ext>`, which are not runs. A subagent's journal directory is
+  inside yours.
 - Your newest run is the last `*Z.jsonl` in `~/journal/`; a subagent's
   runs are in `~/journal/agents/NAME/`, and a deeper descendant's under
   `~/journal/agents/NAME/agents/...`.
@@ -293,8 +285,8 @@ this precedence; it does not enforce it.
 - A directory holding a `config.json` is admitted, usually within a second:
   a user is created for it, its home is prepared with the seed `README.md`, its
   `config.json` moves into that home (one written into `~/agents/NAME/`
-  later is ignored), `~/agents/NAME/home` links to it, and
-  `~/.messages/agents/NAME/` is created. It starts work when you send it a
+  later is ignored), `~/agents/NAME/home` links to it, and its user is
+  granted write access to your inbox. It starts work when you send it a
   message. Once admitted, its config is its own.
 - If it cannot be admitted for another reason, `~/agents/NAME/ERROR` says
   why and you are told once per reason: "Subagent NAME was not started:
@@ -306,9 +298,10 @@ this precedence; it does not enforce it.
   admission and when the harness restarts, not put back if you delete it.
 - Its home is its own user's. You can read it (you are in its group) but
   not write to it. It cannot read yours unless you grant access, and even
-  then cannot list or read `~/inbox`, `~/agents` or `~/.messages` unless a
-  default ACL on `~` names its user, which harness directories created
-  later would inherit.
+  then cannot list or read `~/inbox` or `~/agents` unless a default ACL on
+  `~` names its user, which harness directories created later would
+  inherit. It can create files in `~/inbox` (that is how it messages you)
+  but not list it, read others' files there, or remove them.
 - **Sharing** is by `setfacl` on files and directories you own. Granting
   its user `x` on `~` lets it reach any file there that others can read.
   Its user is `stat -L -c %U ~/agents/NAME/home`. User names and ids come
@@ -321,7 +314,7 @@ this precedence; it does not enforce it.
   deleted, and the user removed with its home. Journals remain, in your
   journal directory. An idle subagent costs nothing.
 - Your subagents' messages reach you as `"from": "agents/NAME"`. You can
-  read their journals, conversation logs and `ERROR`:
+  read their journals and `ERROR`:
   `~/journal/agents/NAME/` and `~/agents/NAME/ERROR`.
 
 ## The agent command

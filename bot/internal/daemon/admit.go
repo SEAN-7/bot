@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
 	"path/filepath"
 
 	"github.com/SEAN-7/bot/internal/fsio"
@@ -84,6 +85,13 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	if err := c.seed(); err != nil {
 		return fail("seed home", err)
 	}
+	// Its messages are files it writes into its owner's inbox: the owner,
+	// who owns the inbox, grants it write access. Root has no inbox.
+	if parent != d.root {
+		if err := d.cfg.System.ShareInbox(parent.user, parent.home, c.uid(), true); err != nil {
+			return fail("share inbox", err)
+		}
+	}
 	if err := c.adoptConfig(); err != nil {
 		return fail("config", err)
 	}
@@ -98,14 +106,6 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 	// link then fails.
 	if err := parent.fs.Symlink(c.home, filepath.Join(ctrl, "home")); err != nil {
 		return fail("home link", err)
-	}
-	// The parent's spool for it, so messages need only a file written; a
-	// failure leaves the parent to create it.
-	spool := filepath.Join(parent.home, ".messages", "agents", filepath.Base(ctrl))
-	if skipped, err := parent.fs.Private(spool); err != nil {
-		c.logf("spool %s: %v", spool, err)
-	} else if len(skipped) > 0 {
-		c.logf("not closed to others: %s is a link, a file or another user's", spool)
 	}
 	delete(d.admitErrs, ctrl)
 	d.clearHeldBack(parent, ctrl)
@@ -136,33 +136,25 @@ func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 }
 
 // harnessDirs are the directories the harness keeps in a home, parents
-// first.
-var harnessDirs = []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"}
+// first, with their modes. The inbox is group-writable and sticky: the
+// agent's owner and its ancestors, the home's group, write messages
+// straight into it, and nobody removes another's file. Its subagents get
+// write access by ACL at admission. The rest is closed to others, so a
+// child the agent lets through its home never reads its inbox or its
+// siblings' control directories.
+var harnessDirs = []struct {
+	name string
+	mode os.FileMode
+}{{"inbox", 0o770 | os.ModeSticky}, {"inbox/processed", 0o750}, {"agents", 0o750}}
 
 // seed creates the harness's directories and the seed files the home lacks,
-// through the agent's own helper. The directories are created open to the
-// home's group, the agent's ancestors, and closed to others: a child the
-// agent lets through its home never reads its inbox, spools or its
-// siblings' control directories. One left alone, as it is not a real
-// directory the agent owns, may be open to others: the service log names it
-// once per daemon run.
+// through the agent's own helper. A directory that exists is left as it
+// is; anything else of that name is an error, and the agent does not start.
 func (a *agent) seed() error {
-	dirs := make([]string, len(harnessDirs))
-	for i, dir := range harnessDirs {
-		dirs[i] = filepath.Join(a.home, dir)
-	}
-	skipped, err := a.fs.Private(dirs...)
-	for _, path := range skipped {
-		if !a.d.unclosed[path] {
-			if a.d.unclosed == nil {
-				a.d.unclosed = map[string]bool{}
-			}
-			a.d.unclosed[path] = true
-			a.logf("not closed to others: %s is a link, a file or another user's", path)
+	for _, dir := range harnessDirs {
+		if err := a.fs.Mkdir(filepath.Join(a.home, dir.name), dir.mode); err != nil {
+			return err
 		}
-	}
-	if err != nil {
-		return err
 	}
 	for _, file := range []struct{ name, text string }{{"README.md", seed.README}} {
 		path := filepath.Join(a.home, file.name)

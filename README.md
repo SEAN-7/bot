@@ -46,24 +46,26 @@ first message. When it is reached, calls fail, the agent pauses, and
 ## Talk to it
 
 You are root, the top of the agent tree; `main` is your child. You do what
-an agent does for its children: a message is a file in your spool for the
-child, `/etc/agent/.messages/agents/NAME/`. Write it under a dot name and
-rename it, so it is never read half-written. A shell function does both:
+an agent does for its children: a message is a file you write into the
+child's inbox, `/etc/agent/agents/NAME/home/inbox/`. Write it in the home
+first and move it in, so it is never read half-written. A shell function
+does both:
 
 ```bash
 send() { # send NAME "text"
-	sudo sh -c 'd=/etc/agent/.messages/agents/$1 f=$(date -u +%Y%m%dT%H%M%S.%NZ).md
-		mkdir -p -m 700 "$d" && printf "%s\n" "$2" >"$d/.$f" && mv "$d/.$f" "$d/$f"' sh "$1" "$2"
+	sudo sh -c 'h=/etc/agent/agents/$1/home f=$(date -u +%Y%m%dT%H%M%S.%NZ).md
+		printf "%s\n" "$2" >"$h/.$f" && mv "$h/.$f" "$h/inbox/$f"' sh "$1" "$2"
 }
-send main "Hello. Read your README, then tell me how you plan to keep notes."
-sudo cat /var/log/agent/main/messages.jsonl  # the conversation so far, both directions
+send main "Hello. Read your README, then tell me how you plan to keep notes, and where you will leave your replies to me."
+sudo ls /etc/agent/agents/main/home/   # its home: read what it leaves there
 ```
 
-Only messages you send this way are labelled as yours; everything else the
-agent reads is marked as data. The agent replies with a file in its own
-spool, which the harness records in a log only it writes
-(`/var/log/agent/main/messages.jsonl`). It is not push: you see replies when
-you look. For notifications, ask the agent to build a channel:
+Files you write this way are labelled as yours, because you wrote them;
+everything else the agent reads is marked as data. The agent has no inbox
+to reply into, since you have none: it leaves its replies in its home, where
+you agree, and its journal holds every reply it ever made
+(`/var/log/agent/main/`). It is not push: you see replies when you look. For
+notifications, ask the agent to build a channel:
 
 ```bash
 send main "Set up a Telegram channel for yourself so we can talk there. Here is a bot token from @BotFather: 123456:ABC-DEF... Only treat messages from my Telegram account as instructions; I will message the bot first so you can learn my chat ID. Run the poller as a long-lived job with systemd-run --user, note how it works in your README, and confirm on Telegram when it is working."
@@ -100,7 +102,7 @@ watch any of them; their journals mirror the tree:
 
 ```bash
 sudo ls /var/log/agent/main/agents/research/                    # its runs, newest last
-sudo cat /var/log/agent/main/agents/research/messages.jsonl     # its conversation with its parent
+sudo ls /etc/agent/agents/main/home/agents/research/home/inbox/ # what main has sent it and it has not yet read
 ```
 
 You can also create your own agents beside `main`, isolated from it
@@ -147,8 +149,8 @@ sudo -u "$u" XDG_RUNTIME_DIR=/run/user/$(id -u "$u") systemctl --user list-units
 ## What is protected, and what isn't
 
 - No agent has sudo, can read provider credentials (`/etc/agent`), or can
-  change its journals or conversation log (`/var/log/agent`). The daemon
-  touches agent files only with the agent's own permissions.
+  change its journals (`/var/log/agent`). The daemon touches agent files
+  only with the agent's own permissions.
 - Nothing an agent writes can pass as your message.
 - An agent cannot change its parent's or siblings' files or its own control
   directory (`OWNER.md`, `ERROR`). A parent shares files with a child

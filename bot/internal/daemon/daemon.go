@@ -99,30 +99,16 @@ type daemon struct {
 	// runs start, and active runs finish before it exits, up to DrainTimeout.
 	stop        context.Context
 	agents      map[string]*agent // by id; root is not among them
-	delivered   *delivered
 	settings    layout.Settings   // settings.json as read at startup
 	heldBack    map[string]string // control directories not admitted, with the reason already reported
 	admitErrs   map[string]string // the last admission error logged per control directory
-	reclaimErrs map[string]string // the last reclaim error logged per pool user
-	// unclosed holds the harness directories already logged as left alone
-	// by seed; only the poll goroutine touches it.
-	unclosed map[string]bool
-	// spoolIgnored holds the spool entries already logged as not an agent's
-	// message; only the poll goroutine touches it.
-	spoolIgnored map[string]bool
-	// unremoved holds spool files delivered but not yet removed, so they are
-	// not delivered again while they stay; only the poll goroutine touches it.
-	unremoved map[spoolKey]bool
-	// retries holds spool files whose delivery failed: the inbox name they
-	// keep for every retry, so one delivery record serves them all, and the
-	// error already logged; only the poll goroutine touches it.
-	retries map[spoolKey]*retry
-	wg      sync.WaitGroup
+	reclaimErrs map[string]string // the last deletion error logged per user
+	wg          sync.WaitGroup
 }
 
 func Run(ctx context.Context, cfg Config) error {
 	syscall.Umask(0o022)
-	d := &daemon{cfg: cfg, agents: map[string]*agent{}, heldBack: map[string]string{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, unremoved: map[spoolKey]bool{}, retries: map[spoolKey]*retry{}, stop: ctx}
+	d := &daemon{cfg: cfg, agents: map[string]*agent{}, heldBack: map[string]string{}, admitErrs: map[string]string{}, reclaimErrs: map[string]string{}, stop: ctx}
 	settings, err := layout.LoadSettings(cfg.SettingsFile())
 	if err != nil {
 		cfg.Logger.Printf("settings.json: %v; using max_agents=%d", err, settings.MaxAgents)
@@ -148,16 +134,6 @@ func Run(ctx context.Context, cfg Config) error {
 	if err := migratePool(cfg, cfg.System); err != nil {
 		cfg.Logger.Printf("pool.json: %v; left for the next start", err)
 	}
-	// Root's spools, so a person writing a message never creates them open
-	// to agents.
-	if skipped, err := d.root.fs.Private(filepath.Join(cfg.RootHome(), ".messages"), filepath.Join(cfg.RootHome(), ".messages", "agents")); err != nil {
-		cfg.Logger.Printf("root spools: %v", err)
-	} else if len(skipped) > 0 {
-		cfg.Logger.Printf("root spools not closed to others: %v", skipped)
-	}
-	if d.delivered, err = loadDelivered(cfg.DeliveredFile()); err != nil {
-		return err
-	}
 	d.runner = &plugin.Runner{PluginDir: cfg.Plugins(), CredDir: cfg.Credentials(), User: providerCred, Timeout: 15 * time.Minute, Stderr: os.Stderr}
 	ticker := time.NewTicker(cfg.Poll)
 	defer ticker.Stop()
@@ -167,7 +143,6 @@ func Run(ctx context.Context, cfg Config) error {
 		// before the first admission, and one that failed is retried.
 		d.sweep()
 		d.reconcile()
-		d.collectMessages()
 		select {
 		case <-ctx.Done():
 			d.shutdown()

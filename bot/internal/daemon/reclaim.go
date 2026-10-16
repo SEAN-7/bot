@@ -27,14 +27,16 @@ const removedMark = "removed:"
 // poll goroutine calls it.
 func (d *daemon) remove(gone []*agent) {
 	sort.SliceStable(gone, func(i, j int) bool { return depth(gone[i]) > depth(gone[j]) })
+	// All out of the tree first, so a child's deletion sees its parent
+	// as gone too and leaves the parent's inbox grants alone.
+	d.mu.Lock()
 	for _, a := range gone {
 		a.cancel(errRemoved)
+		delete(d.agents, a.id)
 	}
+	d.mu.Unlock()
 	for _, a := range gone {
 		<-a.done
-		d.mu.Lock()
-		delete(d.agents, a.id)
-		d.mu.Unlock()
 		a.fs.Close() // its children have stopped, so nothing uses it
 		a.logf("removed")
 		d.reclaim(a.user, a.id)
@@ -82,6 +84,10 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 		{"crontab", func() error { return sys.RemoveCrontab(user) }},
 		{"stop processes", func() error { return sys.StopProcesses(user) }},
 		{"temporary files", func() error { return d.sweepTmp(user) }},
+		// Its write access to its owner's inbox; a failure is logged, not
+		// retried: the uid may come back for another agent, which the
+		// label rule treats as data.
+		{"revoke", func() error { d.revokeInbox(user, agentID); return nil }},
 		{"journal", func() error {
 			gid, err := d.ancestorGid(agentID)
 			if err != nil {
@@ -98,6 +104,28 @@ func (d *daemon) reclaimSteps(user, agentID string) error {
 	}
 	d.forgetUser(user)
 	return nil
+}
+
+// revokeInbox takes the user's write access to its parent's inbox away,
+// when the parent is running: one gone too has no inbox to keep.
+func (d *daemon) revokeInbox(user, agentID string) {
+	pid := parentID(agentID)
+	if pid == "" {
+		return // root has no inbox
+	}
+	d.mu.Lock()
+	parent := d.agents[pid]
+	d.mu.Unlock()
+	if parent == nil {
+		return
+	}
+	cred, err := d.cfg.LookupUser(user)
+	if err == nil {
+		err = d.cfg.System.ShareInbox(parent.user, parent.home, credUID(cred), false)
+	}
+	if err != nil {
+		d.cfg.Logger.Printf("%s: revoke inbox access of %s: %v", parent.name, user, err)
+	}
 }
 
 // markRemoved puts the removed mark in the user's comment, once.

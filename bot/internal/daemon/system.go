@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/SEAN-7/bot/internal/osuser"
+	"github.com/SEAN-7/bot/internal/shell"
 )
 
 // System is the daemon's root-only side effects, behind an interface so tests
@@ -30,6 +32,10 @@ type System interface {
 	Users(prefix string) ([]User, error)
 	// PrepareHome creates home if missing and makes the user own it, setgid.
 	PrepareHome(user, home string) error
+	// ShareInbox grants (or revokes) uid write and search access to the
+	// inbox in home, as user, who owns it: setfacl, run as the owner so
+	// that a planted link reaches nothing root could.
+	ShareInbox(user, home string, uid int, grant bool) error
 	// SetMembers makes members the whole membership of group.
 	SetMembers(group string, members []string) error
 	EnableLinger(user string) error
@@ -142,6 +148,27 @@ func (s *execSystem) PrepareHome(user, home string) error {
 		return fmt.Errorf("%s is not a directory", home)
 	}
 	return os.Chmod(home, 0o750|fs.ModeSetgid)
+}
+
+func (s *execSystem) ShareInbox(user, home string, uid int, grant bool) error {
+	cred, err := s.lookup(user)
+	if err != nil {
+		return err
+	}
+	command := fmt.Sprintf("setfacl -x u:%d ~/inbox", uid)
+	if grant {
+		command = fmt.Sprintf("setfacl -m u:%d:wx ~/inbox", uid)
+	}
+	result, err := shell.Run(context.Background(), command, shell.Options{
+		Dir: home, Home: home, Env: shell.Env(home, user, credUID(cred)), User: cred, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		return err
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%s: exit status %d: %s", command, result.ExitCode, strings.TrimSpace(result.Output))
+	}
+	return nil
 }
 
 func (s *execSystem) SetMembers(group string, members []string) error {

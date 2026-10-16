@@ -353,34 +353,26 @@ func fileContains(path, text string) bool {
 	return err == nil && strings.Contains(string(data), text)
 }
 
-// queue writes text to dir/<UTC>.md with an atomic dot-name rename, as
-// `agent message` and `agent send` do, creating dir if needed.
-func (h *harness) queue(dir, text string) string {
+// sendOwner writes a message from root into main's inbox, as the README's
+// send function does: staged in the home, then renamed in.
+func (h *harness) sendOwner(text string) string {
 	h.t.Helper()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		h.t.Fatal(err)
-	}
-	temp := filepath.Join(dir, ".m")
+	return h.sendTo(h.mainHome, text)
+}
+
+// sendTo writes a message into the inbox of the agent at home, staged as a
+// dot-file in the home and renamed in, as any sender does.
+func (h *harness) sendTo(home, text string) string {
+	h.t.Helper()
+	temp := filepath.Join(home, ".m")
 	if err := os.WriteFile(temp, []byte(text), 0o644); err != nil {
 		h.t.Fatal(err)
 	}
-	path := filepath.Join(dir, time.Now().UTC().Format("20060102T150405.000000000Z")+".md")
+	path := filepath.Join(home, "inbox", time.Now().UTC().Format("20060102T150405.000000000Z")+".md")
 	if err := os.Rename(temp, path); err != nil {
 		h.t.Fatal(err)
 	}
 	return path
-}
-
-// sendOwner queues a message from root to main, as `agent send` does.
-func (h *harness) sendOwner(text string) string {
-	h.t.Helper()
-	return h.spoolDown(h.cfg.RootHome(), "main", text)
-}
-
-// spoolDown queues a message from the agent at fromHome to its child name.
-func (h *harness) spoolDown(fromHome, name, text string) string {
-	h.t.Helper()
-	return h.queue(filepath.Join(fromHome, ".messages", "agents", name), text)
 }
 
 // sawRecord reports whether any request message contains every fragment.
@@ -402,17 +394,18 @@ func (h *harness) sawRecord(fragments ...string) bool {
 	return false
 }
 
-// spoolCommand is the shell command an agent runs to queue text in dir
-// atomically: what `agent message` and `agent send` do.
-func spoolCommand(dir, text string) string {
-	return fmt.Sprintf("mkdir -p %[1]s && printf %%s %[2]s > %[1]s/.m && mv %[1]s/.m %[1]s/$(date -u +%%Y%%m%%dT%%H%%M%%SZ).md", dir, shellQuote(text))
+// sendMessageText is the shell command an agent runs to message its owner:
+// the file staged in its home, then moved into the owner's inbox through
+// ~/owner.
+func sendMessageText(text string) string {
+	return fmt.Sprintf("printf %%s %s > ~/.m && mv ~/.m ~/owner/$(date -u +%%Y%%m%%dT%%H%%M%%SZ).md", shellQuote(text))
 }
 
-// sendMessageText queues text for the agent's owner.
-func sendMessageText(text string) string { return spoolCommand("~/.messages", text) }
-
-// sendDownText queues text for the agent's child name.
-func sendDownText(name, text string) string { return spoolCommand("~/.messages/agents/"+name, text) }
+// sendDownText is the shell command an agent runs to message its subagent
+// name, once the subagent is admitted and its inbox exists.
+func sendDownText(name, text string) string {
+	return fmt.Sprintf("until [ -d ~/agents/%[1]s/home/inbox ]; do sleep 0.05; done; printf %%s %[2]s > ~/.m && mv ~/.m ~/agents/%[1]s/home/inbox/$(date -u +%%Y%%m%%dT%%H%%M%%SZ).md", name, shellQuote(text))
+}
 
 // Replay match strings that tell main's requests from a seeded subagent's:
 // markParent gives main this README, and a subagent's README is the seed's.

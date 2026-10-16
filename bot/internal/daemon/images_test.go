@@ -132,7 +132,7 @@ func (failingAttach) Attach(string, []byte) (string, error) {
 
 func TestImageJournalCopyFails(t *testing.T) {
 	h := newHarness(t)
-	d := &daemon{cfg: h.cfg, delivered: &delivered{pending: map[string]string{}}}
+	d := &daemon{cfg: h.cfg}
 	main := detachedMain(t, h, d)
 	if err := os.MkdirAll(filepath.Join(h.mainHome, "inbox"), 0o755); err != nil {
 		t.Fatal(err)

@@ -40,8 +40,9 @@ func TestRemovalReclaimsUser(t *testing.T) {
 		t.Fatal("tmp file kept")
 	}
 	// The mark comes first, so a crash finishes the removal; the crontab
-	// goes before the kill loop, so no cron job starts after it.
-	want := []string{"comment agent-2 removed:" + childID("c"), "unlinger agent-2", "crontab agent-2", "stop agent-2", "userdel agent-2"}
+	// goes before the kill loop, so no cron job starts after it; the
+	// parent's inbox grant is revoked before the user goes.
+	want := []string{"comment agent-2 removed:" + childID("c"), "unlinger agent-2", "crontab agent-2", "stop agent-2", "revoke agent-1 " + itoa(os.Getuid()), "userdel agent-2"}
 	if !sys.inOrder(want...) {
 		t.Fatal(sys)
 	}
@@ -77,6 +78,11 @@ func TestRemovalTakesDescendants(t *testing.T) {
 	sys := h.cfg.System.(*fakeSystem)
 	waitFor(t, "both deleted", func() bool { return onlyMain(h) })
 	if !sys.inOrder("unlinger agent-3", "userdel agent-3", "unlinger agent-2", "userdel agent-2") {
+		t.Fatal(sys)
+	}
+	// g's grant on c's inbox goes with c's user; only c's grant on main's
+	// inbox is revoked.
+	if sys.called("revoke agent-2 "+itoa(os.Getuid())) || !sys.called("revoke agent-1 "+itoa(os.Getuid())) {
 		t.Fatal(sys)
 	}
 }

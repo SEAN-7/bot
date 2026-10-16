@@ -106,7 +106,7 @@ func TestManualQuotesTheHarness(t *testing.T) {
 		"MsgOutputClipped": MsgOutputClipped, "MsgStraysFmt": MsgStraysFmt, "MsgInboxClipFmt": MsgInboxClipFmt,
 		"MsgOverflowGuardFmt": MsgOverflowGuardFmt, "MsgProviderFmt": MsgProviderFmt, "MsgConfigPrefix": MsgConfigPrefix,
 		"MsgSubagentFmt": MsgSubagentFmt, "MsgLimitFmt": MsgLimitFmt, "MsgLimitParentFmt": MsgLimitParentFmt,
-		"MsgInvalidRequestFmt": MsgInvalidRequestFmt, "MsgUndeliveredFmt": MsgUndeliveredFmt, "MsgImageShownFmt": MsgImageShownFmt,
+		"MsgInvalidRequestFmt": MsgInvalidRequestFmt, "MsgImageShownFmt": MsgImageShownFmt,
 		"MsgImageJournalFmt": MsgImageJournalFmt, "MsgBinaryFmt": MsgBinaryFmt,
 	}
 	verb := regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z%]`)

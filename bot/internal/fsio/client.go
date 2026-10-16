@@ -104,6 +104,8 @@ func (c *Client) call(req request) (response, error) {
 			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrNotExist)
 		case resp.Permission:
 			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrPermission)
+		case resp.Exist:
+			return resp, fmt.Errorf("%s: %w", resp.Err, fs.ErrExist)
 		}
 		return resp, fmt.Errorf("%s", resp.Err)
 	}
@@ -135,6 +137,15 @@ func (c *Client) WriteStaged(path, stage string, data []byte, mode os.FileMode) 
 
 func (c *Client) Rename(from, to string) error {
 	_, err := c.call(request{Op: "rename", Path: from, Path2: to})
+	return err
+}
+
+// Mkdir creates path as a directory with exactly mode, the sticky bit
+// included and the umask notwithstanding. An existing directory of the
+// helper's user is left as it is; anything else there is an error wrapping
+// fs.ErrExist. It never follows a link.
+func (c *Client) Mkdir(path string, mode os.FileMode) error {
+	_, err := c.call(request{Op: "mkdir", Path: path, Mode: uint32(mode)})
 	return err
 }
 

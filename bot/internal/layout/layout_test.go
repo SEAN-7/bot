@@ -46,7 +46,6 @@ func TestPaths(t *testing.T) {
 		l.Credentials():    "/etc/agent/credentials",
 		l.SettingsFile():   "/etc/agent/settings.json",
 		l.RootHome():       "/etc/agent",
-		l.DeliveredFile():  "/var/lib/agent/delivered.jsonl",
 		l.ProvidersCache(): "/var/lib/agent/providers.json",
 	} {
 		if got != want {
@@ -64,15 +63,5 @@ func TestPoolPaths(t *testing.T) {
 		if got != want {
 			t.Errorf("got %s want %s", got, want)
 		}
-	}
-}
-
-func TestConversationFile(t *testing.T) {
-	l := Default()
-	if got := l.ConversationFile("main"); got != "/var/log/agent/main/messages.jsonl" {
-		t.Fatalf("main: %s", got)
-	}
-	if got := l.ConversationFile("main/agents/x"); got != "/var/log/agent/main/agents/x/messages.jsonl" {
-		t.Fatalf("child: %s", got)
 	}
 }

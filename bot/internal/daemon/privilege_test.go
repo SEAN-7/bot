@@ -374,21 +374,6 @@ func TestPrivilegeHelperNotDumpable(t *testing.T) {
 	}
 }
 
-func TestPrivilegeConversationLogNotWritable(t *testing.T) {
-	h, _ := rootHarness(t)
-	log := h.cfg.ConversationFile(h.mainID)
-	h.setScript(step(sendMessage, 100), step("echo forged >> "+log+"; echo rc=$?", 100), done())
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	h.waitEnds(h.mainID, 1)
-	if tool := h.requests()[2].Messages[4].Content; !strings.Contains(tool, "rc=1") {
-		t.Fatalf("agent wrote to its conversation log: %q", tool)
-	}
-	if fileContains(log, "forged") {
-		t.Fatal("conversation log modified by the agent")
-	}
-}
-
 // TestPrivilegeSubagentIsolation: a subagent cannot write its parent's home,
 // its control directory or its OWNER.md, nor read a sibling's home; its
 // parent can read its home and journals; a sibling can read neither.
@@ -524,7 +509,8 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 		}
 	}
 	homeG := h.childHome(ctrlG)
-	for _, dir := range []string{"inbox", "inbox/processed", ".messages", ".messages/agents", "agents"} {
+	statIs(t, filepath.Join(homeA, "inbox"), uidA, gidA, fs.ModeDir|fs.ModeSetgid|fs.ModeSticky|0o770)
+	for _, dir := range []string{"inbox/processed", "agents"} {
 		statIs(t, filepath.Join(homeA, dir), uidA, gidA, fs.ModeDir|fs.ModeSetgid|0o750)
 	}
 	if err := os.Chmod(homeA, fs.ModeSetgid|0o751); err != nil {
@@ -533,7 +519,7 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	reads := func(home, key string) string {
 		var b strings.Builder
 		fmt.Fprintf(&b, "cat %s/shared.txt; echo %sok=$?", home, key)
-		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/.messages", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
+		for i, c := range []string{"ls %s/inbox", "ls %s/inbox/processed", "cat %s/inbox/processed/old.md", "ls %s/agents/s", "cat %s/agents/s/OWNER.md"} {
 			fmt.Fprintf(&b, "; "+c+"; echo %s%d=$?", home, key, i+1)
 		}
 		return b.String()
@@ -545,10 +531,10 @@ func TestPrivilegeHarnessDirsPrivate(t *testing.T) {
 	h.waitEnds(childID("a/agents/g"), 1)
 	out := h.toolOutput("g1=")
 	exitCodes(t, out, true, "gok")
-	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5", "g6")
+	exitCodes(t, out, false, "g1", "g2", "g3", "g4", "g5")
 	h.drop(h.mainHome, "go.md", "task-for-main")
 	h.waitEnds(h.mainID, 1)
-	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5", "m6")
+	exitCodes(t, h.toolOutput("m1="), true, "mok", "m1", "m2", "m3", "m4", "m5")
 }
 
 // TestPrivilegeReclaimKillsEverything: removing a control directory stops
@@ -652,45 +638,6 @@ func TestPrivilegeReusedUserCannotReadOldJournals(t *testing.T) {
 	exitCodes(t, h.toolOutput("frc="), false, "rc", "frc")
 }
 
-// TestPrivilegeSpoolFileNotOwnedIgnored: a file in a subagent's spool that
-// its user does not own is never delivered as its message and stays put.
-func TestPrivilegeSpoolFileNotOwnedIgnored(t *testing.T) {
-	h, _ := rootHarness(t)
-	h.start()
-	ctrl := rootChild(t, h, "c")
-	home := h.childHome(ctrl)
-	uid, gid := lookupIDs(t, ownerName(t, home))
-	spool := filepath.Join(home, ".messages") // seeded at admission
-	statIs(t, spool, uid, gid, fs.ModeDir|fs.ModeSetgid|0o750)
-	planted := h.queue(spool, "planted")
-	// The child's own message in the same spool is delivered.
-	temp := filepath.Join(spool, ".g")
-	os.WriteFile(temp, []byte("genuine"), 0o644)
-	os.Lchown(temp, uid, gid)
-	if err := os.Rename(temp, filepath.Join(spool, "20261012T000000Z.md")); err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "the child's own message", func() bool { return countNotes(h.mainHome, "-c.md") >= 1 })
-	time.Sleep(300 * time.Millisecond) // several polls
-	if _, err := os.Stat(planted); err != nil {
-		t.Fatalf("foreign spool file not left in place: %v", err)
-	}
-	if n := countNotes(h.mainHome, "-c.md"); n != 1 {
-		t.Fatalf("%d messages from the child", n)
-	}
-	for _, sub := range []string{"inbox", "inbox/processed"} {
-		matches, _ := filepath.Glob(filepath.Join(h.mainHome, sub, "*.md"))
-		for _, m := range matches {
-			if fileContains(m, "planted") {
-				t.Fatalf("a root-owned spool file was delivered as the child's: %s", m)
-			}
-		}
-	}
-	if !strings.Contains(h.logs.String(), "ignoring "+planted) {
-		t.Fatalf("foreign file not logged:\n%s", h.logs)
-	}
-}
-
 // TestPrivilegeChildOwnerMd: a subagent's OWNER.md owned by its parent's user
 // leads its system prompt; once the subagent's own user owns it, the
 // subagent stops with an OWNER.md ERROR until the file is fixed.
@@ -730,29 +677,5 @@ func TestPrivilegeChildOwnerMd(t *testing.T) {
 	h.waitEnds(childID("c"), 2)
 	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
 		t.Fatal("OWNER.md ERROR not cleared")
-	}
-}
-
-// TestPrivilegeRootSpoolPrivate: root's spool for main, which the daemon
-// creates in /etc/agent (which every user may traverse), cannot be listed by
-// another pool user, nor a message being written there read.
-func TestPrivilegeRootSpoolPrivate(t *testing.T) {
-	h, _ := rootHarness(t)
-	h.start()
-	spool := filepath.Join(h.cfg.RootHome(), ".messages", "agents", "main")
-	waitFor(t, "root's spool for main", func() bool { _, err := os.Stat(spool); return err == nil })
-	// A message still being written: a dot name, which delivery leaves alone.
-	staged := filepath.Join(spool, ".m.md")
-	if err := os.WriteFile(staged, []byte("owner secret"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	uid, gid := lookupIDs(t, h.cfg.UserPrefix+"2")
-	for _, args := range [][]string{{"ls", spool}, {"cat", staged}} {
-		cmd := exec.Command(args[0], args[1:]...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
-		out, err := cmd.CombinedOutput()
-		if err == nil || strings.Contains(string(out), "owner secret") {
-			t.Fatalf("%s as %s: %v %q", strings.Join(args, " "), h.cfg.UserPrefix+"2", err, out)
-		}
 	}
 }

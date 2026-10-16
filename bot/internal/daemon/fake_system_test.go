@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 )
@@ -132,6 +133,14 @@ func (s *fakeSystem) PrepareHome(user, home string) error {
 		return err
 	}
 	return os.MkdirAll(home, 0o755)
+}
+
+func (s *fakeSystem) ShareInbox(user, home string, uid int, grant bool) error {
+	verb := "revoke"
+	if grant {
+		verb = "grant"
+	}
+	return s.record(verb + " " + user + " " + strconv.Itoa(uid))
 }
 
 func (s *fakeSystem) SetMembers(group string, members []string) error {

@@ -1,7 +1,6 @@
 package daemon
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -125,10 +124,10 @@ func TestParentChildReport(t *testing.T) {
 	h.markParent()
 	h.drop(h.mainHome, "go.md", "make a child")
 	waitFor(t, "parent receiving the report", func() bool {
-		return h.sawRecord(`"file":"inbox/processed/`, `-c.md","from":"agents/c","content":"report: hi"}`)
+		return h.sawRecord(`"file":"inbox/processed/`, `"content":"report: hi"}`)
 	})
-	if !h.sawRecord(`-owner.md","from":"owner","content":"child-task: say hi"}`) {
-		t.Fatal("child task not delivered from owner")
+	if !h.sawRecord(`"content":"child-task: say hi"}`) {
+		t.Fatal("child task not delivered")
 	}
 	if records := h.waitEnds(childID("c"), 1); lastEnd(records) != "done" {
 		t.Fatalf("child end %v", records)
@@ -225,11 +224,18 @@ func TestAdmissionSeedsHome(t *testing.T) {
 		}
 	}
 	// The harness's directories are its ancestors' to read (the home's
-	// group), not its children's, should it let them through its home.
-	for _, p := range []string{"inbox", "inbox/processed", "agents", ".messages", ".messages/agents"} {
+	// group), not its children's, should it let them through its home. The
+	// inbox is also its ancestors' to write into, and sticky.
+	if info, err := os.Lstat(filepath.Join(home, "inbox")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&fs.ModeSticky == 0 {
+		t.Fatalf("inbox: %v %v", info, err)
+	}
+	for _, p := range []string{"inbox/processed", "agents"} {
 		if info, err := os.Lstat(filepath.Join(home, p)); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
 			t.Fatalf("%s: %v %v", p, info, err)
 		}
+	}
+	if _, err := os.Lstat(filepath.Join(home, ".messages")); !os.IsNotExist(err) {
+		t.Fatalf("a spool was created: %v", err)
 	}
 	h.drop(home, "task.md", "work")
 	h.waitEnds(childID("c"), 1) // journals are keyed by the path from root
@@ -246,30 +252,25 @@ func TestAdmissionSeedsHome(t *testing.T) {
 }
 
 // A harness directory that is not a real directory the agent owns (a link,
-// a file) is left alone, no link followed, and named in the service log once
-// per daemon run, so a directory left open is visible, also when admission
-// is retried.
-func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
+// a file) keeps the agent from being admitted: logged once, no link
+// followed, nothing replaced, and admitted once the agent's owner puts a
+// directory there.
+func TestHarnessDirNotADirectoryHoldsAdmission(t *testing.T) {
 	h := newHarness(t)
-	sys := h.cfg.System.(*fakeSystem)
 	h.start()
 	h.stop()
-	processed, spools := filepath.Join(h.mainHome, "inbox", "processed"), filepath.Join(h.mainHome, ".messages", "agents")
+	processed := filepath.Join(h.mainHome, "inbox", "processed")
 	outside := t.TempDir()
 	os.Chmod(outside, 0o755)
 	os.RemoveAll(processed)
 	os.Symlink(outside, processed)
-	os.RemoveAll(spools)
-	os.WriteFile(spools, nil, 0o644)
-	sys.setFail("linger agent-1", errors.New("linger failed"))
 	h.run()
-	waitFor(t, "admission retried", func() bool { return strings.Count(sys.String(), "linger agent-1") >= 4 })
-	sys.setFail("linger agent-1", nil)
-	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
-	for _, p := range []string{processed, spools} {
-		if n := strings.Count(h.logs.String(), "main: not closed to others: "+p+" "); n != 1 {
-			t.Errorf("%s logged %d times:\n%s", p, n, h.logs)
-		}
+	time.Sleep(300 * time.Millisecond)
+	if n := strings.Count(h.logs.String(), "main: not started: seed home: "+processed+" is not a directory this user owns"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, h.logs)
+	}
+	if strings.Count(h.logs.String(), "main: admitted as agent-1") != 1 {
+		t.Fatal("admitted with a link in place of a harness directory")
 	}
 	if info, _ := os.Lstat(processed); info.Mode()&fs.ModeSymlink == 0 {
 		t.Errorf("inbox/processed link replaced: %v", info.Mode())
@@ -277,11 +278,9 @@ func TestSkippedHarnessDirLoggedOnce(t *testing.T) {
 	if info, _ := os.Stat(outside); info.Mode().Perm() != 0o755 {
 		t.Errorf("followed a link: %v", info.Mode())
 	}
-	// The empty file is also a message in main's spool, which the daemon
-	// may have delivered and removed by now; it must not become a directory.
-	if info, err := os.Lstat(spools); err == nil && !info.Mode().IsRegular() {
-		t.Errorf(".messages/agents file replaced: %v", info.Mode())
-	}
+	os.Remove(processed)
+	os.Mkdir(processed, 0o750)
+	waitFor(t, "main admitted again", func() bool { return strings.Count(h.logs.String(), "main: admitted as agent-1") == 2 })
 }
 
 func TestConfigErrorGoesToControlDir(t *testing.T) {
@@ -361,6 +360,10 @@ func TestGrandchildAdmitted(t *testing.T) {
 	}
 	sys := h.cfg.System.(*fakeSystem)
 	if !sys.called("members agent-3 agent-2,agent-1") {
+		t.Fatal(sys)
+	}
+	// The grandchild may write into its parent's inbox, the parent into main's.
+	if !sys.inOrder("grant agent-1 "+itoa(os.Getuid()), "grant agent-2 "+itoa(os.Getuid())) {
 		t.Fatal(sys)
 	}
 	// The grandchild's id is its path from root, so its journals sit inside
@@ -598,46 +601,8 @@ func TestOwnerMessageFromRoot(t *testing.T) {
 	if from := inboxRecordFrom(h.waitEnds("main", 1), "hi"); from != "owner" {
 		t.Fatalf("labelled %q", from)
 	}
-	log := readRecords(h.cfg.ConversationFile("main"))
-	if len(log) != 1 || log[0]["from"] != "owner" || log[0]["text"] != "hi" {
-		t.Fatalf("conversation %v", log)
-	}
 	if _, err := os.Stat(spooled); !os.IsNotExist(err) {
-		t.Fatalf("spool file kept: %v", err)
-	}
-}
-
-// TestTopLevelMessageLoggedOnly: a top-level agent's message to its owner is
-// logged in its conversation and delivered to no inbox: root has none.
-func TestTopLevelMessageLoggedOnly(t *testing.T) {
-	h := newHarness(t, step(sendMessageText("tests pass"), 100), done())
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	waitFor(t, "message logged", func() bool {
-		log := readRecords(h.cfg.ConversationFile("main"))
-		return len(log) == 1 && log[0]["from"] == "agent" && log[0]["text"] == "tests pass"
-	})
-	waitFor(t, "spool emptied", func() bool {
-		entries, _ := os.ReadDir(filepath.Join(h.mainHome, ".messages"))
-		for _, e := range entries {
-			if !e.IsDir() { // agents/, the down spools, is seeded
-				return false
-			}
-		}
-		return true
-	})
-	if log := readRecords(h.cfg.ConversationFile("main")); log[0]["agent"] != nil {
-		t.Fatalf("record names the agent: %v", log[0])
-	}
-	time.Sleep(100 * time.Millisecond)
-	filepath.WalkDir(h.root, func(path string, e fs.DirEntry, err error) error {
-		if err == nil && strings.HasSuffix(path, "-main.md") {
-			t.Errorf("delivered to an inbox: %s", path)
-		}
-		return nil
-	})
-	if _, err := os.Stat(filepath.Join(h.cfg.RootHome(), "inbox")); !os.IsNotExist(err) {
-		t.Fatalf("root got an inbox: %v", err)
+		t.Fatalf("inbox file kept: %v", err)
 	}
 }
 

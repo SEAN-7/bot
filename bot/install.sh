@@ -134,7 +134,7 @@ main() {
 	# /etc/agent is traversable (not listable) so agent-provider can reach plugins/;
 	# credentials/, agents/ and settings.json stay root-only.
 	install -d -m 711 -o root -g root /etc/agent
-	install -d -m 700 -o root -g root /etc/agent/credentials /etc/agent/agents /etc/agent/.messages /etc/agent/.messages/agents
+	install -d -m 700 -o root -g root /etc/agent/credentials /etc/agent/agents
 	install -d -m 750 -o root -g agent-provider /etc/agent/plugins
 	install -d -m 755 -o root -g root /var/lib/agent /var/log/agent
 	[ -f /etc/agent/settings.json ] || printf '{"max_agents": 16}\n' >/etc/agent/settings.json

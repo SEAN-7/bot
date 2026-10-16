@@ -119,3 +119,44 @@ func TestOrphanedUserRemovedOnStart(t *testing.T) {
 		t.Fatal("orphan's home kept")
 	}
 }
+
+// A subagent's ~/owner links to its owner's inbox, where it writes its
+// messages; a top-level agent has none, since root has no inbox.
+func TestOwnerLinkForChild(t *testing.T) {
+	h := newHarness(t, doneFor(childMark))
+	h.start()
+	ctrl := makeChild(t, h, "c", true)
+	home := h.childHome(ctrl)
+	h.drop(home, "go.md", "go")
+	h.waitEnds(childID("c"), 1)
+	if target, err := os.Readlink(filepath.Join(home, "owner")); err != nil || target != filepath.Join(h.mainHome, "inbox") {
+		t.Fatalf("owner link %q %v", target, err)
+	}
+	if _, err := os.Lstat(filepath.Join(h.mainHome, "owner")); !os.IsNotExist(err) {
+		t.Fatalf("main, root's child, has an owner link: %v", err)
+	}
+}
+
+// Admission fails, and is retried, while the child cannot be given write
+// access to its owner's inbox: a child whose messages can never arrive
+// must not run.
+func TestGrantFailureHoldsAdmission(t *testing.T) {
+	h := newHarness(t)
+	h.start()
+	sys := h.cfg.System.(*fakeSystem)
+	grant := "grant agent-1 " + itoa(os.Getuid())
+	sys.setFail(grant, errors.New("setfacl: command not found"))
+	ctrl := makeChild(t, h, "c", true)
+	time.Sleep(300 * time.Millisecond)
+	if _, err := os.Lstat(filepath.Join(ctrl, "home")); !os.IsNotExist(err) {
+		t.Fatal("admitted without write access to its owner's inbox")
+	}
+	if n := strings.Count(h.logs.String(), "not started: share inbox: setfacl"); n != 1 {
+		t.Fatalf("logged %d times:\n%s", n, h.logs)
+	}
+	sys.setFail(grant, nil)
+	h.childHome(ctrl)
+	if !sys.inOrder("useradd agent-2 "+childID("c"), grant, "linger agent-2") {
+		t.Fatal(sys)
+	}
+}

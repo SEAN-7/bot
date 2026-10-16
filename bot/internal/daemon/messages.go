@@ -23,10 +23,7 @@ const (
 	MsgSubagentFmt       = "Subagent %s did not start: %s"
 	MsgLimitFmt          = "Agent limit reached (max_agents=%d); this agent was not started."
 	MsgLimitParentFmt    = "Subagent %s was not started: agent limit reached (max_agents=%d)."
-	MsgUndeliveredFmt    = "Message to %s dropped: there is no subagent by that name."
 	MsgImageShownFmt     = "[%s, %d bytes, shown below]"
 	MsgImageJournalFmt   = "[image not shown: its journal copy could not be saved: %v. File: %s]"
 	MsgBinaryFmt         = "[binary file not shown: %s, %d bytes. File: %s]"
-	MsgTruncatedUp       = "Message to your owner was truncated to 64 KiB."
-	MsgTruncatedDownFmt  = "Message to %s was truncated to 64 KiB."
 )

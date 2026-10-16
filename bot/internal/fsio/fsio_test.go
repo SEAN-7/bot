@@ -483,3 +483,32 @@ func TestWriteStaged(t *testing.T) {
 		t.Fatal("wrote through a missing staging directory")
 	}
 }
+
+// Mkdir creates a directory with exactly the mode given, the umask
+// notwithstanding, leaves an existing directory of ours as it is, and
+// refuses anything else at the path.
+func TestMkdir(t *testing.T) {
+	c, dir := start(t), t.TempDir()
+	path := func(p string) string { return filepath.Join(dir, p) }
+	if err := c.Mkdir(path("inbox"), 0o770|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(path("inbox")); err != nil || !info.IsDir() || info.Mode().Perm() != 0o770 || info.Mode()&os.ModeSticky == 0 {
+		t.Fatalf("inbox: %v %v", info.Mode(), err)
+	}
+	os.Chmod(path("inbox"), 0o755)
+	if err := c.Mkdir(path("inbox"), 0o770|os.ModeSticky); err != nil {
+		t.Fatalf("existing directory: %v", err)
+	}
+	if info, _ := os.Lstat(path("inbox")); info.Mode().Perm() != 0o755 {
+		t.Fatalf("existing directory changed: %v", info.Mode())
+	}
+	os.WriteFile(path("file"), []byte("x"), 0o644)
+	if err := c.Mkdir(path("file"), 0o750); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("file in the way: %v", err)
+	}
+	os.Symlink(t.TempDir(), path("linked"))
+	if err := c.Mkdir(path("linked"), 0o750); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("link in the way: %v", err)
+	}
+}

@@ -44,16 +44,18 @@ never both.
   notes are embedded in the binary and written as a read-only directory,
   so they always describe the running version. What a provider caches and
   what it costs comes from its plugin's `describe`.
-- **Everything an agent does with the harness is a file.** Messages are
-  files in spools, a subagent is a directory holding a `config.json`, and
-  journals, providers and the manual are files to read. The binary is the
-  daemon, its file helper and root's plugin installer.
+- **Everything an agent does with the harness is a file.** A message is a
+  file the sender writes into the recipient's inbox, a subagent is a
+  directory holding a `config.json`, and journals, providers and the manual
+  are files to read. The binary is the daemon, its file helper and root's
+  plugin installer.
 - **Upgrades are not announced.** Nothing is written to an agent for an
   upgrade; the manual and each run's `start` record carry the version.
 - **The repository is public.** Installs download release assets without
   credentials and trust only the checksums pinned in `install.sh`.
-- **Conversations are pull, not push.** The daemon logs both directions in
-  a root-owned log; alerts are something the agent builds.
+- **Conversations are pull, not push.** A top-level agent's replies are
+  files in its home that the human reads; alerts are something the agent
+  builds.
 - **The harness presents files; it does not convert or check them.** A
   file reaches the model as text, or as an image when its type is one the
   model declares; anything else (a PDF) arrives as a note with its path.
@@ -69,17 +71,15 @@ never both.
 | Path | Owner, mode | Contents |
 | --- | --- | --- |
 | `/usr/local/bin/agent` | root, 0755 | The harness binary |
-| `/etc/agent/` | root, 0711 | Root's place in the tree: `settings.json` (0600), `credentials/`, `plugins/`, `agents/`, `.messages/` |
+| `/etc/agent/` | root, 0711 | Root's place in the tree: `settings.json` (0600), `credentials/`, `plugins/`, `agents/` |
 | `/etc/agent/credentials/NAME.env` | root, 0600 | Plugin settings as `KEY=value` lines |
 | `/etc/agent/plugins/` | root:agent-provider, 0750 | Plugin executables (same owner and mode) |
 | `/etc/agent/agents/NAME/` | root, 0700 | Root's control directory for its child NAME |
 | `/etc/agent/agents/NAME/OWNER.md` | root, 0644 | The human's standing instructions for NAME; optional |
-| `/etc/agent/.messages/agents/NAME/` | root, 0700 | Root's spool for NAME; files 0600 |
-| `/var/lib/agent/delivered.jsonl` | root, 0600 | Delivered messages: agent id, file name, SHA-256, sender |
 | `/var/lib/agent/providers.json` | root, 0644 | Cached `describe` output, no secrets |
 | `/var/lib/agent/manual/` | root, 0755 | `manual.md`, `notes.md` and `version` (files 0644) |
 | `/var/lib/agent/version` | root, 0644 | Installed version, written by `install.sh` |
-| `/var/log/agent/` | root, 0755 | Journals and conversation logs |
+| `/var/log/agent/` | root, 0755 | Journals |
 | `/home/agent-N/` | agent-N:agent-N, 2750 | An agent user's home, created at admission and removed with the user |
 
 `settings.json` holds `max_agents` (default 16), which bounds the whole
@@ -128,16 +128,15 @@ environment. No agent can read `/etc/agent` or another user's environment.
 `agent daemon` is one systemd service (`Restart=always`) for the whole tree.
 An agent's id is its path from root (`main`, `main/agents/research`); it
 keys journals, delivery records and the user's comment field. Root has
-control directories and spools but no loop, inbox, journal or owner.
+control directories but no loop, inbox, journal or owner.
 
 - **Startup.** Require root. Resolve the provider user, start root's
   helper, write the manual (see Manual), migrate a `pool.json` left by a
   release before 0.9.0 (its active entries' users get their agent ids as
   comments, every other `agent-N` user is deleted, and the file goes; the
-  code leaves in 0.10.0), create root's spools
-  `/etc/agent/.messages` and `.messages/agents` where missing (`private`),
-  then poll about once a second: read the agent users from the passwd
-  file, finish any deletion in progress, walk the tree, collect messages.
+  code leaves in 0.10.0), then poll about once a second: read the agent
+  users from the passwd file, finish any deletion in progress, walk the
+  tree.
 - **Discovery.** Walk the tree breadth-first, listing each node's `agents/`
   through its own helper without following symlinks. A control directory is
   a real directory owned by the node's user in an `agents/` that is itself
@@ -152,14 +151,15 @@ control directories and spools but no loop, inbox, journal or owner.
   `max_agents` users exist, else create the user `agent-N` for the lowest
   N no user has, its id in the comment. Prepare the home (2750, setgid);
   start the user's helper; clear what a previous user of the name may have
-  left in the home; set the group's members; create the
-  harness directories where missing (`private`; anything else of that name
-  is left alone and logged once); write the seed `README.md` where
-  missing; move the starting `config.json` into the home unless it
-  already has one; enable lingering; create the journal directory; write
-  the `home` link (never recreating a control directory that was removed);
-  create the parent's spool `.messages/agents/NAME` (`private`; a failure
-  is logged). A failed step is retried next poll. The control directory's
+  left in the home; set the group's members; create the harness
+  directories where missing (`mkdir` with their modes: `inbox` 1770, the
+  rest 0750; an existing directory of the user's is left as it is,
+  anything else of that name fails the step); write the seed `README.md`
+  where missing; grant the user `wx` on its parent's inbox (see Messages;
+  not for root's children); move the starting `config.json` into the home
+  unless it already has one; enable lingering; create the journal
+  directory; write the `home` link (never recreating a control directory
+  that was removed). A failed step is retried next poll. The control directory's
   device and inode are part of the agent's identity, so renaming or
   recreating it makes a new agent. A deleted `home` link is written again
   only at the next admission (a restart), so `rm -r` of a control directory
@@ -209,9 +209,11 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
   the agent's home directory and renamed into the inbox, so a run never
   collects one half written. A crash leaves at worst a dot-file in the
   home.
-- **Labels.** An inbox file is read (up to 16 MiB) and hashed; it is
-  labelled `owner` or `agents/NAME` only if the agent path, file name and
-  SHA-256 match a `delivered.jsonl` record with that sender.
+- **Labels.** An inbox file is labelled by the uid the helper's listing
+  reports as its owner: the parent's uid (root's for a top-level agent) is
+  `owner`, the uid of a running child of the agent is `agents/NAME`, and
+  anything else is `data`. The kernel set the uid, so nothing an agent
+  writes carries another's label.
 - **Images.** Detected with `http.DetectContentType` and shown when the
   type is in the model's `image_types`; a file longer than the 16 MiB read
   limit is a binary note. Size and decoding limits are the plugin's. A
@@ -229,24 +231,25 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
 
 ## Messages
 
-What agents send and receive is the manual's "Messages". Delivery:
+What agents send and receive is the manual's "Messages". The daemon is not
+in the path: the sender writes the file into the recipient's inbox, and
+the kernel's record of who wrote it is the label (see Labels).
 
-- **Up** is `~/.messages/`; **down** is `.messages/agents/NAME/` under the
-  sender's home (root: under `/etc/agent`). Root has no up spool.
-- Each poll, the daemon reads every spool through its owner's helper:
-  regular non-dot files owned by the spool's user, in name order; anything
-  else is logged and ignored. The spool's location identifies the sender.
-  Up from a top-level agent is appended to its conversation log only; a
-  message for a child that can no longer be admitted is dropped with a note
-  to the sender (root: the service log). A file over 64 KiB is read to its
-  first 64 KiB, delivered with "[message truncated]", and the sender is
-  told with a note once it is delivered (root: the service log).
-- The `delivered.jsonl` record is written first, then the inbox file, then
-  the conversation log, then the spool file is removed, so a crash can only
-  duplicate a message. A failing delivery is retried every poll under the
-  same name.
-- **Conversation logs** are `messages.jsonl` in the agent's journal
-  directory, root-owned 0640 in its group, written only by the daemon.
+- **Down.** An agent's `inbox/` is 1770 in its own group, whose members are
+  its ancestors (see Groups), so its parent writes straight into it; the
+  sticky bit keeps anyone from removing or renaming another's file. Root
+  writes into a top-level agent's inbox as root.
+- **Up.** At admission the daemon grants the child's uid `wx` on the
+  parent's `inbox/` by running `setfacl -m u:UID:wx ~/inbox` as the parent
+  through `shell.Run` (never as root: a planted link would reach nothing
+  the parent could not), and each run links `~/owner` in the child's home
+  to that inbox. A grant that fails holds admission, logged once and
+  retried. At removal the grant is revoked the same way, when the parent is
+  still running; a failure is logged and not retried, since a uid that
+  comes back for another agent is labelled `data` anyway. Root has no
+  inbox, so a top-level agent has no `~/owner`.
+- Nothing is logged: the inbound side is in the recipient's journal, with
+  its label.
 
 ## Journal
 
@@ -358,8 +361,7 @@ the `agent` binary and the release's plugins. It:
    0.4.1 (upgrade with the v0.4.1 `install.sh` first).
 3. Stops the service (runs finish first), installs the binary, keeping the
    previous one to restore if anything fails before the service starts, and
-   creates `agent-provider` and the directories above, root's spools
-   `/etc/agent/.messages` and `.messages/agents` included (0700).
+   creates `agent-provider` and the directories above.
 4. Fresh install: asks for a provider, downloads it, verifies it against
    the pinned checksum, installs it with `agent provider install` (which
    prompts for its settings), and asks for a model. Upgrade: reinstalls

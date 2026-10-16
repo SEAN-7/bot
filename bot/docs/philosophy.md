@@ -30,7 +30,7 @@ The harness provides a few guarantees; the agent provides all policy.
 - A subagent cannot change its parent's or siblings' files; its ancestors
   can always read its journals.
 - No agent has sudo, and none can read provider credentials or alter
-  journals or conversation logs.
+  journals.
 - All daemon file access inside agent homes happens with an agent's
   privileges, so a planted symlink reaches nothing that agent couldn't.
 - Every model message and command result is journaled; an interrupted run,

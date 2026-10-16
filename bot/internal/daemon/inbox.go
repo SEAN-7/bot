@@ -13,12 +13,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/proto"
 	"github.com/SEAN-7/bot/internal/shell"
 )
 
-// hashLimit bounds how much of an inbox file is read for labelling.
-const hashLimit = 16 << 20
+// inboxReadLimit bounds how much of an inbox file is read: a text file is
+// clipped far below it, and an image longer than it is not shown.
+const inboxReadLimit = 16 << 20
 
 type inboxRecord struct {
 	File    string `json:"file"`
@@ -72,21 +74,21 @@ func (a *agent) pending() ([]string, error) {
 }
 
 // deliverable lists the inbox files a run collects: every regular file, a
-// dot-file too, by name. Directories (processed/, the staging directory)
-// are skipped.
-func (a *agent) deliverable() ([]string, error) {
+// dot-file too, by name, with the uid that wrote each. Directories
+// (processed/) are skipped.
+func (a *agent) deliverable() ([]fsio.Entry, error) {
 	entries, err := a.fs.List(filepath.Join(a.home, "inbox"))
 	if err != nil {
 		return nil, err
 	}
-	var names []string
+	var files []fsio.Entry
 	for _, e := range entries {
 		if e.Type == "file" {
-			names = append(names, e.Name)
+			files = append(files, e)
 		}
 	}
-	sort.Strings(names)
-	return names, nil
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	return files, nil
 }
 
 // collectInbox reads, journals and moves every pending file into
@@ -95,8 +97,8 @@ func (a *agent) deliverable() ([]string, error) {
 // model accepts.
 func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
-	names, err := a.deliverable()
-	if err != nil || len(names) == 0 {
+	files, err := a.deliverable()
+	if err != nil || len(files) == 0 {
 		return nil, nil, err
 	}
 	processed := filepath.Join(a.home, "inbox", "processed")
@@ -111,9 +113,10 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 	}
 	var records []inboxRecord
 	var shown []proto.Image
-	for _, name := range names {
+	for _, e := range files {
+		name := e.Name
 		path := filepath.Join(a.home, "inbox", name)
-		data, size, err := a.fs.Read(path, hashLimit)
+		data, size, err := a.fs.Read(path, inboxReadLimit)
 		readable := err == nil
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -151,7 +154,7 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 				image = map[string]any{"media_type": img.MediaType, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
 			}
 		}
-		r := inboxRecord{File: file, From: a.label(name, hash), Content: content}
+		r := inboxRecord{File: file, From: a.label(e.UID), Content: content}
 		fields := map[string]any{"file": r.File, "from": r.From, "size": size, "content": r.Content}
 		if image != nil {
 			fields["image"] = image
@@ -169,11 +172,21 @@ func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []
 	return records, shown, nil
 }
 
-// label is the sender the daemon recorded when it delivered this file
-// ("owner" or "agents/NAME"), and "data" for anything else.
-func (a *agent) label(name, sum string) string {
-	if from := a.d.delivered.take(a.id, name, sum); from != "" {
-		return from
+// label is who wrote an inbox file, by its owner uid, which the kernel set:
+// "owner" for the agent's parent (root for a top-level agent), "agents/NAME"
+// for its running subagent NAME, and "data" for anyone else, the agent and
+// the harness's own notes included.
+func (a *agent) label(uid int) string {
+	if uid == a.parent.uid() {
+		return "owner"
+	}
+	d := a.d
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, c := range d.agents {
+		if c.parent == a && c.uid() == uid {
+			return "agents/" + filepath.Base(c.ctrl)
+		}
 	}
 	return "data"
 }
