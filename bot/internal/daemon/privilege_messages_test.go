@@ -52,10 +52,22 @@ func TestPrivilegeLabels(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.sendOwner("hello")
-	records := h.waitEnds(h.mainID, 1)
+	// Each file wakes main, so they may arrive over several runs.
 	want := map[string]string{"hello": "owner", "report": "agents/c", "note to self": "data", "stranger": "data"}
+	labels := func() map[string]string {
+		got := map[string]string{}
+		for _, run := range h.runs(h.mainID) {
+			for content := range want {
+				if from := inboxRecordFrom(readRecords(run), content); from != "" {
+					got[content] = from
+				}
+			}
+		}
+		return got
+	}
+	waitFor(t, "every file collected", func() bool { return len(labels()) == len(want) })
 	for content, from := range want {
-		if got := inboxRecordFrom(records, content); got != from {
+		if got := labels()[content]; got != from {
 			t.Errorf("%q labelled %q, want %q", content, got, from)
 		}
 	}
