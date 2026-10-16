@@ -46,7 +46,6 @@ type Config struct {
 	DrainTimeout   time.Duration // how long a stop waits for active runs
 	OutputClip     int
 	InboxClip      int
-	ImageBudget    int // bytes of image data one run may show
 	Logger         *log.Logger
 
 	Version     string            // this harness's version, recorded in each run's start record
@@ -71,7 +70,6 @@ func DefaultConfig(self string) Config {
 		DrainTimeout:   15 * time.Minute,
 		OutputClip:     16 << 10,
 		InboxClip:      64 << 10,
-		ImageBudget:    20 << 20,
 		Logger:         log.New(os.Stderr, "", log.LstdFlags),
 		Version:        version.Version,
 		ManualFiles:    map[string]string{"manual.md": docs.Manual, "notes.md": notes.Text, "version": version.Version + "\n"},

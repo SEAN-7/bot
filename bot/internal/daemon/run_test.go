@@ -252,7 +252,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.WriteFile(filepath.Join(inbox, "a.md"), []byte("a"), 0o644)
-	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+	if records, _, err := main.collectInbox(j, nil); err != nil || len(records) != 1 {
 		t.Fatalf("removed: %v %v", records, err)
 	}
 	if info, err := os.Lstat(processed); err != nil || !info.IsDir() || info.Mode().Perm() != 0o750 {
@@ -262,7 +262,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	os.RemoveAll(processed)
 	os.Symlink(elsewhere, processed)
 	os.WriteFile(filepath.Join(inbox, "b.md"), []byte("b"), 0o644)
-	if records, _, err := main.collectInbox(j, nil, 0); err != nil || len(records) != 1 {
+	if records, _, err := main.collectInbox(j, nil); err != nil || len(records) != 1 {
 		t.Fatalf("link: %v %v", records, err)
 	}
 	if _, err := os.Stat(filepath.Join(elsewhere, "b.md")); err != nil {
@@ -271,7 +271,7 @@ func TestInboxProcessedRecreatedOrFollowed(t *testing.T) {
 	os.Remove(processed)
 	os.WriteFile(processed, nil, 0o644)
 	os.WriteFile(filepath.Join(inbox, "c.md"), []byte("c"), 0o644)
-	if _, _, err := main.collectInbox(j, nil, 0); err == nil || recorded != 2 {
+	if _, _, err := main.collectInbox(j, nil); err == nil || recorded != 2 {
 		t.Fatalf("a file: %d records, %v", recorded, err)
 	}
 }

@@ -112,10 +112,7 @@ func TestManualQuotesTheHarness(t *testing.T) {
 		"MsgOverflowGuardFmt": MsgOverflowGuardFmt, "MsgProviderFmt": MsgProviderFmt, "MsgConfigPrefix": MsgConfigPrefix,
 		"MsgSubagentFmt": MsgSubagentFmt, "MsgLimitFmt": MsgLimitFmt, "MsgLimitParentFmt": MsgLimitParentFmt,
 		"MsgInvalidRequestFmt": MsgInvalidRequestFmt, "MsgUndeliveredFmt": MsgUndeliveredFmt, "MsgImageShownFmt": MsgImageShownFmt,
-		"MsgImageTooLargeFmt": MsgImageTooLargeFmt, "MsgImageTooWideFmt": MsgImageTooWideFmt,
-		"MsgImageUndecodableFmt": MsgImageUndecodableFmt, "MsgImageTypeFmt": MsgImageTypeFmt,
-		"MsgImageNoModelFmt": MsgImageNoModelFmt, "MsgImageJournalFmt": MsgImageJournalFmt,
-		"MsgImageBudgetFmt": MsgImageBudgetFmt, "MsgBinaryFmt": MsgBinaryFmt,
+		"MsgImageJournalFmt": MsgImageJournalFmt, "MsgBinaryFmt": MsgBinaryFmt,
 	}
 	verb := regexp.MustCompile(`%[-+# 0-9.]*[a-zA-Z%]`)
 	for name, s := range strs {

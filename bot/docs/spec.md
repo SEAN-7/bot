@@ -52,9 +52,10 @@ never both.
   credentials and trust only the checksums pinned in `install.sh`.
 - **Conversations are pull, not push.** The daemon logs both directions in
   a root-owned log; alerts are something the agent builds.
-- **The harness presents files; it does not convert them.** A file reaches
-  the model as text or an image only in a form the model accepts natively;
-  anything else (a PDF) arrives as a note with its path.
+- **The harness presents files; it does not convert or check them.** A
+  file reaches the model as text, or as an image when its type is one the
+  model declares; anything else (a PDF) arrives as a note with its path.
+  Image limits belong to the plugin, which knows its provider's.
 - **`OWNER.md` precedence is stated, not enforced.** The harness enforces
   only the privilege model.
 - **The cached prefix changes rarely.** The system prompt, the owner
@@ -212,11 +213,12 @@ What a run does, as the agent sees it, is the manual's "Runs". How:
 - **Labels.** An inbox file is read (up to 16 MiB) and hashed; it is
   labelled `owner` or `agents/NAME` only if the agent path, file name and
   SHA-256 match a `delivered.jsonl` record with that sender.
-- **Images.** Detected with `http.DetectContentType`; dimensions are read
-  from the header before the whole image is decoded. A shown image is
-  copied into the journal directory first; one whose copy cannot be saved
-  is not shown. The anthropic API's 32 MB request limit is reported by its
-  plugin as `context_overflow`.
+- **Images.** Detected with `http.DetectContentType` and shown when the
+  type is in the model's `image_types`; a file longer than the 16 MiB read
+  limit is a binary note. Size and decoding limits are the plugin's. A
+  shown image is copied into the journal directory first; one whose copy
+  cannot be saved is not shown. The anthropic API's 32 MB request limit is
+  reported by its plugin as `context_overflow`.
 - **First-call guard.** A `context_overflow` on a run's first call writes
   `ERROR` instead of the reset note and waits for new input, so resets
   cannot loop.

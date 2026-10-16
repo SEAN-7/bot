@@ -128,7 +128,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		a.logf("manual link: %v", err)
 	}
 	system := []proto.Segment{{Text: SystemPrompt + ownerSegment(owner)}, {Text: a.readSegment("README.md")}}
-	records, shown, err := a.collectInbox(j, imageTypes, d.cfg.ImageBudget)
+	records, shown, err := a.collectInbox(j, imageTypes)
 	if err != nil {
 		a.logf("inbox: %v", err)
 		j.Record("note", map[string]any{"text": "inbox: " + err.Error()})
@@ -181,7 +181,7 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 		var more []inboxRecord
 		var moreImages []proto.Image
 		if !d.draining() { // during a stop, new messages wait for the next daemon
-			if more, moreImages, err = a.collectInbox(j, imageTypes, d.cfg.ImageBudget-imageBytes(messages)); err != nil {
+			if more, moreImages, err = a.collectInbox(j, imageTypes); err != nil {
 				a.logf("inbox: %v", err)
 			}
 		}

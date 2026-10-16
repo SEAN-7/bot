@@ -36,7 +36,7 @@ func TestInboxImageShown(t *testing.T) {
 	if img.File != "inbox/processed/photo.png" || img.MediaType != "image/png" || !bytes.Equal(img.Data, png) {
 		t.Fatalf("image %s %s, %d bytes", img.File, img.MediaType, len(img.Data))
 	}
-	if !strings.Contains(msg.Content, "[image/png 40x30,") {
+	if !strings.Contains(msg.Content, "[image/png, "+itoa(len(png))+" bytes, shown below]") {
 		t.Fatalf("content %q", msg.Content)
 	}
 	shown, _ := inboxRecordFor(t, records, img.File)["image"].(map[string]any)
@@ -104,7 +104,7 @@ func TestImagesNeedCapableModel(t *testing.T) {
 	h.drop(h.mainHome, "photo.png", string(encodePNG(4, 4)))
 	h.waitEnds(h.mainID, 1)
 	msg := h.requests()[0].Messages[0]
-	if len(msg.Images) != 0 || !strings.Contains(msg.Content, "does not accept images") {
+	if len(msg.Images) != 0 || !strings.Contains(msg.Content, "[binary file not shown: image/png, ") {
 		t.Fatalf("%d images, content %q", len(msg.Images), msg.Content)
 	}
 }
@@ -119,59 +119,6 @@ func TestTextRunSendsNoImagesField(t *testing.T) {
 	}
 	if fileContains(h.reqLog, `"images"`) {
 		t.Fatal(`request log holds an "images" field`)
-	}
-}
-
-func TestImageBudgetWithinCollection(t *testing.T) {
-	h := newHarness(t, step("sleep 0.5", 100), done())
-	a, b, c := encodePNG(4, 4), encodeJPEG(64, 64), encodePNG(2, 2)
-	if len(b) <= len(c) {
-		t.Fatalf("b.jpg (%d bytes) must be larger than c.png (%d bytes)", len(b), len(c))
-	}
-	h.cfg.ImageBudget = len(a) + len(c)
-	h.start()
-	h.drop(h.mainHome, "go.md", "go")
-	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
-	h.drop(h.mainHome, "a.png", string(a))
-	h.drop(h.mainHome, "b.jpg", string(b))
-	h.drop(h.mainHome, "c.png", string(c))
-	records := h.waitEnds(h.mainID, 1)
-	msgs := h.requests()[1].Messages
-	last := msgs[len(msgs)-1]
-	var files []string
-	for _, img := range last.Images {
-		files = append(files, img.File)
-	}
-	if strings.Join(files, " ") != "inbox/processed/a.png inbox/processed/c.png" {
-		t.Fatalf("image files %v", files)
-	}
-	note := fmt.Sprintf(MsgImageBudgetFmt, filepath.Join(h.mainHome, "inbox/processed/b.jpg"))
-	if rec := inboxRecordFor(t, records, "inbox/processed/b.jpg"); rec["content"] != note || rec["image"] != nil {
-		t.Fatalf("b.jpg record %v, want content %q and no image", rec, note)
-	}
-}
-
-// Images shown earlier in a run count against its budget; the next run
-// starts with the whole budget.
-func TestImageBudgetPerRun(t *testing.T) {
-	h := newHarness(t, step("sleep 0.5", 100), done(), done())
-	a, b := encodePNG(4, 4), encodePNG(5, 5)
-	h.cfg.ImageBudget = len(a) + len(b) - 1 // b fits alone, not after a
-	h.start()
-	h.drop(h.mainHome, "a.png", string(a))
-	waitFor(t, "first request", func() bool { return len(h.requests()) >= 1 })
-	h.drop(h.mainHome, "b.png", string(b))
-	h.waitEnds(h.mainID, 1)
-	msgs := h.requests()[1].Messages
-	last := msgs[len(msgs)-1]
-	if len(msgs[0].Images) != 1 || len(last.Images) != 0 || !strings.Contains(last.Content, "would exceed 20 MiB") {
-		t.Fatalf("first run: %d then %d images, content %q", len(msgs[0].Images), len(last.Images), last.Content)
-	}
-	h.drop(h.mainHome, "c.png", string(b))
-	h.waitEnds(h.mainID, 2)
-	msgs = h.requests()[2].Messages
-	if len(msgs) != 1 || len(msgs[0].Images) != 1 {
-		t.Fatalf("second run: %+v", msgs)
 	}
 }
 
@@ -191,7 +138,7 @@ func TestImageJournalCopyFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.drop(h.mainHome, "photo.png", string(encodePNG(4, 4)))
-	records, shown, err := main.collectInbox(failingAttach{}, []string{"image/png"}, h.cfg.ImageBudget)
+	records, shown, err := main.collectInbox(failingAttach{}, []string{"image/png"})
 	if err != nil {
 		t.Fatal(err)
 	}

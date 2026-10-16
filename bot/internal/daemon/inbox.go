@@ -89,15 +89,11 @@ func (a *agent) deliverable() ([]string, error) {
 	return names, nil
 }
 
-// imageExt names a shown image's journal copy. Its keys are the image types
-// the daemon can check, and so the only ones it shows.
-var imageExt = map[string]string{"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif"}
-
 // collectInbox reads, journals and moves every pending file into
 // inbox/processed/, returning the records to show the model and, in record
 // order, the images shown with them. imageTypes is the image media types the
-// model accepts, budget how many more bytes of images the run may show.
-func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inboxRecord, []proto.Image, error) {
+// model accepts.
+func (a *agent) collectInbox(j recorder, imageTypes []string) ([]inboxRecord, []proto.Image, error) {
 	d := a.d
 	names, err := a.deliverable()
 	if err != nil || len(names) == 0 {
@@ -134,7 +130,7 @@ func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inb
 			target = fmt.Sprintf("%s-%d", name, i)
 		}
 		file := "inbox/processed/" + target
-		text, content, img := true, "", (*shownImage)(nil)
+		text, content, img := true, "", (*proto.Image)(nil)
 		if readable {
 			text, content, img = classify(data, size, filepath.Join(a.home, file), imageTypes)
 		}
@@ -145,17 +141,14 @@ func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inb
 				content += "\n" + fmt.Sprintf(MsgInboxClipFmt, filepath.Join(a.home, file))
 			}
 		}
-		if img != nil && len(img.Data) > budget {
-			content, img = fmt.Sprintf(MsgImageBudgetFmt, filepath.Join(a.home, file)), nil
-		}
 		var image map[string]any
 		if img != nil {
-			copyPath, err := j.Attach(imageExt[img.MediaType], img.Data)
+			copyPath, err := j.Attach(strings.TrimPrefix(img.MediaType, "image/"), img.Data)
 			if err != nil {
 				a.logf("journal copy of %s: %v", file, err)
 				content, img = fmt.Sprintf(MsgImageJournalFmt, err, filepath.Join(a.home, file)), nil
 			} else {
-				image = map[string]any{"media_type": img.MediaType, "width": img.Width, "height": img.Height, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
+				image = map[string]any{"media_type": img.MediaType, "bytes": len(img.Data), "sha256": hash, "copy": copyPath}
 			}
 		}
 		r := inboxRecord{File: file, From: a.label(name, hash), Content: content}
@@ -169,22 +162,11 @@ func (a *agent) collectInbox(j recorder, imageTypes []string, budget int) ([]inb
 		}
 		records = append(records, r)
 		if img != nil {
-			budget -= len(img.Data)
-			shown = append(shown, proto.Image{File: file, MediaType: img.MediaType, Data: img.Data})
+			img.File = file
+			shown = append(shown, *img)
 		}
 	}
 	return records, shown, nil
-}
-
-// imageBytes is how many bytes of images messages show.
-func imageBytes(messages []proto.Message) int {
-	n := 0
-	for _, m := range messages {
-		for _, img := range m.Images {
-			n += len(img.Data)
-		}
-	}
-	return n
 }
 
 // label is the sender the daemon recorded when it delivered this file

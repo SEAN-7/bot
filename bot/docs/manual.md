@@ -132,26 +132,17 @@ How the provider caches these between calls, and what that costs, is the
   `data`. Content is a JSON string, so no file can forge the field.
 - Content over 64 KiB is clipped and followed by "[file clipped; full
   file: PATH]".
-- A JPEG, PNG or GIF up to 5 MiB and 2000 px a side, of a type your model
-  accepts (`image_types` in `/var/lib/agent/providers.json`), is shown to you as
-  an image; its record's content is "[image/png 1280x960, 169027 bytes,
-  shown below]". Shown images are resent with every call, so a run shows
-  at most 20 MiB of them. Images are never resized.
-- Anything else arrives as a note naming the file:
-  - "[image not shown: N bytes is over the 5 MiB limit; resize it and copy
-    the result into ~/inbox/. File: PATH]"
-  - "[image not shown: WxH is over 2000 px a side; resize it and copy the
-    result into ~/inbox/. File: PATH]"
-  - "[image not shown: could not decode it: ERROR. File: PATH]"
-  - "[image not shown: TYPE is not supported, only TYPES; convert it and
-    copy the result into ~/inbox/. File: PATH]"
-  - "[image not shown: the model does not accept images. File: PATH]"
-  - "[image not shown: its journal copy could not be saved: ERROR. File:
-    PATH]"
-  - "[image not shown: images in this run would exceed 20 MiB; resize it,
-    or copy it into ~/inbox/ again after this run ends. File: PATH]"
-  - "[binary file not shown: TYPE, N bytes. File: PATH]", for other
-    non-UTF-8 content, such as a PDF.
+- A file whose type is one your model accepts (`image_types` in
+  `/var/lib/agent/providers.json`) is shown to you as an image, as it is;
+  its record's content is "[image/png, 169027 bytes, shown below]". Shown
+  images are resent with every call. The harness checks nothing else about
+  an image: what your provider does with one it cannot take is in its
+  plugin's own words. One whose journal copy cannot be saved arrives as
+  "[image not shown: its journal copy could not be saved: ERROR. File:
+  PATH]".
+- Any other non-UTF-8 file, such as a PDF, an image of a type your model
+  does not accept, or one over 16 MiB, arrives as "[binary file not shown:
+  TYPE, N bytes. File: PATH]".
 
 **Ending a run.** A reply without a command ends the run; the reply goes
 only to your journal. A run also ends when the context is too large (see
@@ -274,8 +265,7 @@ this precedence; it does not enforce it.
   siblings. You cannot change it.
 - One JSONL file per run, named for its UTC start time. Records: `start`
   (config and harness version), `inbox` (each file with its label; a shown
-  image also gets `image: {media_type, width, height, bytes, sha256,
-  copy}`), `assistant` (the reply, its command and wait, and the call's
+  image also gets `image: {media_type, bytes, sha256, copy}`), `assistant` (the reply, its command and wait, and the call's
   `usage`: `input_tokens`, `output_tokens`, `cache_read_tokens`,
   `cache_write_tokens`), `result` (exactly what the model got), `note` and
   `end` (with `reason`: `done`, `context`, `removed` and others).
