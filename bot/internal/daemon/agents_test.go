@@ -841,49 +841,6 @@ func TestRootChildHoldBackLoggedOnly(t *testing.T) {
 	noRootInbox(t, h)
 }
 
-// A starting config.json over the size limit is reported in the control
-// directory's ERROR and once to the parent, and takes no user; a smaller one
-// is admitted and clears the ERROR.
-func TestOversizedStartingConfigReported(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := makeChild(t, h, "big", false)
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), oversizedConfig())
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	errorFile := filepath.Join(ctrl, "ERROR")
-	waitFor(t, "ERROR", func() bool { return fileContains(errorFile, text) })
-	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
-	time.Sleep(200 * time.Millisecond)
-	want := fmt.Sprintf(MsgSubagentFmt, childID("big"), text)
-	if notes := noteTexts(h.mainHome, "-subagent-error.md"); len(notes) != 1 || notes[0] != want+"\n" {
-		t.Fatalf("parent notes %q, want %q", notes, want)
-	}
-	if got := fileText(t, errorFile); got != text+"\n" {
-		t.Fatalf("ERROR %q", got)
-	}
-	if sys := h.cfg.System.(*fakeSystem); sys.called("home agent-2") {
-		t.Fatalf("a user was prepared: %v", sys)
-	}
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), testConfig)
-	h.childHome(ctrl)
-	waitFor(t, "ERROR cleared", func() bool { _, err := os.Lstat(errorFile); return os.IsNotExist(err) })
-}
-
-// For root's child, an oversized starting config.json goes to its ERROR and
-// the service log only.
-func TestOversizedRootChildConfigLoggedOnly(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := filepath.Join(h.cfg.RootHome(), "agents", "big")
-	os.Mkdir(ctrl, 0o700)
-	writeAtomic(t, filepath.Join(ctrl, "config.json"), oversizedConfig())
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	waitFor(t, "ERROR", func() bool { return fileContains(filepath.Join(ctrl, "ERROR"), text) })
-	waitFor(t, "log", func() bool { return strings.Contains(h.logs.String(), "big: not started: "+text) })
-	time.Sleep(100 * time.Millisecond)
-	noRootInbox(t, h)
-}
-
 // An oversized ~/config.json is reported as too large, not as the JSON
 // error of the part that was read.
 func TestOversizedOwnConfigReported(t *testing.T) {
@@ -893,7 +850,7 @@ func TestOversizedOwnConfigReported(t *testing.T) {
 	h.drop(h.mainHome, "go.md", "go")
 	errorFile := filepath.Join(h.mainCtrl, "ERROR")
 	waitFor(t, "ERROR", func() bool { return fileContains(errorFile, MsgConfigPrefix) })
-	if got := fileText(t, errorFile); got != MsgConfigPrefix+MsgConfigTooLarge+"\n" {
+	if got := fileText(t, errorFile); got != MsgConfigPrefix+"larger than 1 MiB\n" {
 		t.Fatalf("ERROR %q", got)
 	}
 	noRootInbox(t, h)

@@ -18,11 +18,11 @@ const (
 	MsgInboxClipFmt        = "[file clipped; full file: %s]"
 	MsgOverflowGuardFmt    = "Context is over the model's limit at the start of a run; not starting. Reduce README.md or the inbox files. Provider: %v"
 	MsgProviderFmt         = "Provider failing since %s: %s"
+	MsgInvalidRequestFmt   = "Provider rejected the request: %v"
 	MsgConfigPrefix        = "config.json: "
 	MsgSubagentFmt         = "Subagent %s did not start: %s"
 	MsgLimitFmt            = "Agent limit reached (max_agents=%d); this agent was not started."
 	MsgLimitParentFmt      = "Subagent %s was not started: agent limit reached (max_agents=%d)."
-	MsgConfigTooLarge      = "larger than 1 MiB" // after MsgConfigPrefix
 	MsgUndeliveredFmt      = "Message to %s dropped: there is no subagent by that name."
 	MsgImageShownFmt       = "[%s %dx%d, %d bytes, shown below]"
 	MsgImageTooLargeFmt    = "[image not shown: %d bytes is over the 5 MiB limit; resize it and copy the result into ~/inbox/. File: %s]"

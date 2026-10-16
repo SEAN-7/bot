@@ -111,7 +111,7 @@ func TestManualQuotesTheHarness(t *testing.T) {
 		"MsgOutputClipped": MsgOutputClipped, "MsgStraysFmt": MsgStraysFmt, "MsgInboxClipFmt": MsgInboxClipFmt,
 		"MsgOverflowGuardFmt": MsgOverflowGuardFmt, "MsgProviderFmt": MsgProviderFmt, "MsgConfigPrefix": MsgConfigPrefix,
 		"MsgSubagentFmt": MsgSubagentFmt, "MsgLimitFmt": MsgLimitFmt, "MsgLimitParentFmt": MsgLimitParentFmt,
-		"MsgConfigTooLarge": MsgConfigTooLarge, "MsgUndeliveredFmt": MsgUndeliveredFmt, "MsgImageShownFmt": MsgImageShownFmt,
+		"MsgInvalidRequestFmt": MsgInvalidRequestFmt, "MsgUndeliveredFmt": MsgUndeliveredFmt, "MsgImageShownFmt": MsgImageShownFmt,
 		"MsgImageTooLargeFmt": MsgImageTooLargeFmt, "MsgImageTooWideFmt": MsgImageTooWideFmt,
 		"MsgImageUndecodableFmt": MsgImageUndecodableFmt, "MsgImageTypeFmt": MsgImageTypeFmt,
 		"MsgImageNoModelFmt": MsgImageNoModelFmt, "MsgImageJournalFmt": MsgImageJournalFmt,

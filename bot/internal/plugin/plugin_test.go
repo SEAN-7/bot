@@ -86,30 +86,29 @@ func TestInstalledAndBadName(t *testing.T) {
 	}
 }
 
+// Validate checks the provider and the model against the providers cache;
+// options are the plugin's to judge.
 func TestValidate(t *testing.T) {
 	d, err := runner(t).Describe(context.Background(), "replay")
 	if err != nil {
 		t.Fatal(err)
 	}
-	installed := []string{"anthropic", "replay"}
+	providers := map[string]proto.DescribeResponse{"anthropic": {}, "replay": d}
 	cases := []struct {
 		config string
 		want   string
 	}{
 		{`{"provider":"replay","model":"replay-1","options":{"style":"a","budget":3}}`, ""},
+		{`{"provider":"replay","model":"replay-1","options":{"color":"red","budget":99}}`, ""},
 		{`{"provider":"nope","model":"replay-1"}`, `unknown provider "nope" (installed: anthropic, replay)`},
 		{`{"provider":"replay","model":"m"}`, `unknown model "m" for provider "replay" (available: replay-1)`},
-		{`{"provider":"replay","model":"replay-1","options":{"color":"red"}}`, `unknown option "color" for model "replay-1"`},
-		{`{"provider":"replay","model":"replay-1","options":{"style":"c"}}`, `option "style": value c not allowed (allowed: a, b)`},
-		{`{"provider":"replay","model":"replay-1","options":{"budget":11}}`, `option "budget": value 11 out of range [1, 10]`},
-		{`{"provider":"replay","model":"replay-1","options":{"budget":2.5}}`, `option "budget": value 2.5 out of range [1, 10]`},
 	}
 	for _, c := range cases {
 		cfg, err := ParseConfig([]byte(c.config))
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = Validate(cfg, installed, d)
+		err = Validate(cfg, providers)
 		if c.want == "" && err != nil || c.want != "" && (err == nil || err.Error() != c.want) {
 			t.Errorf("%s: got %v want %q", c.config, err, c.want)
 		}

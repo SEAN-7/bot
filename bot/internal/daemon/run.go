@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -34,47 +33,26 @@ func (a *agent) logf(format string, args ...any) {
 	a.d.cfg.Logger.Printf("%s: %s", a.name, fmt.Sprintf(format, args...))
 }
 
-// errConfig marks a problem the agent must fix in config.json, as opposed
-// to a provider failure, which is retried.
-type errConfig struct{ error }
-
-// gate reads ~/config.json and validates it against the provider's describe.
-// A config error is reported once per distinct error, and the agent waits
-// until the file changes; provider failures are retried.
-func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse, bool) {
+// gate reads ~/config.json and checks it against the providers cache: an
+// installed provider and one of its models. No plugin runs. A config error
+// is reported once per distinct error, and the agent waits until the file
+// changes.
+func (a *agent) gate() (plugin.Config, proto.DescribeResponse, bool) {
 	d := a.d
-	var describe proto.DescribeResponse
+	var cfg plugin.Config
+	var providers map[string]proto.DescribeResponse
 	data, size, err := a.fs.Read(filepath.Join(a.home, "config.json"), configLimit)
 	if err == nil && size > int64(len(data)) {
-		err = errConfigTooLarge // not the JSON error of the part read
+		err = errors.New("larger than 1 MiB") // not the JSON error of the part read
 	}
-	var cfg plugin.Config
 	if err == nil {
 		cfg, err = plugin.ParseConfig(data)
 	}
 	if err == nil {
-		err = a.retry(ctx, func() error {
-			installed, err := d.runner.Installed()
-			if err != nil {
-				return err
-			}
-			if !slices.Contains(installed, cfg.Provider) {
-				return errConfig{plugin.Validate(cfg, installed, describe)}
-			}
-			if describe, err = d.runner.Describe(ctx, cfg.Provider); err != nil {
-				return err
-			}
-			if err := plugin.Validate(cfg, installed, describe); err != nil {
-				return errConfig{err}
-			}
-			return nil
-		})
-		var bad errConfig
-		if errors.As(err, &bad) {
-			err = bad.error
-		} else if err != nil {
-			return cfg, describe, false // stopped while retrying
-		}
+		providers, err = plugin.LoadProviders(d.cfg.ProvidersCache())
+	}
+	if err == nil {
+		err = plugin.Validate(cfg, providers)
 	}
 	if err != nil {
 		text := MsgConfigPrefix + err.Error()
@@ -85,13 +63,13 @@ func (a *agent) gate(ctx context.Context) (plugin.Config, proto.DescribeResponse
 			}
 		}
 		a.reportError(text)
-		return cfg, describe, false
+		return cfg, proto.DescribeResponse{}, false
 	}
-	return cfg, describe, true
+	return cfg, providers[cfg.Provider], true
 }
 
 func (a *agent) run(ctx context.Context) {
-	cfg, describe, ok := a.gate(ctx)
+	cfg, describe, ok := a.gate()
 	if !ok {
 		return
 	}
@@ -172,6 +150,10 @@ func (a *agent) steps(ctx context.Context, j *journal.Writer, cfg plugin.Config,
 			}
 			return "context"
 		}
+		if plugin.IsInvalidRequest(err) {
+			a.reportError(fmt.Sprintf(MsgInvalidRequestFmt, err))
+			return "invalid"
+		}
 		if err != nil {
 			return a.stopReason(ctx)
 		}
@@ -221,16 +203,16 @@ func (a *agent) complete(ctx context.Context, cfg plugin.Config, system []proto.
 	return resp, err
 }
 
-// retry runs call until it succeeds, returns an errConfig, or the agent is
-// stopped, with delays doubling from RetryBase to RetryMax. Persistent
-// provider failures are reported in ERROR and the log, never the inbox.
+// retry runs call until it succeeds, fails in a way a retry cannot fix, or
+// the agent is stopped, with delays doubling from RetryBase to RetryMax.
+// Persistent provider failures are reported in ERROR and the log, never the
+// inbox.
 func (a *agent) retry(ctx context.Context, call func() error) error {
 	delay := a.d.cfg.RetryBase
 	var since time.Time
 	for failures := 0; ; failures++ {
 		err := call()
-		var bad errConfig
-		if err == nil || errors.As(err, &bad) || plugin.IsContextOverflow(err) {
+		if err == nil || plugin.IsContextOverflow(err) || plugin.IsInvalidRequest(err) {
 			if failures >= a.d.cfg.ErrorAfter {
 				a.clearError()
 			}

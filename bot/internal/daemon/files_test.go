@@ -5,57 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
-
-// writeProvidersCache writes providers.json as root's describe would, with
-// the replay plugin's one model.
-func writeProvidersCache(t *testing.T, h *harness) {
-	t.Helper()
-	cache := `{"providers":{"replay":{"models":[{"id":"replay-1"}]}}}`
-	if err := os.WriteFile(h.cfg.ProvidersCache(), []byte(cache), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// An invalid starting config.json takes no user: the parent is told and can
-// fix it in place, and the agent is admitted once it is valid.
-func TestInvalidStartingConfigHeldBack(t *testing.T) {
-	h := newHarness(t)
-	writeProvidersCache(t, h)
-	h.start()
-	ctrl := filepath.Join(h.mainHome, "agents", "c")
-	os.MkdirAll(ctrl, 0o755)
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
-	errorFile := filepath.Join(ctrl, "ERROR")
-	waitFor(t, "ERROR", func() bool { return fileContains(errorFile, `config.json: unknown model "nope"`) })
-	waitFor(t, "parent note", func() bool { return countNotes(h.mainHome, "-subagent-error.md") == 1 })
-	time.Sleep(100 * time.Millisecond)
-	if n := countNotes(h.mainHome, "-subagent-error.md"); n != 1 {
-		t.Fatalf("%d parent notes", n)
-	}
-	if _, err := os.Lstat(filepath.Join(ctrl, "home")); !os.IsNotExist(err) {
-		t.Fatal("admitted with an invalid config")
-	}
-	if strings.Contains(poolJSON(h), childID("c")) {
-		t.Fatalf("a user was assigned: %s", poolJSON(h))
-	}
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(testConfig), 0o644)
-	h.childHome(ctrl)
-	// Admission clears it just after writing the home link.
-	waitFor(t, "ERROR cleared at admission", func() bool { _, err := os.Stat(errorFile); return os.IsNotExist(err) })
-}
-
-// Without a providers cache the starting config is not checked: the first
-// run's own check reports a problem.
-func TestStartingConfigUncheckedWithoutCache(t *testing.T) {
-	h := newHarness(t)
-	h.start()
-	ctrl := filepath.Join(h.mainHome, "agents", "c")
-	os.MkdirAll(ctrl, 0o755)
-	os.WriteFile(filepath.Join(ctrl, "config.json"), []byte(`{"provider":"replay","model":"nope"}`), 0o644)
-	h.childHome(ctrl)
-}
 
 // Admission creates the parent's spool for the child, and startup root's
 // spools, closed to others.

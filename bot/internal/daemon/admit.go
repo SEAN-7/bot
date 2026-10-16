@@ -8,12 +8,8 @@ import (
 
 	"github.com/SEAN-7/bot/internal/fsio"
 	"github.com/SEAN-7/bot/internal/journal"
-	"github.com/SEAN-7/bot/internal/plugin"
 	"github.com/SEAN-7/bot/internal/seed"
 )
-
-// errConfigTooLarge: a starting config.json over configLimit.
-var errConfigTooLarge = errors.New(MsgConfigTooLarge)
 
 // admit gives the agent at ctrl a pool user and a home, and starts its
 // loop. It returns nil when ctrl is not an agent (yet), or the agent cannot
@@ -39,20 +35,6 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return nil // it may still be being written
 	}
 	keep := held != ""
-	if !keep {
-		// A new agent's config.json is adopted: one too large to adopt
-		// takes no user.
-		if e, err := parent.fs.Stat(filepath.Join(ctrl, "config.json")); err == nil && e.Size > configLimit {
-			d.configTooLarge(parent, ctrl, id)
-			return nil
-		}
-		// An invalid one takes no user either: the parent can still fix it
-		// in place, which it cannot once it has moved into the home.
-		if text := d.startingConfigError(parent, ctrl); text != "" {
-			d.notStarted(parent, ctrl, id, text, fmt.Sprintf(MsgSubagentFmt, id, text))
-			return nil
-		}
-	}
 	limit := min(len(d.pool.users), d.settings.MaxAgents)
 	user, err := d.pool.assign(id, limit)
 	if err != nil {
@@ -109,9 +91,6 @@ func (d *daemon) admit(parent *agent, ctrl string) *agent {
 		return fail("seed home", err)
 	}
 	if err := c.adoptConfig(); err != nil {
-		if errors.Is(err, errConfigTooLarge) {
-			d.configTooLarge(parent, ctrl, id)
-		}
 		return fail("config", err)
 	}
 	if err := d.cfg.System.EnableLinger(user); err != nil {
@@ -160,26 +139,6 @@ func (d *daemon) admission(parent *agent, ctrl, held string) (bool, error) {
 		return false, err
 	}
 	return e.Type == "file", nil
-}
-
-// startingConfigError checks a new agent's starting config.json, read
-// through its parent's helper, against the providers cache: the check each
-// run makes, without running plugins from the poll. It returns the ERROR
-// text, or "" when the config is valid or cannot be checked yet (no cache,
-// or the file could not be read: admission or the first run reports it).
-func (d *daemon) startingConfigError(parent *agent, ctrl string) string {
-	providers, err := plugin.LoadProviders(d.cfg.ProvidersCache())
-	if err != nil {
-		return ""
-	}
-	data, _, err := parent.fs.Read(filepath.Join(ctrl, "config.json"), configLimit)
-	if err != nil {
-		return ""
-	}
-	if _, err := plugin.ValidateCached(data, providers); err != nil {
-		return MsgConfigPrefix + err.Error()
-	}
-	return ""
 }
 
 // harnessDirs are the directories the harness keeps in a home, parents
@@ -249,7 +208,7 @@ func (c *agent) adoptConfig() error {
 	}
 	data, size, err := c.parent.fs.Read(from, configLimit)
 	if err == nil && size > int64(len(data)) {
-		err = errConfigTooLarge
+		err = errors.New("config.json is larger than 1 MiB; shrink it in place")
 	}
 	if err == nil {
 		err = c.fs.Write(to, data, 0o644)
@@ -277,12 +236,6 @@ func (d *daemon) admitFailed(ctrl, name, step string, err error) {
 func (d *daemon) holdBack(parent *agent, ctrl, name string) {
 	n := d.settings.MaxAgents
 	d.notStarted(parent, ctrl, name, fmt.Sprintf(MsgLimitFmt, n), fmt.Sprintf(MsgLimitParentFmt, name, n))
-}
-
-// configTooLarge reports a starting config.json over configLimit.
-func (d *daemon) configTooLarge(parent *agent, ctrl, name string) {
-	text := MsgConfigPrefix + MsgConfigTooLarge
-	d.notStarted(parent, ctrl, name, text, fmt.Sprintf(MsgSubagentFmt, name, text))
 }
 
 // notStarted reports an agent that is not admitted for a reason its parent

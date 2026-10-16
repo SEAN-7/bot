@@ -108,6 +108,9 @@ func newHarness(t *testing.T, steps ...string) *harness {
 	h.mainID, h.mainHome = "main", l.PoolHome("agent-1")
 	h.setScript(steps...)
 	os.WriteFile(filepath.Join(l.Credentials(), "replay.env"), plugin.FormatEnv(map[string]string{"REPLAY_SCRIPT": h.script, "REPLAY_LOG": h.reqLog}), 0o600)
+	// providers.json as `agent provider install` writes it: the gate checks
+	// config.json against it and never runs the plugin.
+	os.WriteFile(l.ProvidersCache(), []byte(`{"providers":{"replay":`+replayHeader+`}}`), 0o644)
 	self, _ := os.Executable()
 	h.cfg = DefaultConfig(self)
 	h.cfg.Layout = l

@@ -146,12 +146,6 @@ directories and spools but no loop, inbox, journal or owner.
   and retried next poll. A known agent is kept unless its control directory
   is certainly gone. A `config.json` in an admitted agent's control directory
   is ignored.
-- **Starting config.** Before a new agent is given a user, its starting
-  `config.json` is read through the parent's helper and checked against
-  `providers.json` (no plugin runs from the poll; without the cache the
-  check is skipped and the first run's gate reports). An invalid one, like
-  one over 1 MiB, keeps the agent out (see Admission errors) and is checked
-  again each poll, so the parent fixes it in place.
 - **Admission.** Take the lowest free pool user and record it in
   `pool.json`; prepare the home (2750, setgid); start the user's helper;
   clear what a previous holder left; set the group's members; create the
@@ -166,10 +160,11 @@ directories and spools but no loop, inbox, journal or owner.
   recreating it makes a new agent. A deleted `home` link is written again
   only at the next admission (a restart), so `rm -r` of a control directory
   never races it.
-- **Admission errors.** An invalid starting `config.json` or one over 1 MiB,
-  or no free pool user ("Agent limit reached"), keeps the agent out: the reason goes to its
-  `ERROR` and the service log, and the parent's inbox is told once per
-  reason (root's children: the service log only).
+- **Admission errors.** No free pool user ("Agent limit reached") keeps the
+  agent out: the reason goes to its `ERROR` and the service log, and the
+  parent's inbox is told once per reason (root's children: the service log
+  only). A starting `config.json` over 1 MiB fails adoption, which is
+  logged once and retried each poll until the parent shrinks it in place.
 - **Runs.** One goroutine per agent, one run at a time.
 - **Graceful stop.** On SIGTERM, start no new runs or deliveries and let
   active runs finish for up to 15 minutes; any still going are interrupted
@@ -273,9 +268,11 @@ owner or mode.
 
 ## Configuration validation
 
-Each run checks `config.json` against the cached `describe` output. On
-failure the reason also goes to the service log; root's children's
-failures go to the log only.
+Each run checks `config.json` against `providers.json`, the cached
+`describe` output: the provider is installed and the model is one of its.
+No plugin runs at a run's start; options are the plugin's to reject, with
+`kind: "invalid_request"`. On failure the reason also goes to the service
+log; root's children's failures go to the log only.
 
 ## Plugin protocol (version 1)
 
@@ -311,7 +308,10 @@ The response is `{text, command, wait, usage: {input_tokens, output_tokens,
 cache_read_tokens, cache_write_tokens}, opaque}` or `{error: {message,
 kind}}`. `wait` is the model's argument passed through unchanged (absent
 means the default). `kind: "context_overflow"` is not retried: it ends the
-run with a reset, or triggers the first-call guard. The daemon assigns
+run with a reset, or triggers the first-call guard. `kind:
+"invalid_request"` (the provider rejected the request as malformed) is not
+retried either: it ends the run with reason `invalid` and the message goes
+to `ERROR`. The daemon assigns
 `call_id`; `opaque` is stored on the assistant message and returned in later
 requests (reasoning blocks, signatures). A plugin returns at most one
 command and disables parallel tool calls.

@@ -172,7 +172,9 @@ the context in use.
 **Provider failures.** A failed call is retried with delays doubling from
 2 seconds to 10 minutes. After 3 consecutive failures, "Provider failing
 since TIME: ERROR" is written to your `ERROR`; the next successful call
-clears it.
+clears it. A call the provider rejects as invalid (a bad option, say) is
+not retried: the run ends, "Provider rejected the request: ERROR" is
+written to your `ERROR`, and the next successful call clears it.
 
 **Restarts.** When the harness stops (an upgrade or a restart), it starts
 no new runs and lets running ones finish for up to 15 minutes; any still
@@ -195,18 +197,20 @@ run or a call succeeds; it holds the most recent cause:
   (see Configuration);
 - "OWNER.md: " and the reason (see Owner's instructions);
 - "Agent limit reached (max_agents=N); this agent was not started.";
-- "Provider failing since TIME: ERROR" (see Runs).
+- "Provider failing since TIME: ERROR" (see Runs);
+- "Provider rejected the request: ERROR" (see Runs).
 
 ## Configuration
 
 - `config.json` is `{"provider": "P", "model": "M", "options": {...}}`. Each
-  run checks it against the installed providers: an installed provider,
-  one of its models, and only that model's options with allowed values. A
-  missing, unreadable, invalid or over-1-MiB file stops your runs: the
-  reason goes to your `ERROR` ("config.json: " and the reason), and an
-  agent owner is told once per distinct content ("Subagent NAME did not
-  start: config.json: REASON"). The check is retried when the
-  file changes; a valid change takes effect at your next run.
+  run checks it against `/var/lib/agent/providers.json`: an installed
+  provider and one of its models. Options are passed to the provider as
+  they are; what it rejects comes back as "Provider rejected the request"
+  (see Runs). A missing, unreadable, invalid or over-1-MiB file stops your
+  runs: the reason goes to your `ERROR` ("config.json: " and the reason),
+  and an agent owner is told once per distinct reason ("Subagent NAME did
+  not start: config.json: REASON"). The check is made each time you would
+  run; a valid change takes effect at your next run.
 - `/var/lib/agent/providers.json` (owned by root, readable by all) is
   `{"providers": {NAME: {...}}}` for each installed provider: `models` (`id`, `context_tokens` where
   known, `image_types`, `options` with their allowed values or integer
@@ -290,12 +294,12 @@ this precedence; it does not enforce it.
   plain directory name, not starting with a dot, without control
   characters. A directory without a `config.json` is not a subagent, and
   nothing happens.
-- When `config.json` appears it is checked against
-  `/var/lib/agent/providers.json`, as each run checks yours. If it is
-  invalid or over 1 MiB, no pool user is assigned: `~/agents/NAME/ERROR`
-  holds "config.json: " and the reason, you are told once ("Subagent NAME
-  did not start: config.json: REASON"), and you can fix the file in place.
-- A valid one is admitted, usually within a second: a pool user is
+- Its `config.json` is checked at its first run, as yours is at each of
+  yours. If it is invalid, `~/agents/NAME/ERROR` holds "config.json: " and
+  the reason and you are told once ("Subagent NAME did not start:
+  config.json: REASON"); the file has moved into its home by then, so you
+  fix it by removing and recreating the directory.
+- A directory holding a `config.json` is admitted, usually within a second: a pool user is
   assigned, its home is prepared with the seed `README.md`, its
   `config.json` moves into that home (one written into `~/agents/NAME/`
   later is ignored), `~/agents/NAME/home` links to it, and

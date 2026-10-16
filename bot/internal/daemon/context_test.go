@@ -123,6 +123,49 @@ func TestStaleProviderErrorCleared(t *testing.T) {
 	}
 }
 
+// A request the provider rejects as invalid ends the run, is not retried,
+// and is reported in ERROR until a call succeeds.
+func TestInvalidRequestEndsRun(t *testing.T) {
+	h := newHarness(t, `{"error":"bad option","error_kind":"invalid_request"}`, done())
+	h.start()
+	h.drop(h.mainHome, "go.md", "go")
+	if end := lastEnd(h.waitEnds(h.mainID, 1)); end != "invalid" {
+		t.Fatalf("run ended %q", end)
+	}
+	errorFile := filepath.Join(h.mainCtrl, "ERROR")
+	if got := fileText(t, errorFile); got != "Provider rejected the request: bad option\n" {
+		t.Fatalf("ERROR %q", got)
+	}
+	if n := len(h.requests()); n != 1 {
+		t.Fatalf("%d requests for a rejected one", n)
+	}
+	h.drop(h.mainHome, "again.md", "again")
+	if end := lastEnd(h.waitEnds(h.mainID, 2)); end != "done" {
+		t.Fatalf("second run ended %q", end)
+	}
+	if _, err := os.Stat(errorFile); !os.IsNotExist(err) {
+		t.Fatal("ERROR kept after a successful call")
+	}
+}
+
+// The gate checks config.json against providers.json alone: a run starts
+// without the plugin being run, or present.
+func TestGateDoesNotRunPlugin(t *testing.T) {
+	h := newHarness(t, done())
+	h.start()
+	if err := os.Remove(filepath.Join(h.cfg.Plugins(), "replay")); err != nil {
+		t.Fatal(err)
+	}
+	h.drop(h.mainHome, "go.md", "go")
+	waitFor(t, "a run to start", func() bool {
+		runs := h.runs(h.mainID)
+		return len(runs) > 0 && len(readRecords(runs[0])) > 0 && readRecords(runs[0])[0]["type"] == "start"
+	})
+	if fileContains(filepath.Join(h.mainCtrl, "ERROR"), MsgConfigPrefix) {
+		t.Fatal("a missing plugin binary was reported as a config error")
+	}
+}
+
 func textStep(text string, tokens int) string {
 	return `{"text":"` + text + `","usage":{"input_tokens":` + itoa(tokens) + `}}`
 }
